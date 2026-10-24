@@ -231,57 +231,100 @@ def analyze_box_borders(img, face_norm: dict, real_w=1920, real_h=1080) -> tuple
     edges = cv2.Canny(gray, 50, 150)
 
     # Detect horizontal lines (top/bottom) and vertical lines (left/right)
-    lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=40, minLineLength=int(fw * 0.8), maxLineGap=15)
+    lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=40, minLineLength=int(fw * 0.7), maxLineGap=15)
     if lines is None or len(lines) == 0:
         return False, None
 
-    has_horiz = False
-    has_vert = False
+    rel_fx = fx - x1
+    rel_fy = fy - y1
+
+    top_y = []
+    bot_y = []
+    left_x = []
+    right_x = []
 
     for line in lines:
         lx1, ly1, lx2, ly2 = line[0]
         dx = abs(lx2 - lx1)
         dy = abs(ly2 - ly1)
-        if dx > fw * 0.8 and dy < 10:
-            has_horiz = True
-        elif dy > fh * 0.8 and dx < 10:
-            has_vert = True
+        if dx > fw * 0.7 and dy < 12:
+            mid_y = (ly1 + ly2) / 2.0
+            if mid_y < rel_fy:
+                top_y.append(mid_y)
+            elif mid_y > rel_fy + fh:
+                bot_y.append(mid_y)
+        elif dy > fh * 0.7 and dx < 12:
+            mid_x = (lx1 + lx2) / 2.0
+            if mid_x < rel_fx:
+                left_x.append(mid_x)
+            elif mid_x > rel_fx + fw:
+                right_x.append(mid_x)
+
+    has_horiz = (len(top_y) > 0 or len(bot_y) > 0)
+    has_vert = (len(left_x) > 0 or len(right_x) > 0)
 
     if has_horiz and has_vert:
+        # Determine actual border rectangle from enclosing lines to avoid capturing adjacent chat
+        bx1 = max(0, int(max(left_x))) if left_x else max(0, rel_fx - int(fw * 0.5))
+        by1 = max(0, int(max(top_y))) if top_y else max(0, rel_fy - int(fh * 0.4))
+        bx2 = min(x2 - x1, int(min(right_x))) if right_x else min(x2 - x1, rel_fx + fw + int(fw * 0.5))
+        by2 = min(y2 - y1, int(min(bot_y))) if bot_y else min(y2 - y1, rel_fy + fh + int(fh * 0.8))
+
+        abs_bx = x1 + bx1
+        abs_by = y1 + by1
+        abs_bw = max(int(fw * 1.5), bx2 - bx1)
+        abs_bh = max(int(fh * 1.5), by2 - by1)
+
         # Scale back to 1920x1080
-        norm_bx = int(x1 / scale_x)
-        norm_by = int(y1 / scale_y)
-        norm_bw = int((x2 - x1) / scale_x)
-        norm_bh = int((y2 - y1) / scale_y)
+        norm_bx = int(abs_bx / scale_x)
+        norm_by = int(abs_by / scale_y)
+        norm_bw = int(abs_bw / scale_x)
+        norm_bh = int(abs_bh / scale_y)
         return True, (norm_bx, norm_by, norm_bw, norm_bh)
 
     return False, None
 
 
-def sanitize_crop(cx: int, cy: int, fw: int, fh: int, camera_type: str, real_w=1920, real_h=1080) -> dict:
+def sanitize_crop(cx: int, cy: int, fw: int, fh: int, camera_type: str, box_coords: tuple = None, real_w=1920, real_h=1080) -> dict:
     """
-    Computes clean 16:9 aspect-ratio crop coordinates (cam_x, cam_y, cam_w, cam_h)
+    Computes clean aspect-ratio crop coordinates (cam_x, cam_y, cam_w, cam_h)
     anchored cleanly to frame boundaries with even integers for FFmpeg compatibility.
+    Matches 720:460 target webcam frame and avoids capturing adjacent chat windows or follower goals.
     """
-    # Scale face height to target webcam height (covers head & upper torso)
-    target_h = int(fh * 2.4)
-    target_h = max(380, min(640, target_h))
-    target_w = int(target_h * (16.0 / 9.0))
+    CAM_ASPECT = 720.0 / 460.0  # Matches zero-gap split screen ratio (~1.565)
 
-    if camera_type == "green_screen_docked" or cy >= real_h * 0.52 or (cy + fh // 2) >= real_h * 0.82:
-        # Streamer anchored to bottom of screen (e.g. KreekCraft)
+    if camera_type == "box" and box_coords is not None:
+        bx, by, bw, bh = box_coords
+        target_h = max(240, min(bh, int(fh * 2.2)))
+        target_w = int(target_h * CAM_ASPECT)
+        if target_w > bw:
+            target_w = bw
+            target_h = int(target_w / CAM_ASPECT)
         cam_h = target_h
         cam_w = target_w
-        cam_y = real_h - cam_h  # Anchored to 1080 -> 0% chin cutoff
-        cam_x = int(cx - (cam_w / 2.0))
-        final_type = "green_screen_docked"
+        cam_y = max(by, min(by + bh - cam_h, int(cy - (cam_h * 0.42))))
+        cam_x = max(bx, min(bx + bw - cam_w, int(cx - (cam_w / 2.0))))
+        final_type = "box"
     else:
-        # Physical box or floating PiP
-        cam_h = target_h
-        cam_w = target_w
-        cam_y = int(cy - (cam_h * 0.42))
-        cam_x = int(cx - (cam_w / 2.0))
-        final_type = camera_type if camera_type != "none" else "box"
+        # Scale face height to target webcam height (covers head & upper torso)
+        target_h = int(fh * 2.2)
+        target_h = max(320, min(540, target_h))
+        target_w = int(target_h * CAM_ASPECT)
+
+        if camera_type == "green_screen_docked" or cy >= real_h * 0.52 or (cy + fh // 2) >= real_h * 0.82:
+            # Streamer anchored to bottom of screen (e.g. KreekCraft)
+            cam_h = target_h
+            cam_w = target_w
+            cam_y = real_h - cam_h  # Anchored to 1080 -> 0% chin cutoff
+            cam_x = int(cx - (cam_w / 2.0))
+            final_type = "green_screen_docked"
+        else:
+            # Physical box or floating PiP
+            cam_h = target_h
+            cam_w = target_w
+            cam_y = int(cy - (cam_h * 0.42))
+            cam_x = int(cx - (cam_w / 2.0))
+            final_type = camera_type if camera_type != "none" else "box"
 
     # Clamp bounds inside frame
     cam_x = max(0, min(real_w - cam_w, cam_x))
@@ -475,6 +518,14 @@ def run_pipeline(input_arg: str = "/files/temp/ref_*.jpg", out_config: str = DEF
 
     log(f"Best Candidate: center=({cand_cx}, {cand_cy}), size={cand_w}x{cand_h}, consensus={best_cluster['unique_frames']}/{num_frames}, conf={best_cluster['max_conf']:.2f}")
 
+    # 3b. Anti-HUD / Follower Counter / Countdown Timer Filter
+    # Streamers never place facecams in top-center / upper-middle (x: 18%-82%, y < 25%).
+    # That area contains stream overlays, follower goals, countdown timers, and Roblox leaderboards.
+    if (cand_cy < real_h * 0.25 and (real_w * 0.18 <= cand_cx <= real_w * 0.82)) or (cand_cy < real_h * 0.35 and (cand_w < 48 or cand_h < 48)):
+        log("Top-HUD Filter: REJECTED candidate in top-center / upper overlay zone (follower counter / countdown timer overlay).")
+        save_and_output(fallback_res, out_config)
+        return fallback_res
+
     # 4. Anti-Static Temporal Motion Check
     if num_frames >= 2:
         is_dynamic, avg_diff, max_pct = check_temporal_motion(candidate_box, frames, real_w, real_h)
@@ -514,7 +565,7 @@ def run_pipeline(input_arg: str = "/files/temp/ref_*.jpg", out_config: str = DEF
             return fallback_res
 
     # 7. Final Crop Sanitization (16:9 safe bounds)
-    clean_crop = sanitize_crop(cand_cx, cand_cy, cand_w, cand_h, camera_type, real_w, real_h)
+    clean_crop = sanitize_crop(cand_cx, cand_cy, cand_w, cand_h, camera_type, box_coords=box_coords, real_w=real_w, real_h=real_h)
     log(f"VERIFIED WEBCAM: {clean_crop['camera_type']} at x={clean_crop['cam_x']}, y={clean_crop['cam_y']}, {clean_crop['cam_w']}x{clean_crop['cam_h']} (Conf: {best_cluster['max_conf']:.2f})")
 
     save_and_output(clean_crop, out_config)
