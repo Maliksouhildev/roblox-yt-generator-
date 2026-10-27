@@ -1,0 +1,182 @@
+{
+  "name": "Transcript Viral Shorts Engine (Roblox Edition)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "viral-shorts-transcript",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "trigger-01",
+      "name": "Transcript Webhook & Manual Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// n8n Code Node: Pre-process Whisper segments into a compact, energy-tagged transcript\nconst inputJson = $input.first().json;\nlet rawSegments = inputJson.segments;\n\nif (!rawSegments || !Array.isArray(rawSegments) || rawSegments.length === 0) {\n  const words = inputJson.words || (inputJson.x_groq && inputJson.x_groq.words) || [];\n  if (words.length > 0) {\n    rawSegments = [];\n    let curWords = [];\n    let curStart = words[0].start;\n    for (let i = 0; i < words.length; i++) {\n      const w = words[i];\n      curWords.push(w.word);\n      const next = words[i + 1];\n      const gap = next ? (next.start - w.end) : 999;\n      const endsSentence = /[.!?]$/.test(String(w.word || '').trim());\n      if (endsSentence || curWords.length >= 8 || gap > 0.8) {\n        rawSegments.push({\n          start: curStart,\n          end: w.end,\n          text: curWords.join(' ')\n        });\n        curWords = [];\n        if (next) curStart = next.start;\n      }\n    }\n    if (curWords.length > 0) {\n      rawSegments.push({\n        start: curStart,\n        end: words[words.length - 1].end,\n        text: curWords.join(' ')\n      });\n    }\n  } else if (inputJson.text) {\n    const sentences = inputJson.text.match(/[^.!?]+[.!?]+/g) || [inputJson.text];\n    rawSegments = sentences.map((s, idx) => ({\n      start: idx * 4.5,\n      end: (idx + 1) * 4.5,\n      text: s.trim()\n    }));\n  } else {\n    rawSegments = [];\n  }\n}\n\nif (rawSegments.length === 0) {\n  throw new Error('CRITICAL: No transcript segments or text found in input payload.');\n}\n\nconst compactLines = [];\nlet totalWords = 0;\n\nfor (let idx = 0; idx < rawSegments.length; idx++) {\n  const seg = rawSegments[idx];\n  const start = parseFloat(seg.start).toFixed(1);\n  const end = parseFloat(seg.end).toFixed(1);\n  const duration = Math.max(0.1, seg.end - seg.start);\n  const text = String(seg.text || '').trim();\n  const words = text.split(/\\s+/).filter(Boolean);\n  totalWords += words.length;\n  const wps = (words.length / duration).toFixed(1);\n\n  let tag = \"\";\n  if (wps > 5.2) {\n    tag += \"[HYPER_SPEED] \";\n  } else if (wps > 4.2) {\n    tag += \"[FAST/PANIC] \";\n  }\n  if (/[!?]{2,}|\\b(NO+|WAIT+|BRO+|WHAT+|OMG|AH+|HELP|YOO+|YO+|WHY+|LMAO+|WTF|DUDE+|STOP+|RUN+)\\b/i.test(text)) {\n    tag += \"[HIGH_ENERGY] \";\n  }\n  if (/\\b(ha(ha)+|he(he)+|lol|lmao)\\b/i.test(text)) {\n    tag += \"[LAUGHTER] \";\n  }\n  if (idx > 0 && (seg.start - rawSegments[idx - 1].end) > 10.0) {\n    const gap = (seg.start - rawSegments[idx - 1].end).toFixed(0);\n    compactLines.push(`[... ${gap}s dead air / silent gameplay ...]`);\n  }\n  compactLines.push(`[${start}s-${end}s] ${tag}${text}`);\n}\n\nreturn [{\n  json: {\n    full_transcript: compactLines.join(\"\\n\"),\n    total_segments: rawSegments.length,\n    total_words: totalWords,\n    stream_file: inputJson.stream_file || 'stream.mp4',\n    streamer_name: inputJson.streamer_name || 'Streamer',\n    words: inputJson.words || (inputJson.x_groq && inputJson.x_groq.words) || []\n  }\n}];"
+      },
+      "id": "pre-processor-02",
+      "name": "Transcript Pre-Processor",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googlePalmApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [\n    {\n      \"role\": \"user\",\n      \"parts\": [\n        {\n          \"text\": \"SYSTEM: You are an elite viral YouTube Shorts and TikTok director specializing in Roblox gaming livestreams.\\nYour job is to analyze this full livestream transcript and construct 5 to 8 high-retention vertical shorts (target duration: 25 to 45 seconds each).\\n\\nWHY MOST AI CLIPS FAIL (DO NOT DO THIS):\\n- Do NOT pick segments where the streamer is just explaining basic game mechanics, reading routine chat messages, or talking monotonously.\\n- Do NOT output a single continuous 40-second block if there is dead air or boring walking in the middle.\\n- Do NOT include desktop admin, Alt-Tabbing into browser/Discord, reading donor lists, or typing usernames.\\n\\nHOW TO BUILD VIRAL ROBLOX SHORTS:\\nYou must look for these viral clip archetypes:\\n1. \\\"COMEDIC JUXTAPOSITION / MULTI-SEGMENT STITCH\\\" (Non-Linear):\\n   - Find a moment where the streamer makes a bold claim, flexes skill, makes a promise, or sets a rule (e.g. \\\"I am literally the best parkour player in this server\\\", \\\"Watch this 200 IQ play\\\", \\\"If I die here I gift a sub\\\").\\n   - Scan ahead in the transcript (seconds or 30 minutes later!) for the ironic payoff: where they fail miserably, get betrayed, rage, or die instantly.\\n   - Stitch the Setup Segment + an optional fast Action Bridge + the Payoff Climax Segment into one cohesive 25-45s Short.\\n\\n2. \\\"STANDALONE STORY / HIGH-EMOTION ARC\\\" (Tightly Trimmed):\\n   - Streamer tells a hilarious, embarrassing, or emotional story, OR experiences an intense escalation of chaos in-game.\\n   - Cut out all filler pauses so the story flows at high speed.\\n\\n3. \\\"FLASH FORWARD HOOK\\\":\\n   - Start with a 2-second flash forward of the scream/fail as Order 1 (FLASH_FORWARD), then cut to Order 2 (SETUP_HOOK), Order 3 (ACTION_BRIDGE), and Order 4 (PAYOFF_CLIMAX).\\n\\nWHAT TO LOOK FOR IN THE TRANSCRIPT:\\n- Look for [HIGH_ENERGY] and [FAST/PANIC] tags.\\n- Look for sudden status reversals: confidence (\\\"Easy\\\", \\\"Watch this\\\", \\\"Trust me\\\") followed by panic (\\\"Wait wait wait\\\", \\\"No no no\\\", \\\"Bro what?!\\\").\\n- Cold Open Hook Rule: The very first segment (first 3s of the Short) MUST start with a punchy statement, a bold claim, a weird out-of-context quote, or peak panic.\\n\\nOUTPUT FORMAT:\\nReturn ONLY valid JSON matching this schema:\\n{\\n  \\\"clips\\\": [\\n    {\\n      \\\"clip_id\\\": \\\"clip_01\\\",\\n      \\\"archetype\\\": \\\"JUXTAPOSITION_CALLBACK | STORYTELLING_ARC | CHAOS_ESCALATION | FLASH_FORWARD_HOOK\\\",\\n      \\\"viral_score\\\": 94,\\n      \\\"title_idea\\\": \\\"Bro thought he was a Parkour God 💀\\\",\\n      \\\"why_it_works\\\": \\\"Classic ego-to-instant-karma arc.\\\",\\n      \\\"total_duration_sec\\\": 34.5,\\n      \\\"on_screen_hook_banner\\\": \\\"WAIT FOR KARMA TO HIT 😭\\\",\\n      \\\"segments\\\": [\\n        {\\n          \\\"order\\\": 1,\\n          \\\"role\\\": \\\"SETUP_HOOK\\\",\\n          \\\"start_sec\\\": 724.0,\\n          \\\"end_sec\\\": 736.5,\\n          \\\"transcript_excerpt\\\": \\\"Chat, stop saying I'm gonna fall...\\\",\\n          \\\"transition_after\\\": \\\"SPONGEBOB_TIME_CARD_OR_WHIP_PAN\\\",\\n          \\\"visual_directive\\\": \\\"ZOOM_FACECAM_120\\\",\\n          \\\"overlay_asset_query\\\": \\\"confident gigachad meme overlay\\\"\\n        },\\n        {\\n          \\\"order\\\": 2,\\n          \\\"role\\\": \\\"ACTION_BRIDGE\\\",\\n          \\\"start_sec\\\": 1165.0,\\n          \\\"end_sec\\\": 1173.0,\\n          \\\"transition_after\\\": \\\"GLITCH_CUT\\\",\\n          \\\"visual_directive\\\": \\\"FULL_GAMEPLAY_FOCUS\\\",\\n          \\\"overlay_asset_query\\\": \\\"none\\\"\\n        },\\n        {\\n          \\\"order\\\": 3,\\n          \\\"role\\\": \\\"PAYOFF_CLIMAX\\\",\\n          \\\"start_sec\\\": 1182.0,\\n          \\\"end_sec\\\": 1196.0,\\n          \\\"transition_after\\\": \\\"NONE\\\",\\n          \\\"visual_directive\\\": \\\"SHAKE_AND_RED_TINT\\\",\\n          \\\"overlay_asset_query\\\": \\\"roblox oof death skull emoji\\\"\\n        }\\n      ]\\n    }\\n  ]\\n}\\n\\n--- FULL TRANSCRIPT ---\\n\" + $json.full_transcript\n        }\n      ]\n    }\n  ],\n  \"generationConfig\": {\n    \"temperature\": 0.2,\n    \"responseMimeType\": \"application/json\"\n  }\n}"
+      },
+      "id": "gemini-director-03",
+      "name": "Gemini Viral Shorts Director",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [680, 300],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "9NtnnUmLQ5Ydiu6q",
+          "name": "Google Gemini(PaLM) Api account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const firstItem = $input.first().json;\nlet rawText = \"\";\ntry {\n  if (firstItem.candidates && firstItem.candidates[0] && firstItem.candidates[0].content && firstItem.candidates[0].content.parts) {\n    rawText = firstItem.candidates[0].content.parts[0].text || \"\";\n  } else if (firstItem.output || firstItem.text) {\n    rawText = firstItem.output || firstItem.text || \"\";\n  } else {\n    rawText = JSON.stringify(firstItem);\n  }\n} catch(e) {\n  rawText = \"{}\";\n}\n\nlet clean = rawText.replace(/^```[a-z]*\\s*/i, '').replace(/\\s*```$/i, '').trim();\nclean = clean.replace(/,\\s*([}\\]])/g, '$1');\n\nlet parsed = null;\ntry {\n  parsed = JSON.parse(clean);\n} catch(e) {\n  const clipRegex = /\\{[\\s\\S]*?\"clip_id\"[\\s\\S]*?\"segments\"\\s*:\\s*\\[[\\s\\S]*?\\]\\s*\\}/gi;\n  const matches = clean.match(clipRegex);\n  if (matches && matches.length > 0) {\n    parsed = { clips: [] };\n    for (const m of matches) {\n      try { parsed.clips.push(JSON.parse(m.replace(/,\\s*([}\\]])/g, '$1'))); } catch(e2) {}\n    }\n  }\n}\n\nif (!parsed || !Array.isArray(parsed.clips) || parsed.clips.length === 0) {\n  throw new Error('CRITICAL: Failed to parse valid clips array from Gemini output.');\n}\n\nconst preProc = $('Transcript Pre-Processor').first().json;\nconst streamFile = preProc.stream_file || 'stream.mp4';\nconst streamerName = preProc.streamer_name || 'Streamer';\nconst masterWords = preProc.words || [];\n\nconst validClips = [];\nfor (const c of parsed.clips) {\n  if (!c || !Array.isArray(c.segments) || c.segments.length === 0) continue;\n  const score = parseInt(c.viral_score, 10) || 75;\n  const segs = c.segments\n    .filter(s => typeof s.start_sec === 'number' && typeof s.end_sec === 'number' && s.end_sec > s.start_sec)\n    .sort((a, b) => (a.order || 0) - (b.order || 0));\n  if (segs.length === 0) continue;\n  let dur = segs.reduce((sum, s) => sum + (s.end_sec - s.start_sec), 0);\n  const payoff = segs.find(s => s.role === 'PAYOFF_CLIMAX');\n  if (payoff) dur += 1.5;\n  if (dur >= 18 && dur <= 58) {\n    validClips.push({\n      clip_id: c.clip_id || ('clip_' + (validClips.length + 1)),\n      archetype: c.archetype || 'COMEDIC_JUXTAPOSITION',\n      viral_score: score,\n      title_idea: c.title_idea || (streamerName + ' Moment 💀'),\n      why_it_works: c.why_it_works || 'High-retention moment',\n      total_duration_sec: Math.round(dur * 10) / 10,\n      on_screen_hook_banner: (c.on_screen_hook_banner || c.title_idea || '').toUpperCase().trim(),\n      segments: segs,\n      stream_file: streamFile,\n      streamer_name: streamerName,\n      master_words: masterWords\n    });\n  }\n}\n\nlet outputClips = validClips.filter(c => c.viral_score >= 80);\nif (outputClips.length === 0) outputClips = validClips.slice(0, 5);\nreturn outputClips.map(clip => ({ json: clip }));"
+      },
+      "id": "split-filter-04",
+      "name": "Split & Filter Viral Clips",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [920, 300]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "loop-clips-05",
+      "name": "Loop Clips",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1140, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const clip = $input.first().json;\nconst segments = [...clip.segments].sort((a, b) => a.order - b.order);\nconst allWords = clip.master_words || [];\n\nlet currentTimeline = 0;\nconst stitchedSegments = [];\nconst alignedWords = [];\n\nfor (let i = 0; i < segments.length; i++) {\n  const seg = segments[i];\n  let startSec = Math.max(0, parseFloat(seg.start_sec));\n  let endSec = Math.max(startSec + 0.5, parseFloat(seg.end_sec));\n  if (seg.role === \"PAYOFF_CLIMAX\") endSec += 1.5;\n  const segDuration = endSec - startSec;\n  const timelineStart = currentTimeline;\n  const timelineEnd = currentTimeline + segDuration;\n\n  stitchedSegments.push({\n    order: seg.order,\n    role: seg.role,\n    source_start: startSec,\n    source_end: endSec,\n    duration: segDuration,\n    timeline_start: timelineStart,\n    timeline_end: timelineEnd,\n    transition_after: seg.transition_after || \"NONE\",\n    visual_directive: seg.visual_directive || \"FULL_GAMEPLAY_FOCUS\",\n    overlay_asset_query: seg.overlay_asset_query || \"none\"\n  });\n\n  const segWords = allWords.filter(w => w.end >= startSec && w.start <= endSec);\n  segWords.forEach(w => {\n    const relStart = Math.max(0, w.start - startSec);\n    const relEnd = Math.max(relStart + 0.1, w.end - startSec);\n    alignedWords.push({\n      word: String(w.word || \"\").trim(),\n      start: timelineStart + relStart,\n      end: Math.min(timelineEnd, timelineStart + relEnd),\n      role: seg.role\n    });\n  });\n  currentTimeline = timelineEnd;\n}\n\nconst FONT_SIZE = 48;\nconst MAIN_COLOR = \"&HFFFFFF&\";\nconst subY = 1040;\nconst captionY = 95;\n\nfunction formatTimeASS(seconds) {\n  const sTotal = Math.max(0, parseFloat(seconds) || 0);\n  const h = Math.floor(sTotal / 3600);\n  const m = Math.floor((sTotal % 3600) / 60);\n  const s = Math.floor(sTotal % 60);\n  const cs = Math.floor((sTotal % 1) * 100);\n  return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;\n}\n\nlet assContent = '[Script Info]\\n' +\n  'ScriptType: v4.00+\\n' +\n  'PlayResX: 720\\n' +\n  'PlayResY: 1280\\n' +\n  '[V4+ Styles]\\n' +\n  'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\\n' +\n  `Style: ViralSubs,Lilita One,${FONT_SIZE},${MAIN_COLOR},&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,3,5,20,20,10,1\\n` +\n  'Style: ViralCaption,Lilita One,42,&H00D7FF&,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,3,5,20,20,10,1\\n' +\n  '[Events]\\n' +\n  'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\\n';\n\nconst hookBanner = (clip.on_screen_hook_banner || clip.title_idea || \"\").toUpperCase();\nif (hookBanner) {\n  assContent += `Dialogue: 2,0:00:00.00,${formatTimeASS(currentTimeline)},ViralCaption,,0,0,0,,{\\\\pos(360,${captionY})\\\\t(0,80,\\\\fscx108\\\\fscy108)\\\\t(80,180,\\\\fscx100\\\\fscy100)}${hookBanner}\\n`;\n}\n\nif (alignedWords.length > 0) {\n  const PAUSE_BREAK = 0.40;\n  const MAX_CHARS = 16;\n  const MAX_WORDS = 4;\n  const PUNCT_RE = /[.!?,;:]$/;\n  const groups = [];\n  let current = [];\n  for (let i = 0; i < alignedWords.length; i++) {\n    const w = alignedWords[i];\n    if (!w.word) continue;\n    current.push(w);\n    const currentChars = current.reduce((s, x) => s + x.word.length, 0);\n    const nextW = alignedWords[i + 1];\n    const gapToNext = nextW ? (nextW.start - w.end) : 9999;\n    const endsPhrase = PUNCT_RE.test(w.word);\n    const shouldBreak = current.length >= MAX_WORDS || currentChars >= MAX_CHARS || gapToNext > PAUSE_BREAK || endsPhrase;\n    if (shouldBreak && current.length > 0) {\n      groups.push([...current]);\n      current = [];\n    }\n  }\n  if (current.length > 0) groups.push(current);\n  for (const group of groups) {\n    const cStart = group[0].start;\n    const cEnd = group[group.length - 1].end;\n    for (let j = 0; j < group.length; j++) {\n      const wStart = Math.max(cStart, group[j].start);\n      const wEnd = j < group.length - 1 ? group[j + 1].start : cEnd;\n      const lineText = group.map((w, idx) => {\n        const txt = w.word.toUpperCase();\n        if (idx === j) {\n          const colors = [\"&H00FFFF&\", \"&H00FF00&\", \"&H00D7FF&\"];\n          const randColor = colors[txt.length % colors.length];\n          return `{\\\\c${randColor}\\\\t(0,40,\\\\fscx115\\\\fscy115)\\\\t(40,120,\\\\fscx100\\\\fscy100)}${txt}{\\\\c${MAIN_COLOR}}`;\n        }\n        return txt;\n      }).join(\" \");\n      assContent += `Dialogue: 1,${formatTimeASS(wStart)},${formatTimeASS(wEnd)},ViralSubs,,0,0,0,,{\\\\pos(360,${subY})}${lineText}\\n`;\n    }\n  }\n}\n\nreturn [{\n  json: {\n    clip_id: clip.clip_id,\n    title: clip.title_idea,\n    hook_banner: hookBanner,\n    viral_score: clip.viral_score,\n    why_it_works: clip.why_it_works,\n    total_duration: currentTimeline,\n    stitched_segments: stitchedSegments,\n    stream_file: clip.stream_file\n  },\n  binary: {\n    data: {\n      data: Buffer.from(assContent).toString('base64'),\n      mimeType: 'text/plain',\n      fileName: 'subs.ass'\n    }\n  }\n}];"
+      },
+      "id": "timeline-math-06",
+      "name": "Timeline Math & Hormozi Subtitles",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1360, 360]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first().json;\nconst segments = item.stitched_segments || [];\nconst streamFile = item.stream_file || 'stream.mp4';\nconst title = (item.title || item.clip_id || 'roblox_short').replace(/[\\/\\\\\"'<>|&;:]/g, '_').trim();\nconst outputFile = `/files/outputs/${title}.mp4`;\n\nlet filterComplex = \"\";\nlet vStreams = \"\";\nlet aStreams = \"\";\n\nsegments.forEach((seg, idx) => {\n  const sStart = seg.source_start.toFixed(3);\n  const sEnd = seg.source_end.toFixed(3);\n  let vFilter = `[0:v]trim=start=${sStart}:end=${sEnd},setpts=PTS-STARTPTS`;\n  if (seg.visual_directive === \"ZOOM_FACECAM_120\") {\n    vFilter += `,scale=trunc(iw*1.20/2)*2:-1,crop=iw/1.2:ih/1.2:(iw-ow)/2:(ih-oh)/2`;\n  } else if (seg.visual_directive === \"SHAKE_AND_RED_TINT\") {\n    vFilter += `,crop=in_w-16:in_h-16:8+sin(t*25)*8:8+cos(t*20)*8,eq=saturation=1.25`;\n  }\n  vFilter += `[v${idx}];`;\n  filterComplex += vFilter;\n  filterComplex += `[0:a]atrim=start=${sStart}:end=${sEnd},asetpts=PTS-STARTPTS[a${idx}];`;\n  vStreams += `[v${idx}]`;\n  aStreams += `[a${idx}]`;\n});\n\nfilterComplex += `${vStreams}concat=n=${segments.length}:v=1:a=0[v_cat];`;\nfilterComplex += `${aStreams}concat=n=${segments.length}:v=0:a=1[a_cat];`;\nfilterComplex += `[v_cat]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280:(iw-ow)/2:(ih-oh)/2,ass=/files/temp/subs.ass:fontsdir=/files/inputs/fonts[v_final]`;\n\nconst cmd = `mkdir -p /files/outputs /files/temp && ffmpeg -loglevel error -y -i \"/files/inputs/${streamFile}\" -filter_complex \"${filterComplex}\" -map \"[v_final]\" -map \"[a_cat]\" -c:v libx264 -preset fast -crf 17 -c:a aac -b:a 192k -movflags +faststart \"${outputFile}\"`;\n\nreturn [{\n  json: {\n    command: cmd,\n    title: item.title,\n    output_file: outputFile,\n    total_duration: item.total_duration,\n    segments_count: segments.length\n  }\n}];"
+      },
+      "id": "assembly-builder-07",
+      "name": "Multi-Segment Assembly FFmpeg Builder",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1580, 360]
+    }
+  ],
+  "connections": {
+    "Transcript Webhook & Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Transcript Pre-Processor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transcript Pre-Processor": {
+      "main": [
+        [
+          {
+            "node": "Gemini Viral Shorts Director",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Viral Shorts Director": {
+      "main": [
+        [
+          {
+            "node": "Split & Filter Viral Clips",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split & Filter Viral Clips": {
+      "main": [
+        [
+          {
+            "node": "Loop Clips",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Clips": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Timeline Math & Hormozi Subtitles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Timeline Math & Hormozi Subtitles": {
+      "main": [
+        [
+          {
+            "node": "Multi-Segment Assembly FFmpeg Builder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Multi-Segment Assembly FFmpeg Builder": {
+      "main": [
+        [
+          {
+            "node": "Loop Clips",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

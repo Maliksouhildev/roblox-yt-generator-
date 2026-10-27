@@ -594,25 +594,74 @@ return [{ pairedItem: { item: 0 }, json: { vision_payload: {
     })
     _6ExtractViralSegments = {
         jsCode: `const clipData = $input.first().json;
+
+// Retrieve original Whisper words for timeline subtitle alignment
+let masterWords = [];
+try {
+  const w1 = $('3. Groq Whisper').first().json;
+  masterWords = w1.words || (w1.x_groq && w1.x_groq.words) || [];
+} catch(e) {}
+if (masterWords.length === 0) {
+  try {
+    const w2 = $('3. Groq Whisper Fallback').first().json;
+    masterWords = w2.words || (w2.x_groq && w2.x_groq.words) || [];
+  } catch(e) {}
+}
+
+let finalSegs = [];
+
+if (clipData.segments && Array.isArray(clipData.segments) && clipData.segments.length > 0) {
+  // === EDL MULTI-SEGMENT STITCH TIMELINE MATH ===
+  const rawSegs = [...clipData.segments].sort((a, b) => (a.order || 0) - (b.order || 0));
+  let cumTimeline = 0;
+
+  finalSegs = rawSegs.map((seg, idx) => {
+    let sStart = Math.max(0, parseFloat(seg.start_sec));
+    let sEnd = Math.max(sStart + 0.5, parseFloat(seg.end_sec));
+    if (seg.role === "PAYOFF_CLIMAX") sEnd += 1.5;
+
+    const segDur = sEnd - sStart;
+    const tStart = cumTimeline;
+    const tEnd = cumTimeline + segDur;
+    cumTimeline = tEnd;
+
+    const segWords = masterWords.filter(w => w.end >= sStart && w.start <= sEnd).map(w => ({
+      word: String(w.word || "").trim(),
+      start: tStart + Math.max(0, w.start - sStart),
+      end: Math.min(tEnd, tStart + Math.max(0.1, w.end - sStart)),
+      role: seg.role
+    }));
+
+    return {
+      segment_name: 'MainClip_part_' + (idx + 1),
+      segment_order: idx + 1,
+      start: sStart,
+      end: sEnd,
+      duration: segDur,
+      timeline_start: tStart,
+      timeline_end: tEnd,
+      role: seg.role || "ACTION_BRIDGE",
+      visual_directive: seg.visual_directive || "FULL_GAMEPLAY_FOCUS",
+      transition_after: seg.transition_after || "NONE",
+      overlay_asset_query: seg.overlay_asset_query || "none",
+      payoff_time: clipData.payoff_time || sEnd,
+      clip_title: clipData.title,
+      hook_caption: clipData.hook_caption,
+      theme: clipData.archetype || "Roblox Gaming",
+      structure_type: "Multi-Segment EDL",
+      aligned_words: segWords
+    };
+  });
+  return finalSegs.map(seg => ({ json: seg }));
+}
+
+// === LEGACY FALLBACK FOR CONTINUOUS TIMESTAMPS ===
 const start = clipData.start_time;
 const end = clipData.end_time;
 if (typeof start !== 'number' || typeof end !== 'number') return [{ pairedItem: { item: 0 }, json: { error: "No timestamps", clip_title: clipData.title } }];
 
 const BUFFER = 0.12; // Tight buffer for snappy Shorts pacing
-let finalSegs = [];
-
-// Try to get words from Whisper transcript to cut silences dynamically
-let words = [];
-try {
-  const w1 = $('3. Groq Whisper').first().json;
-  words = w1.words || (w1.x_groq && w1.x_groq.words) || [];
-} catch(e) {}
-if (words.length === 0) {
-  try {
-    const w2 = $('3. Groq Whisper Fallback').first().json;
-    words = w2.words || (w2.x_groq && w2.x_groq.words) || [];
-  } catch(e) {}
-}
+let words = masterWords;
 
 if (words.length > 0) {
   const clipWords = words.filter(w => w.end >= start && w.start <= end);
@@ -2094,9 +2143,12 @@ return allClips.map((clip, index) => {
         title: clip.title || (streamerName + '_Clip_' + (index + 1)),
         hook_caption: hookCaption,
         virality_score: clip.virality_score || 0,
+        viral_score: clip.viral_score || clip.virality_score || 85,
         theme: clip.theme || "Gaming",
         structure_type: clip.structure_type || "Narrative Arc",
-        estimated_segment: clip.estimated_vod_segment || "Unknown"
+        estimated_segment: clip.estimated_vod_segment || "Unknown",
+        segments: clip.segments || [{ order: 1, role: "SETUP_HOOK", start_sec: sTime, end_sec: eTime, visual_directive: "FULL_GAMEPLAY_FOCUS" }],
+        archetype: clip.archetype || "COMEDIC_JUXTAPOSITION"
     }};
 });
 `,
