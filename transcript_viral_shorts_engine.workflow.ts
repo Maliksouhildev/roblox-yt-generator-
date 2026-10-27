@@ -2,7 +2,7 @@ import { workflow, node, links } from '@n8n-as-code/transformer';
 
 // <workflow-map>
 // Workflow : Transcript Viral Shorts Engine (Roblox Edition)
-// Nodes    : 7  |  Connections: 6
+// Nodes    : 8  |  Connections: 7
 //
 // NODE INDEX
 // ──────────────────────────────────────────────────────────────────
@@ -14,6 +14,7 @@ import { workflow, node, links } from '@n8n-as-code/transformer';
 // LoopClips                             splitInBatches
 // TimelineMathAndSubtitles              code
 // MultiSegmentAssemblyBuilder           code
+// ExecuteAssemblyRender                 executeCommand
 //
 // ROUTING MAP
 // ──────────────────────────────────────────────────────────────────
@@ -24,7 +25,8 @@ import { workflow, node, links } from '@n8n-as-code/transformer';
 //          → LoopClips
 //            .out(1) → TimelineMathAndSubtitles
 //              → MultiSegmentAssemblyBuilder
-//                → LoopClips (↩ loop)
+//                → ExecuteAssemblyRender
+//                  → LoopClips (↩ loop)
 // </workflow-map>
 
 @workflow({
@@ -149,7 +151,7 @@ for (let idx = 0; idx < rawSegments.length; idx++) {
     compactLines.push(\`[... \${gap}s dead air / silent gameplay ...]\`);
   }
 
-  compactLines.push(\`[\${start}s-\${end}s] \${tag}\${text}\`);
+  compactLines.push(\`[\${start}-\${end}] \${tag}\${text}\`);
 }
 
 const fullTranscript = compactLines.join("\\n");
@@ -210,9 +212,48 @@ return [{
   ],
   "generationConfig": {
     "temperature": 0.2,
-    "responseMimeType": "application/json"
+    "responseMimeType": "application/json",
+    "responseSchema": {
+      "type": "OBJECT",
+      "properties": {
+        "clips": {
+          "type": "ARRAY",
+          "items": {
+            "type": "OBJECT",
+            "properties": {
+              "clip_id": { "type": "STRING" },
+              "archetype": { "type": "STRING" },
+              "viral_score": { "type": "INTEGER" },
+              "title_idea": { "type": "STRING" },
+              "why_it_works": { "type": "STRING" },
+              "total_duration_sec": { "type": "NUMBER" },
+              "on_screen_hook_banner": { "type": "STRING" },
+              "segments": {
+                "type": "ARRAY",
+                "items": {
+                  "type": "OBJECT",
+                  "properties": {
+                    "order": { "type": "INTEGER" },
+                    "role": { "type": "STRING" },
+                    "start_sec": { "type": "NUMBER" },
+                    "end_sec": { "type": "NUMBER" },
+                    "transcript_excerpt": { "type": "STRING" },
+                    "transition_after": { "type": "STRING" },
+                    "visual_directive": { "type": "STRING" },
+                    "overlay_asset_query": { "type": "STRING" }
+                  },
+                  "required": ["order", "role", "start_sec", "end_sec"]
+                }
+              }
+            },
+            "required": ["clip_id", "archetype", "viral_score", "title_idea", "segments"]
+          }
+        }
+      },
+      "required": ["clips"]
+    }
   }
-}`,
+}`
     };
 
     @node({
@@ -286,8 +327,8 @@ for (const c of parsed.clips) {
   const payoff = segs.find(s => s.role === 'PAYOFF_CLIMAX');
   if (payoff) dur += 1.5; // +1.5s ragdoll aftermath padding
 
-  // Enforce viral duration window: 20s to 55s
-  if (dur >= 18 && dur <= 58) {
+  // Enforce viral duration window: 18s to 55s
+  if (dur >= 18 && dur <= 55) {
     validClips.push({
       clip_id: c.clip_id || ('clip_' + (validClips.length + 1)),
       archetype: c.archetype || 'COMEDIC_JUXTAPOSITION',
@@ -304,8 +345,8 @@ for (const c of parsed.clips) {
   }
 }
 
-// Keep clips with viral_score >= 80, or top 5 clips
-let outputClips = validClips.filter(c => c.viral_score >= 80);
+// Filter clips where viral_score >= 85 (per prompt spec) with top clips fallback
+let outputClips = validClips.filter(c => c.viral_score >= 85);
 if (outputClips.length === 0) {
   outputClips = validClips.slice(0, 5);
 }
@@ -322,7 +363,9 @@ return outputClips.map(clip => ({ json: clip }));
         position: [1140, 300],
     })
     LoopClips = {
-        options: {},
+        options: {
+            batchSize: 1,
+        },
     };
 
     @node({
@@ -334,15 +377,17 @@ return outputClips.map(clip => ({ json: clip }));
     })
     TimelineMathAndSubtitles = {
         jsCode: `// n8n Code Node: Timeline Math & Hormozi-Style ASS Subtitles
-// Re-aligns original Whisper word timestamps across non-adjacent stitched segments (NO re-whisper needed!)
+// Calculates timeline offsets across non-adjacent stitched segments, accounts for transitions,
+// groups words strictly per segment (no cross-cut contamination), and generates glowing animated ASS captions.
 
 const clip = $input.first().json;
-const segments = [...clip.segments].sort((a, b) => a.order - b.order);
+const segments = [...clip.segments].sort((a, b) => (a.order || 0) - (b.order || 0));
 const allWords = clip.master_words || [];
 
 let currentTimeline = 0;
 const stitchedSegments = [];
 const alignedWords = [];
+const allGroups = [];
 
 for (let i = 0; i < segments.length; i++) {
   const seg = segments[i];
@@ -354,9 +399,26 @@ for (let i = 0; i < segments.length; i++) {
     endSec += 1.5;
   }
 
-  const segDuration = endSec - startSec;
-  const timelineStart = currentTimeline;
-  const timelineEnd = currentTimeline + segDuration;
+  // Detect time jumps > 30s or explicit transitions between distant timestamps
+  let transitionBefore = null;
+  if (i > 0) {
+    const prevSeg = segments[i - 1];
+    const gap = Math.abs(seg.start_sec - prevSeg.end_sec);
+    const prevTransition = prevSeg.transition_after;
+    if (gap > 30.0 || (prevTransition && prevTransition !== "NONE")) {
+      const transDuration = 0.5;
+      transitionBefore = {
+        duration: transDuration,
+        type: (prevTransition && prevTransition !== "NONE") ? prevTransition : "TIME_JUMP_GLITCH"
+      };
+      // Advance timeline so subtitles match video/audio after the transition clip!
+      currentTimeline = Math.round((currentTimeline + transDuration) * 1000) / 1000;
+    }
+  }
+
+  const segDuration = Math.round((endSec - startSec) * 1000) / 1000;
+  const timelineStart = Math.round(currentTimeline * 1000) / 1000;
+  const timelineEnd = Math.round((currentTimeline + segDuration) * 1000) / 1000;
 
   stitchedSegments.push({
     order: seg.order,
@@ -366,23 +428,56 @@ for (let i = 0; i < segments.length; i++) {
     duration: segDuration,
     timeline_start: timelineStart,
     timeline_end: timelineEnd,
+    transition_before: transitionBefore,
     transition_after: seg.transition_after || "NONE",
     visual_directive: seg.visual_directive || "FULL_GAMEPLAY_FOCUS",
     overlay_asset_query: seg.overlay_asset_query || "none"
   });
 
-  // Re-align Whisper words in this segment to the new stitched timeline
-  const segWords = allWords.filter(w => w.end >= startSec && w.start <= endSec);
+  // Re-align Whisper words in this segment
+  const segWords = allWords
+    .filter(w => w.end >= startSec && w.start <= endSec)
+    .sort((a, b) => a.start - b.start);
+
+  const segAligned = [];
   segWords.forEach(w => {
     const relStart = Math.max(0, w.start - startSec);
-    const relEnd = Math.max(relStart + 0.1, w.end - startSec);
-    alignedWords.push({
+    const relEnd = Math.max(relStart + 0.08, w.end - startSec);
+    const wStart = Math.round((timelineStart + relStart) * 1000) / 1000;
+    const wEnd = Math.round(Math.min(timelineEnd, timelineStart + relEnd) * 1000) / 1000;
+    const alignedWord = {
       word: String(w.word || "").trim(),
-      start: timelineStart + relStart,
-      end: Math.min(timelineEnd, timelineStart + relEnd),
-      role: seg.role
-    });
+      start: wStart,
+      end: Math.max(wStart + 0.08, wEnd),
+      role: seg.role,
+      seg_order: seg.order
+    };
+    segAligned.push(alignedWord);
+    alignedWords.push(alignedWord);
   });
+
+  // Group words strictly within this segment to eliminate caption bleed across jump cuts
+  const PAUSE_BREAK = 0.40;
+  const MAX_CHARS = 16;
+  const MAX_WORDS = 4;
+  const PUNCT_RE = /[.!?,;:]$/;
+
+  let current = [];
+  for (let j = 0; j < segAligned.length; j++) {
+    const w = segAligned[j];
+    if (!w.word) continue;
+    current.push(w);
+    const currentChars = current.reduce((s, x) => s + x.word.length, 0);
+    const nextW = segAligned[j + 1];
+    const gapToNext = nextW ? (nextW.start - w.end) : 9999;
+    const endsPhrase = PUNCT_RE.test(w.word);
+    const shouldBreak = current.length >= MAX_WORDS || currentChars >= MAX_CHARS || gapToNext > PAUSE_BREAK || endsPhrase;
+    if (shouldBreak && current.length > 0) {
+      allGroups.push([...current]);
+      current = [];
+    }
+  }
+  if (current.length > 0) allGroups.push(current);
 
   currentTimeline = timelineEnd;
 }
@@ -420,60 +515,34 @@ if (hookBanner) {
 }
 
 // Active word-level highlighting with pop-in scale transforms
-if (alignedWords.length > 0) {
-  const PAUSE_BREAK = 0.40;
-  const MAX_CHARS = 16;
-  const MAX_WORDS = 4;
-  const PUNCT_RE = /[.!?,;:]$/;
+for (const group of allGroups) {
+  const cStart = group[0].start;
+  const cEnd = group[group.length - 1].end;
 
-  const groups = [];
-  let current = [];
+  for (let j = 0; j < group.length; j++) {
+    const wStart = Math.max(cStart, group[j].start);
+    const wEnd = Math.max(wStart + 0.08, j < group.length - 1 ? group[j + 1].start : cEnd);
 
-  for (let i = 0; i < alignedWords.length; i++) {
-    const w = alignedWords[i];
-    if (!w.word) continue;
-    current.push(w);
+    const lineText = group.map((w, idx) => {
+      const txt = w.word.toUpperCase();
+      if (idx === j) {
+        const colors = ["&H00FFFF&", "&H00FF00&", "&H00D7FF&"];
+        const randColor = colors[txt.length % colors.length];
+        return \`{\\\\c\${randColor}\\\\t(0,40,\\\\fscx115\\\\fscy115)\\\\t(40,120,\\\\fscx100\\\\fscy100)}\${txt}{\\\\c\${MAIN_COLOR}}\`;
+      }
+      return txt;
+    }).join(" ");
 
-    const currentChars = current.reduce((s, x) => s + x.word.length, 0);
-    const nextW = alignedWords[i + 1];
-    const gapToNext = nextW ? (nextW.start - w.end) : 9999;
-    const endsPhrase = PUNCT_RE.test(w.word);
-
-    const shouldBreak =
-      current.length >= MAX_WORDS ||
-      currentChars >= MAX_CHARS ||
-      gapToNext > PAUSE_BREAK ||
-      endsPhrase;
-
-    if (shouldBreak && current.length > 0) {
-      groups.push([...current]);
-      current = [];
-    }
-  }
-  if (current.length > 0) groups.push(current);
-
-  for (const group of groups) {
-    const cStart = group[0].start;
-    const cEnd = group[group.length - 1].end;
-
-    for (let j = 0; j < group.length; j++) {
-      const wStart = Math.max(cStart, group[j].start);
-      const wEnd = j < group.length - 1 ? group[j + 1].start : cEnd;
-
-      const lineText = group.map((w, idx) => {
-        const txt = w.word.toUpperCase();
-        if (idx === j) {
-          const colors = ["&H00FFFF&", "&H00FF00&", "&H00D7FF&"];
-          const randColor = colors[txt.length % colors.length];
-          return \`{\\\\c\${randColor}\\\\t(0,40,\\\\fscx115\\\\fscy115)\\\\t(40,120,\\\\fscx100\\\\fscy100)}\${txt}{\\\\c\${MAIN_COLOR}}\`;
-        }
-        return txt;
-      }).join(" ");
-
-      assContent += \`Dialogue: 1,\${formatTimeASS(wStart)},\${formatTimeASS(wEnd)},ViralSubs,,0,0,0,,{\\\\pos(360,\${subY})}\${lineText}\\n\`;
-    }
+    assContent += \`Dialogue: 1,\${formatTimeASS(wStart)},\${formatTimeASS(wEnd)},ViralSubs,,0,0,0,,{\\\\pos(360,\${subY})}\${lineText}\\n\`;
   }
 }
+
+// Write subtitle directly to disk if fs is available, and pass binary
+try {
+  const fs = require('fs');
+  if (!fs.existsSync('/files/temp')) fs.mkdirSync('/files/temp', { recursive: true });
+  fs.writeFileSync('/files/temp/subs.ass', assContent, 'utf-8');
+} catch(e) {}
 
 return [{
   json: {
@@ -505,7 +574,7 @@ return [{
         position: [1580, 360],
     })
     MultiSegmentAssemblyBuilder = {
-        jsCode: `// Builds dynamic multi-segment FFmpeg assembly command with visual directives, zoom/shake, and subtitle burning
+        jsCode: `// Builds dynamic multi-segment FFmpeg assembly command with visual directives, audio crossfades, transition clips, and subtitle burning
 const item = $input.first().json;
 const segments = item.stitched_segments || [];
 const streamFile = item.stream_file || 'stream.mp4';
@@ -513,14 +582,26 @@ const title = (item.title || item.clip_id || 'roblox_short').replace(/[\\/\\\\"'
 const outputFile = \`/files/outputs/\${title}.mp4\`;
 
 let filterComplex = "";
-let vStreams = "";
-let aStreams = "";
+const vConcatList = [];
+const aConcatList = [];
 
 segments.forEach((seg, idx) => {
+  // 1. If there is a transition before this segment, insert transition generator into concat
+  if (seg.transition_before) {
+    const transV = \`trans\${idx}_v\`;
+    const transA = \`trans\${idx}_a\`;
+    // High-energy 0.5s TV static glitch generator + white noise SFX
+    filterComplex += \`nullsrc=s=720x1280:d=0.5,geq=random(1)*255:128:128[\${transV}];\`;
+    filterComplex += \`anullsrc=r=44100:cl=stereo,atrim=d=0.5,volume=0.20[\${transA}];\`;
+    vConcatList.push(\`[\${transV}]\`);
+    aConcatList.push(\`[\${transA}]\`);
+  }
+
   const sStart = seg.source_start.toFixed(3);
   const sEnd = seg.source_end.toFixed(3);
+  const segDur = seg.duration;
 
-  // Visual Directives
+  // 2. Video Trim & Visual Directives
   let vFilter = \`[0:v]trim=start=\${sStart}:end=\${sEnd},setpts=PTS-STARTPTS\`;
   if (seg.visual_directive === "ZOOM_FACECAM_120") {
     // 20% punch-in zoom for punchline or bold flex
@@ -531,19 +612,36 @@ segments.forEach((seg, idx) => {
   }
   vFilter += \`[v\${idx}];\`;
   filterComplex += vFilter;
+  vConcatList.push(\`[v\${idx}]\`);
 
-  // Audio trim
-  filterComplex += \`[0:a]atrim=start=\${sStart}:end=\${sEnd},asetpts=PTS-STARTPTS[a\${idx}];\`;
-  vStreams += \`[v\${idx}]\`;
-  aStreams += \`[a\${idx}]\`;
+  // 3. Audio trim with 0.15s anti-popping edge crossfade
+  const fadeEnd = Math.max(0.08, segDur - 0.08).toFixed(3);
+  filterComplex += \`[0:a]atrim=start=\${sStart}:end=\${sEnd},asetpts=PTS-STARTPTS,afade=t=in:st=0:d=0.08,afade=t=out:st=\${fadeEnd}:d=0.08[a\${idx}];\`;
+  aConcatList.push(\`[a\${idx}]\`);
 });
 
-// Concatenate micro-segments
-filterComplex += \`\${vStreams}concat=n=\${segments.length}:v=1:a=0[v_cat];\`;
-filterComplex += \`\${aStreams}concat=n=\${segments.length}:v=0:a=1[a_cat];\`;
+// Concatenate micro-segments and transition clips
+const totalParts = vConcatList.length;
+filterComplex += \`\${vConcatList.join('')}concat=n=\${totalParts}:v=1:a=0[v_cat];\`;
+filterComplex += \`\${aConcatList.join('')}concat=n=\${totalParts}:v=0:a=1[a_cat];\`;
+
+// 4. Automated Meme Overlay Asset Directives (overlay_asset_query)
+let overlayDraw = "";
+segments.forEach(seg => {
+  if (seg.overlay_asset_query && seg.overlay_asset_query !== "none") {
+    const q = seg.overlay_asset_query.toLowerCase();
+    let emoji = "💀";
+    if (q.includes("gigachad") || q.includes("chad")) emoji = "🗿";
+    else if (q.includes("clown")) emoji = "🤡";
+    else if (q.includes("shock") || q.includes("scream")) emoji = "😱";
+    else if (q.includes("karma") || q.includes("oof")) emoji = "😭";
+
+    overlayDraw += \`,drawtext=text='\${emoji}':fontsize=72:x=(w-text_w)/2:y=180:enable='between(t,\${seg.timeline_start.toFixed(2)},\${(seg.timeline_start + 1.5).toFixed(2)})'\`;
+  }
+});
 
 // Scale to 720x1280 (9:16 vertical) and burn Hormozi ASS subtitles
-filterComplex += \`[v_cat]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280:(iw-ow)/2:(ih-oh)/2,ass=/files/temp/subs.ass:fontsdir=/files/inputs/fonts[v_final]\`;
+filterComplex += \`[v_cat]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280:(iw-ow)/2:(ih-oh)/2\${overlayDraw},ass=/files/temp/subs.ass:fontsdir=/files/inputs/fonts[v_final]\`;
 
 const cmd = \`mkdir -p /files/outputs /files/temp && ffmpeg -loglevel error -y -i "/files/inputs/\${streamFile}" -filter_complex "\${filterComplex}" -map "[v_final]" -map "[a_cat]" -c:v libx264 -preset fast -crf 17 -c:a aac -b:a 192k -movflags +faststart "\${outputFile}"\`;
 
@@ -559,6 +657,17 @@ return [{
 `,
     };
 
+    @node({
+        id: 'execute-render-08',
+        name: 'Execute Assembly Render',
+        type: 'n8n-nodes-base.executeCommand',
+        version: 1,
+        position: [1800, 360],
+    })
+    ExecuteAssemblyRender = {
+        command: '={{ $json.command }}',
+    };
+
     @links()
     defineRouting() {
         this.TranscriptTrigger.out(0).to(this.TranscriptPreProcessor.in(0));
@@ -567,6 +676,7 @@ return [{
         this.SplitAndFilterClips.out(0).to(this.LoopClips.in(0));
         this.LoopClips.out(1).to(this.TimelineMathAndSubtitles.in(0));
         this.TimelineMathAndSubtitles.out(0).to(this.MultiSegmentAssemblyBuilder.in(0));
-        this.MultiSegmentAssemblyBuilder.out(0).to(this.LoopClips.in(0));
+        this.MultiSegmentAssemblyBuilder.out(0).to(this.ExecuteAssemblyRender.in(0));
+        this.ExecuteAssemblyRender.out(0).to(this.LoopClips.in(0));
     }
 }

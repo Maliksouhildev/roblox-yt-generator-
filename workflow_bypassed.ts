@@ -620,9 +620,17 @@ if (clipData.segments && Array.isArray(clipData.segments) && clipData.segments.l
     let sEnd = Math.max(sStart + 0.5, parseFloat(seg.end_sec));
     if (seg.role === "PAYOFF_CLIMAX") sEnd += 1.5;
 
-    const segDur = sEnd - sStart;
-    const tStart = cumTimeline;
-    const tEnd = cumTimeline + segDur;
+    if (idx > 0) {
+      const prev = rawSegs[idx - 1];
+      const gap = Math.abs(sStart - prev.end_sec);
+      if (gap > 30.0 || (prev.transition_after && prev.transition_after !== "NONE")) {
+        cumTimeline = Math.round((cumTimeline + 0.5) * 1000) / 1000;
+      }
+    }
+
+    const segDur = Math.round((sEnd - sStart) * 1000) / 1000;
+    const tStart = Math.round(cumTimeline * 1000) / 1000;
+    const tEnd = Math.round((cumTimeline + segDur) * 1000) / 1000;
     cumTimeline = tEnd;
 
     const segWords = masterWords.filter(w => w.end >= sStart && w.start <= sEnd).map(w => ({

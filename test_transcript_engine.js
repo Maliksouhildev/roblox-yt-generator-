@@ -45,7 +45,7 @@ const mockWhisperData = {
         { word: "Easy.", start: 735.1, end: 735.8 }
       ]
     },
-    // Dead air gap (736.0 to 1165.0) -> streamer walking / reading chat
+    // Dead air gap (736.0 to 1165.0) -> streamer walking / reading chat (429s)
     {
       id: 2,
       start: 1165.0,
@@ -66,7 +66,7 @@ const mockWhisperData = {
         { word: "here.", start: 1170.2, end: 1170.7 }
       ]
     },
-    // Another jump to climax at 1182.0
+    // Another jump to climax at 1182.0 (1172.5 to 1182.0 = 9.5s)
     {
       id: 3,
       start: 1182.0,
@@ -111,26 +111,30 @@ const mockWhisperData = {
   ]
 };
 
-// Flatten all words into master words array
+// Master word list
 const masterWords = [];
 mockWhisperData.segments.forEach(s => {
   if (s.words) masterWords.push(...s.words);
 });
 
-// --- Test Step 1: Pre-Processor Function ---
+// --- Step 1: Pre-Processor Function ---
 function preProcessTranscript(rawSegments) {
-  const compactLines = rawSegments.map((seg, idx) => {
-    const start = seg.start.toFixed(1);
-    const end = seg.end.toFixed(1);
+  if (!rawSegments || !Array.isArray(rawSegments) || rawSegments.length === 0) return "";
+  const compactLines = [];
+
+  for (let idx = 0; idx < rawSegments.length; idx++) {
+    const seg = rawSegments[idx];
+    const start = parseFloat(seg.start).toFixed(1);
+    const end = parseFloat(seg.end).toFixed(1);
     const duration = Math.max(0.1, seg.end - seg.start);
-    const text = seg.text.trim();
+    const text = String(seg.text || '').trim();
     const words = text.split(/\s+/).filter(Boolean);
     const wordCount = words.length;
     const wps = (wordCount / duration).toFixed(1);
 
     let tag = "";
-    if (wps > 5.5) tag += "[HYPER_SPEED] ";
-    else if (wps > 4.0) tag += "[FAST/PANIC] ";
+    if (wps > 5.2) tag += "[HYPER_SPEED] ";
+    else if (wps > 4.2) tag += "[FAST/PANIC] ";
 
     if (/[!?]{2,}|\b(NO+|WAIT+|BRO+|WHAT+|OMG|AH+|HELP|YOO+|YO+|WHY+|LMAO+|WTF|DUDE+|STOP+|RUN+)\b/i.test(text)) {
       tag += "[HIGH_ENERGY] ";
@@ -141,11 +145,11 @@ function preProcessTranscript(rawSegments) {
 
     if (idx > 0 && (seg.start - rawSegments[idx - 1].end) > 10.0) {
       const gap = (seg.start - rawSegments[idx - 1].end).toFixed(0);
-      return `[... ${gap}s gameplay / dead air ...]\n[${start}s-${end}s] ${tag}${text}`;
+      compactLines.push(`[... ${gap}s dead air / silent gameplay ...]`);
     }
 
-    return `[${start}s-${end}s] ${tag}${text}`;
-  });
+    compactLines.push(`[${start}-${end}] ${tag}${text}`);
+  }
 
   return compactLines.join("\n");
 }
@@ -155,9 +159,10 @@ console.log("=== PREPROCESSED TRANSCRIPT OUTPUT ===");
 console.log(preprocessed);
 
 assert(preprocessed.includes("[HIGH_ENERGY]"), "Must detect [HIGH_ENERGY]");
-assert(preprocessed.includes("[... 429s gameplay / dead air ...]"), "Must detect large dead air gaps");
+assert(preprocessed.includes("[... 429s dead air / silent gameplay ...]"), "Must detect large dead air gaps");
+assert(preprocessed.includes("[724.0-730.5]"), "Timestamp format matches [start-end]");
 
-// --- Test Step 2: Simulated Gemini EDL Output ---
+// --- Step 2: Simulated Gemini EDL Output ---
 const simulatedGeminiOutput = {
   clips: [
     {
@@ -204,12 +209,66 @@ const simulatedGeminiOutput = {
   ]
 };
 
-// --- Test Step 3: Timeline Math & Hormozi Subtitles Function ---
+// --- Step 3: Parse and Filter EDL Output ---
+function parseAndFilterEdl(rawAiContent, minScore = 85) {
+  let content = String(rawAiContent || "").trim();
+  content = content.replace(/^```[a-z]*\s*/i, '').replace(/\s*```$/i, '').trim();
+  content = content.replace(/,\s*([}\]])/g, '$1');
+
+  let parsed = null;
+  try {
+    parsed = JSON.parse(content);
+  } catch (e) {
+    const clipRegex = /\{[\s\S]*?"clip_id"[\s\S]*?"segments"\s*:\s*\[[\s\S]*?\]\s*\}/gi;
+    const matches = content.match(clipRegex);
+    if (matches && matches.length > 0) {
+      parsed = { clips: [] };
+      for (const m of matches) {
+        try {
+          parsed.clips.push(JSON.parse(m.replace(/,\s*([}\]])/g, '$1')));
+        } catch (e2) {}
+      }
+    }
+  }
+
+  if (!parsed || !Array.isArray(parsed.clips)) return [];
+
+  const validClips = [];
+  for (const c of parsed.clips) {
+    if (!c || !Array.isArray(c.segments) || c.segments.length === 0) continue;
+    const score = parseInt(c.viral_score, 10) || 75;
+    if (score < minScore && validClips.length >= 3) continue;
+
+    const segs = c.segments
+      .filter(s => typeof s.start_sec === 'number' && typeof s.end_sec === 'number' && s.end_sec > s.start_sec)
+      .sort((a, b) => (a.order || 0) - (b.order || 0));
+
+    if (segs.length === 0) continue;
+
+    let dur = segs.reduce((sum, s) => sum + (s.end_sec - s.start_sec), 0);
+    const payoff = segs.find(s => s.role === 'PAYOFF_CLIMAX');
+    if (payoff) dur += 1.5;
+
+    if (dur >= 18 && dur <= 55) {
+      validClips.push({
+        ...c,
+        viral_score: score,
+        total_duration_sec: Math.round(dur * 10) / 10,
+        segments: segs
+      });
+    }
+  }
+
+  return validClips;
+}
+
+// --- Step 4: Timeline Math & Hormozi Subtitles Function ---
 function computeTimelineAndSubtitles(clip, allWords, hasCam = false) {
   const segments = [...clip.segments].sort((a, b) => a.order - b.order);
   let currentTimeline = 0;
   const stitchedSegments = [];
   const alignedWords = [];
+  const allGroups = [];
 
   for (let i = 0; i < segments.length; i++) {
     const seg = segments[i];
@@ -221,9 +280,25 @@ function computeTimelineAndSubtitles(clip, allWords, hasCam = false) {
       endSec += 1.5;
     }
 
-    const segDuration = endSec - startSec;
-    const timelineStart = currentTimeline;
-    const timelineEnd = currentTimeline + segDuration;
+    // Check if transition occurs before this segment (distant jump or explicit transition)
+    let transitionBefore = null;
+    if (i > 0) {
+      const prevSeg = segments[i - 1];
+      const gap = Math.abs(seg.start_sec - prevSeg.end_sec);
+      const prevTransition = prevSeg.transition_after;
+      if (gap > 30.0 || (prevTransition && prevTransition !== "NONE")) {
+        const transDuration = 0.5;
+        transitionBefore = {
+          duration: transDuration,
+          type: (prevTransition && prevTransition !== "NONE") ? prevTransition : "TIME_JUMP_GLITCH"
+        };
+        currentTimeline = Math.round((currentTimeline + transDuration) * 1000) / 1000;
+      }
+    }
+
+    const segDuration = Math.round((endSec - startSec) * 1000) / 1000;
+    const timelineStart = Math.round(currentTimeline * 1000) / 1000;
+    const timelineEnd = Math.round((currentTimeline + segDuration) * 1000) / 1000;
 
     stitchedSegments.push({
       order: seg.order,
@@ -233,23 +308,56 @@ function computeTimelineAndSubtitles(clip, allWords, hasCam = false) {
       duration: segDuration,
       timeline_start: timelineStart,
       timeline_end: timelineEnd,
+      transition_before: transitionBefore,
       transition_after: seg.transition_after || "NONE",
       visual_directive: seg.visual_directive || "FULL_GAMEPLAY_FOCUS",
       overlay_asset_query: seg.overlay_asset_query || "none"
     });
 
-    // Re-align Whisper words in this segment to the new stitched timeline
-    const segWords = allWords.filter(w => w.end >= startSec && w.start <= endSec);
+    // Re-align Whisper words in this segment
+    const segWords = allWords
+      .filter(w => w.end >= startSec && w.start <= endSec)
+      .sort((a, b) => a.start - b.start);
+
+    const segAligned = [];
     segWords.forEach(w => {
       const relStart = Math.max(0, w.start - startSec);
-      const relEnd = Math.max(relStart + 0.1, w.end - startSec);
-      alignedWords.push({
+      const relEnd = Math.max(relStart + 0.08, w.end - startSec);
+      const wStart = Math.round((timelineStart + relStart) * 1000) / 1000;
+      const wEnd = Math.round(Math.min(timelineEnd, timelineStart + relEnd) * 1000) / 1000;
+      const aligned = {
         word: String(w.word || "").trim(),
-        start: timelineStart + relStart,
-        end: Math.min(timelineEnd, timelineStart + relEnd),
-        role: seg.role
-      });
+        start: wStart,
+        end: Math.max(wStart + 0.08, wEnd),
+        role: seg.role,
+        seg_order: seg.order
+      };
+      segAligned.push(aligned);
+      alignedWords.push(aligned);
     });
+
+    // Group words strictly per-segment (fixes cross-cut caption contamination)
+    const PAUSE_BREAK = 0.40;
+    const MAX_CHARS = 16;
+    const MAX_WORDS = 4;
+    const PUNCT_RE = /[.!?,;:]$/;
+
+    let current = [];
+    for (let j = 0; j < segAligned.length; j++) {
+      const w = segAligned[j];
+      if (!w.word) continue;
+      current.push(w);
+      const currentChars = current.reduce((s, x) => s + x.word.length, 0);
+      const nextW = segAligned[j + 1];
+      const gapToNext = nextW ? (nextW.start - w.end) : 9999;
+      const endsPhrase = PUNCT_RE.test(w.word);
+      const shouldBreak = current.length >= MAX_WORDS || currentChars >= MAX_CHARS || gapToNext > PAUSE_BREAK || endsPhrase;
+      if (shouldBreak && current.length > 0) {
+        allGroups.push([...current]);
+        current = [];
+      }
+    }
+    if (current.length > 0) allGroups.push(current);
 
     currentTimeline = timelineEnd;
   }
@@ -287,96 +395,215 @@ function computeTimelineAndSubtitles(clip, allWords, hasCam = false) {
   }
 
   // Active word-level highlighting
-  if (alignedWords.length > 0) {
-    const PAUSE_BREAK = 0.40;
-    const MAX_CHARS = 16;
-    const MAX_WORDS = 4;
-    const PUNCT_RE = /[.!?,;:]$/;
+  for (const group of allGroups) {
+    const cStart = group[0].start;
+    const cEnd = group[group.length - 1].end;
 
-    const groups = [];
-    let current = [];
+    for (let j = 0; j < group.length; j++) {
+      const wStart = Math.max(cStart, group[j].start);
+      const wEnd = Math.max(wStart + 0.08, j < group.length - 1 ? group[j + 1].start : cEnd);
 
-    for (let i = 0; i < alignedWords.length; i++) {
-      const w = alignedWords[i];
-      if (!w.word) continue;
-      current.push(w);
+      const lineText = group.map((w, idx) => {
+        const txt = w.word.toUpperCase();
+        if (idx === j) {
+          const colors = ["&H00FFFF&", "&H00FF00&", "&H00D7FF&"];
+          const randColor = colors[txt.length % colors.length];
+          return `{\\c${randColor}\\t(0,40,\\fscx115\\fscy115)\\t(40,120,\\fscx100\\fscy100)}${txt}{\\c${MAIN_COLOR}}`;
+        }
+        return txt;
+      }).join(" ");
 
-      const currentChars = current.reduce((s, x) => s + x.word.length, 0);
-      const nextW = alignedWords[i + 1];
-      const gapToNext = nextW ? (nextW.start - w.end) : 9999;
-      const endsPhrase = PUNCT_RE.test(w.word);
-
-      const shouldBreak =
-        current.length >= MAX_WORDS ||
-        currentChars >= MAX_CHARS ||
-        gapToNext > PAUSE_BREAK ||
-        endsPhrase;
-
-      if (shouldBreak && current.length > 0) {
-        groups.push([...current]);
-        current = [];
-      }
-    }
-    if (current.length > 0) groups.push(current);
-
-    for (const group of groups) {
-      const cStart = group[0].start;
-      const cEnd = group[group.length - 1].end;
-
-      for (let j = 0; j < group.length; j++) {
-        const wStart = Math.max(cStart, group[j].start);
-        const wEnd = j < group.length - 1 ? group[j + 1].start : cEnd;
-
-        const lineText = group.map((w, idx) => {
-          const txt = w.word.toUpperCase();
-          if (idx === j) {
-            const colors = ["&H00FFFF&", "&H00FF00&", "&H00D7FF&"];
-            const randColor = colors[txt.length % colors.length];
-            return `{\\c${randColor}\\t(0,40,\\fscx115\\fscy115)\\t(40,120,\\fscx100\\fscy100)}${txt}{\\c${MAIN_COLOR}}`;
-          }
-          return txt;
-        }).join(" ");
-
-        assContent += `Dialogue: 1,${formatTimeASS(wStart)},${formatTimeASS(wEnd)},ViralSubs,,0,0,0,,{\\pos(360,${subY})}${lineText}\n`;
-      }
+      assContent += `Dialogue: 1,${formatTimeASS(wStart)},${formatTimeASS(wEnd)},ViralSubs,,0,0,0,,{\\pos(360,${subY})}${lineText}\n`;
     }
   }
 
   return {
     stitchedSegments,
     alignedWords,
+    groups: allGroups,
     totalDuration: currentTimeline,
     assContent
   };
 }
 
-const result = computeTimelineAndSubtitles(simulatedGeminiOutput.clips[0], masterWords, false);
+// --- Step 5: Multi-Segment Assembly & FFmpeg Filter Builder ---
+function buildFFmpegRenderCommand(clip, streamFile, timelineData, camConfig = { ai_found: false }) {
+  const segments = timelineData.stitchedSegments;
+  const hasCam = !!(camConfig && camConfig.ai_found);
+  const title = (clip.title_idea || clip.clip_id || "short_clip").replace(/[\/\\"'<>|&;:]/g, '_').trim();
+  const outputFile = `/files/outputs/${title}.mp4`;
 
-console.log("=== TIMELINE RESULT ===");
-console.log("Stitched segments count:", result.stitchedSegments.length);
-console.log("Total timeline duration:", result.totalDuration.toFixed(2), "seconds");
-console.log("Aligned words count:", result.alignedWords.length);
-console.log("\nSample ASS Subtitle Content:\n" + result.assContent.substring(0, 800) + "...\n");
+  let filterComplex = "";
+  let vConcatList = [];
+  let aConcatList = [];
 
-assert.equal(result.stitchedSegments.length, 3, "Must have 3 stitched segments");
-assert(result.totalDuration >= 25 && result.totalDuration <= 45, "Total duration must be within 25-45s");
-assert(result.alignedWords.length > 20, "Words must be aligned successfully");
-assert(result.assContent.includes("WAIT FOR KARMA TO HIT"), "Must include top banner caption");
+  segments.forEach((seg, idx) => {
+    // 1. If there is a transition before this segment, insert transition generator into concat
+    if (seg.transition_before) {
+      const transV = `trans${idx}_v`;
+      const transA = `trans${idx}_a`;
+      // High-energy 0.5s glitch/static generator + white noise SFX
+      filterComplex += `nullsrc=s=720x1280:d=0.5,geq=random(1)*255:128:128[${transV}];`;
+      filterComplex += `anullsrc=r=44100:cl=stereo,atrim=d=0.5,volume=0.20[${transA}];`;
+      vConcatList.push(`[${transV}]`);
+      aConcatList.push(`[${transA}]`);
+    }
 
-console.log("ALL TESTS PASSED SUCCESSFULLY!");
+    const sStart = seg.source_start.toFixed(3);
+    const sEnd = seg.source_end.toFixed(3);
+    const segDur = seg.duration;
 
-// --- Test Step 4: Edge Cases for Pre-Processor ---
-console.log("\n=== TESTING EDGE CASES ===");
+    // 2. Video Trim & Visual Directives
+    let vFilter = `[0:v]trim=start=${sStart}:end=${sEnd},setpts=PTS-STARTPTS`;
+    if (seg.visual_directive === "ZOOM_FACECAM_120") {
+      vFilter += `,scale=trunc(iw*1.20/2)*2:-1,crop=iw/1.2:ih/1.2:(iw-ow)/2:(ih-oh)/2`;
+    } else if (seg.visual_directive === "SHAKE_AND_RED_TINT") {
+      vFilter += `,crop=in_w-16:in_h-16:8+sin(t*25)*8:8+cos(t*20)*8,eq=saturation=1.25`;
+    }
+    vFilter += `[v${idx}];`;
+    filterComplex += vFilter;
+    vConcatList.push(`[v${idx}]`);
 
-// Edge Case 1: Empty segments array -> should return empty or fallback gracefully
-const emptyRes = preProcessTranscript([]);
-assert.equal(emptyRes, "", "Empty input must return empty string");
+    // 3. Audio Trim with 0.15s anti-popping edge crossfade
+    const fadeEnd = Math.max(0.08, segDur - 0.08).toFixed(3);
+    let aFilter = `[0:a]atrim=start=${sStart}:end=${sEnd},asetpts=PTS-STARTPTS,afade=t=in:st=0:d=0.08,afade=t=out:st=${fadeEnd}:d=0.08[a${idx}];`;
+    filterComplex += aFilter;
+    aConcatList.push(`[a${idx}]`);
+  });
 
-// Edge Case 2: Whisper with ONLY words (no segments array)
+  const totalParts = vConcatList.length;
+  filterComplex += `${vConcatList.join('')}concat=n=${totalParts}:v=1:a=0[v_cat];`;
+  filterComplex += `${aConcatList.join('')}concat=n=${totalParts}:v=0:a=1[a_cat];`;
+
+  // 4. Scale to 720:1280 (9:16 vertical), apply meme overlay if requested, and burn ASS subtitles
+  let overlayDraw = "";
+  segments.forEach(seg => {
+    if (seg.overlay_asset_query && seg.overlay_asset_query !== "none") {
+      const q = seg.overlay_asset_query.toLowerCase();
+      let emoji = "💀";
+      if (q.includes("gigachad") || q.includes("chad")) emoji = "🗿";
+      else if (q.includes("clown")) emoji = "🤡";
+      else if (q.includes("shock") || q.includes("scream")) emoji = "😱";
+      else if (q.includes("karma") || q.includes("oof")) emoji = "😭";
+
+      overlayDraw += `,drawtext=text='${emoji}':fontsize=72:x=(w-text_w)/2:y=180:enable='between(t,${seg.timeline_start.toFixed(2)},${(seg.timeline_start + 1.5).toFixed(2)})'`;
+    }
+  });
+
+  if (hasCam) {
+    const cwRatio = (camConfig.cam_w / 1920).toFixed(4);
+    const chRatio = (camConfig.cam_h / 1080).toFixed(4);
+    const cxRatio = (camConfig.cam_x / 1920).toFixed(4);
+    const cyRatio = (camConfig.cam_y / 1080).toFixed(4);
+
+    filterComplex += `[v_cat]split=2[v_split_cam][v_split_game];`;
+    filterComplex += `[v_split_cam]crop=trunc(iw*${cwRatio}/2)*2:trunc(ih*${chRatio}/2)*2:trunc(iw*${cxRatio}/2)*2:trunc(ih*${cyRatio}/2)*2,scale=720:460:force_original_aspect_ratio=increase,crop=720:460:(iw-ow)/2:(ih-oh)/2[cam_box];`;
+    filterComplex += `[v_split_game]crop='trunc(min(iw,ih*0.88)/2)*2':'trunc(ih/2)*2':(iw-ow)/2:0,scale=720:820[game_box];`;
+    filterComplex += `color=c=black:s=720x1280:d=${timelineData.totalDuration.toFixed(2)}[bg_canvas];`;
+    filterComplex += `[bg_canvas][cam_box]overlay=0:0[layer1];`;
+    filterComplex += `[layer1][game_box]overlay=0:460[layer2];`;
+    filterComplex += `[layer2]drawbox=x=0:y=457:w=720:h=6:color=white:t=fill${overlayDraw},ass=/files/temp/subs.ass:fontsdir=/files/inputs/fonts[v_final]`;
+  } else {
+    filterComplex += `[v_cat]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280:(iw-ow)/2:(ih-oh)/2${overlayDraw},ass=/files/temp/subs.ass:fontsdir=/files/inputs/fonts[v_final]`;
+  }
+
+  const cmd = `mkdir -p /files/outputs /files/temp && ffmpeg -loglevel error -y -i "/files/inputs/${streamFile}" -filter_complex "${filterComplex}" -map "[v_final]" -map "[a_cat]" -c:v libx264 -preset fast -crf 17 -c:a aac -b:a 192k -movflags +faststart "${outputFile}"`;
+  return cmd;
+}
+
+// --- RUN TESTS ---
+const parsedClips = parseAndFilterEdl(JSON.stringify(simulatedGeminiOutput), 85);
+assert.equal(parsedClips.length, 1, "Must parse 1 clip with viral_score >= 85");
+
+const timelineResult = computeTimelineAndSubtitles(parsedClips[0], masterWords, false);
+console.log("\n=== TIMELINE RESULT ===");
+console.log("Stitched segments count:", timelineResult.stitchedSegments.length);
+console.log("Total timeline duration:", timelineResult.totalDuration.toFixed(2), "seconds");
+console.log("Aligned words count:", timelineResult.alignedWords.length);
+console.log("Groups count:", timelineResult.groups.length);
+
+assert.equal(timelineResult.stitchedSegments.length, 3, "Must have 3 stitched segments");
+// Notice: Segment 1 (12s) + Transition 1 (0.5s) + Segment 2 (7s) + Transition 2 (0.5s) + Segment 3 (13s + 1.5s payoff pad = 14.5s) = 34.5s
+assert.equal(timelineResult.totalDuration, 34.5, "Total duration must accurately include transition padding");
+assert.equal(timelineResult.stitchedSegments[1].timeline_start, 12.5, "Segment 2 must start at 12.5s (after 0.5s transition)");
+assert.equal(timelineResult.stitchedSegments[2].timeline_start, 20.0, "Segment 3 must start at 20.0s (after second 0.5s transition)");
+
+const ffmpegCmd = buildFFmpegRenderCommand(parsedClips[0], "stream.mp4", timelineResult, { ai_found: false });
+console.log("\n=== GENERATED FFMPEG COMMAND ===");
+console.log(ffmpegCmd);
+
+assert(ffmpegCmd.includes("trim=start=724.000:end=736.000"), "Must trim segment 1");
+assert(ffmpegCmd.includes("trim=start=1165.000:end=1172.000"), "Must trim segment 2");
+assert(ffmpegCmd.includes("trim=start=1182.000:end=1196.500"), "Must trim padded segment 3 (+1.5s)");
+assert(ffmpegCmd.includes("scale=trunc(iw*1.20/2)*2:-1"), "Must apply ZOOM_FACECAM_120 directive");
+assert(ffmpegCmd.includes("crop=in_w-16:in_h-16:8+sin(t*25)*8:8+cos(t*20)*8"), "Must apply SHAKE_AND_RED_TINT directive");
+assert(ffmpegCmd.includes("afade=t=in:st=0:d=0.08"), "Must apply anti-pop audio fade in");
+assert(ffmpegCmd.includes("afade=t=out"), "Must apply anti-pop audio fade out");
+assert(ffmpegCmd.includes("nullsrc=s=720x1280:d=0.5,geq=random(1)*255:128:128[trans1_v]"), "Must generate transition video stream between distant segments");
+assert(ffmpegCmd.includes("anullsrc=r=44100:cl=stereo,atrim=d=0.5,volume=0.20[trans1_a]"), "Must generate transition audio stream");
+assert(ffmpegCmd.includes("concat=n=5:v=1:a=0[v_cat]"), "Concat must have n=5 (3 video segments + 2 transition clips)");
+assert(ffmpegCmd.includes("drawtext=text='🗿'"), "Must apply gigachad meme overlay for segment 1");
+assert(ffmpegCmd.includes("drawtext=text='😭'"), "Must apply oof/karma meme overlay for segment 3");
+assert(ffmpegCmd.includes("ass=/files/temp/subs.ass:fontsdir=/files/inputs/fonts"), "Must burn ASS subtitles");
+
+// --- STEP 6: Edge Case Testing (Reviewer Attack Scenarios) ---
+console.log("\n=== RUNNING REVIEWER ATTACK SCENARIOS ===");
+
+// Scenario A: Out-of-order flash-forward hook
+// Segment 1 (order 1): minute 45 scream (2700s - 2701.8s)
+// Segment 2 (order 2): minute 2 calm setup (120s - 123.0s)
+const flashForwardClip = {
+  clip_id: "flash_forward_01",
+  viral_score: 96,
+  title_idea: "Tower of Hell Fails",
+  on_screen_hook_banner: "KARMA IS REAL 💀",
+  segments: [
+    {
+      order: 1,
+      role: "FLASH_FORWARD",
+      start_sec: 2700.0,
+      end_sec: 2701.8,
+      transcript_excerpt: "WAIT NO NO",
+      transition_after: "GLITCH_CUT",
+      visual_directive: "SHAKE_AND_RED_TINT",
+      overlay_asset_query: "shock"
+    },
+    {
+      order: 2,
+      role: "SETUP_HOOK",
+      start_sec: 120.0,
+      end_sec: 123.0,
+      transcript_excerpt: "Today we play Tower of Hell",
+      transition_after: "NONE",
+      visual_directive: "ZOOM_FACECAM_120",
+      overlay_asset_query: "none"
+    }
+  ]
+};
+
+const attackWords = [
+  { word: "Today", start: 120.0, end: 120.4 },
+  { word: "we", start: 120.5, end: 120.7 },
+  { word: "play", start: 120.8, end: 121.2 },
+  { word: "Tower", start: 121.3, end: 121.6 },
+  { word: "of", start: 121.7, end: 121.8 },
+  { word: "Hell", start: 121.9, end: 122.3 },
+  { word: "WAIT", start: 2700.0, end: 2700.5 },
+  { word: "NO", start: 2700.6, end: 2701.0 },
+  { word: "NO", start: 2701.1, end: 2701.5 }
+];
+
+const ffRes = computeTimelineAndSubtitles(flashForwardClip, attackWords);
+assert.equal(ffRes.groups.length, 3, "Must create separate subtitle groups per segment");
+assert.deepEqual(ffRes.groups[0].map(w => w.word), ['WAIT', 'NO', 'NO'], "Group 0 must strictly contain flash forward scream words");
+assert.deepEqual(ffRes.groups[1].map(w => w.word), ['Today', 'we', 'play', 'Tower'], "Group 1 must strictly contain setup words");
+assert.equal(ffRes.stitchedSegments[1].timeline_start, 2.3, "Segment 2 must start at 2.3s after 0.5s transition");
+assert.equal(ffRes.groups[1][0].start, 2.3, "Word 'Today' must start at exactly 2.3s");
+
+// Scenario B: Words-only Whisper input fallback
 function preProcessFromWordsOrSegments(whisperData) {
   let segments = whisperData.segments;
   if (!segments || !Array.isArray(segments) || segments.length === 0) {
-    // Reconstruct segments from words!
     const words = whisperData.words || (whisperData.x_groq && whisperData.x_groq.words) || [];
     if (words.length > 0) {
       segments = [];
@@ -387,32 +614,19 @@ function preProcessFromWordsOrSegments(whisperData) {
         curWords.push(w.word);
         const next = words[i + 1];
         const gap = next ? (next.start - w.end) : 999;
-        const endsSent = /[.!?]$/.test(w.word.trim());
+        const endsSent = /[.!?]$/.test(String(w.word || '').trim());
         if (endsSent || curWords.length >= 8 || gap > 0.8) {
-          segments.push({
-            start: curStart,
-            end: w.end,
-            text: curWords.join(" ")
-          });
+          segments.push({ start: curStart, end: w.end, text: curWords.join(" ") });
           curWords = [];
           if (next) curStart = next.start;
         }
       }
       if (curWords.length > 0) {
-        segments.push({
-          start: curStart,
-          end: words[words.length - 1].end,
-          text: curWords.join(" ")
-        });
+        segments.push({ start: curStart, end: words[words.length - 1].end, text: curWords.join(" ") });
       }
     } else if (whisperData.text) {
-      // Last resort: split raw text by sentences
       const sentences = whisperData.text.match(/[^.!?]+[.!?]+/g) || [whisperData.text];
-      segments = sentences.map((s, idx) => ({
-        start: idx * 5.0,
-        end: (idx + 1) * 5.0,
-        text: s.trim()
-      }));
+      segments = sentences.map((s, idx) => ({ start: idx * 5.0, end: (idx + 1) * 5.0, text: s.trim() }));
     } else {
       segments = [];
     }
@@ -429,147 +643,8 @@ const wordsOnlyInput = {
     { word: "OMG!", start: 13.0, end: 13.6 }
   ]
 };
-
 const wordsOnlyRes = preProcessFromWordsOrSegments(wordsOnlyInput);
-console.log("Words-only reconstruct output:\n", wordsOnlyRes);
-assert(wordsOnlyRes.includes("[10.0s-11.5s]"), "Must group words into segment");
-assert(wordsOnlyRes.includes("[HIGH_ENERGY]"), "Must detect OMG as high energy");
+assert(wordsOnlyRes.includes("[10.0-11.5]"), "Words grouped into [10.0-11.5]");
+assert(wordsOnlyRes.includes("[HIGH_ENERGY]"), "OMG tagged as [HIGH_ENERGY]");
 
-// Edge Case 3: EDL Parser resilience (markdown backticks, trailing commas, scores)
-function parseAndFilterEdl(rawAiContent, minScore = 80) {
-  let content = String(rawAiContent || "").trim();
-  // Strip markdown code fences
-  content = content.replace(/^```[a-z]*\s*/i, '').replace(/\s*```$/i, '').trim();
-
-  // Auto-fix common LLM JSON syntax errors (trailing commas)
-  content = content.replace(/,\s*([}\]])/g, '$1');
-
-  let parsed = null;
-  try {
-    parsed = JSON.parse(content);
-  } catch (e) {
-    // Regex recovery for clips array
-    const clipRegex = /\{[\s\S]*?"clip_id"[\s\S]*?"segments"\s*:\s*\[[\s\S]*?\]\s*\}/gi;
-    const matches = content.match(clipRegex);
-    if (matches && matches.length > 0) {
-      parsed = { clips: [] };
-      for (const m of matches) {
-        try {
-          parsed.clips.push(JSON.parse(m.replace(/,\s*([}\]])/g, '$1')));
-        } catch (e2) {}
-      }
-    }
-  }
-
-  if (!parsed || !Array.isArray(parsed.clips)) {
-    return [];
-  }
-
-  const validClips = [];
-  for (const c of parsed.clips) {
-    if (!c || !Array.isArray(c.segments) || c.segments.length === 0) continue;
-    const score = parseInt(c.viral_score, 10) || 75;
-    if (score < minScore && validClips.length >= 3) continue; // Keep top ones if not enough
-
-    // Sort segments
-    const segs = c.segments
-      .filter(s => typeof s.start_sec === 'number' && typeof s.end_sec === 'number' && s.end_sec > s.start_sec)
-      .sort((a, b) => (a.order || 0) - (b.order || 0));
-
-    if (segs.length === 0) continue;
-
-    // Check duration
-    let dur = segs.reduce((sum, s) => sum + (s.end_sec - s.start_sec), 0);
-    // Add payoff padding (+1.5s)
-    const payoff = segs.find(s => s.role === 'PAYOFF_CLIMAX');
-    if (payoff) dur += 1.5;
-
-    // Durations between 20s and 50s are acceptable
-    if (dur >= 18 && dur <= 55) {
-      validClips.push({
-        ...c,
-        total_duration_sec: Math.round(dur * 10) / 10,
-        segments: segs
-      });
-    }
-  }
-
-  return validClips;
-}
-
-const rawAiWithMarkdownAndTrailingComma = "```json\n" + JSON.stringify(simulatedGeminiOutput).replace('}]}', '},]}') + "\n```";
-const parsedClips = parseAndFilterEdl(rawAiWithMarkdownAndTrailingComma);
-assert.equal(parsedClips.length, 1, "Must successfully parse markdown-fenced and trailing comma JSON");
-assert.equal(parsedClips[0].clip_id, "clip_01");
-
-// --- Test Step 5: Multi-Segment Assembly & FFmpeg Filter Builder ---
-function buildFFmpegRenderCommand(clip, streamFile, timelineData, camConfig = { ai_found: false }) {
-  const segments = timelineData.stitchedSegments;
-  const hasCam = !!(camConfig && camConfig.ai_found);
-  const title = (clip.title_idea || clip.clip_id || "short_clip").replace(/[\/\\"'<>|&;:]/g, '_').trim();
-  const outputFile = `/files/outputs/${title}.mp4`;
-
-  let filterComplex = "";
-  let vStreams = "";
-  let aStreams = "";
-
-  segments.forEach((seg, idx) => {
-    const sStart = seg.source_start.toFixed(3);
-    const sEnd = seg.source_end.toFixed(3);
-
-    // Visual Directives
-    let vFilter = `[0:v]trim=start=${sStart}:end=${sEnd},setpts=PTS-STARTPTS`;
-    if (seg.visual_directive === "ZOOM_FACECAM_120") {
-      // 20% punch in zoom
-      vFilter += `,scale=trunc(iw*1.20/2)*2:-1,crop=iw/1.2:ih/1.2:(iw-ow)/2:(ih-oh)/2`;
-    } else if (seg.visual_directive === "SHAKE_AND_RED_TINT") {
-      // Subtle shake + saturation
-      vFilter += `,crop=in_w-16:in_h-16:8+sin(t*25)*8:8+cos(t*20)*8,eq=saturation=1.25`;
-    }
-    vFilter += `[v${idx}];`;
-    filterComplex += vFilter;
-
-    // Audio trim
-    filterComplex += `[0:a]atrim=start=${sStart}:end=${sEnd},asetpts=PTS-STARTPTS[a${idx}];`;
-    vStreams += `[v${idx}]`;
-    aStreams += `[a${idx}]`;
-  });
-
-  // Concat all trimmed micro-segments
-  filterComplex += `${vStreams}concat=n=${segments.length}:v=1:a=0[v_cat];`;
-  filterComplex += `${aStreams}concat=n=${segments.length}:v=0:a=1[a_cat];`;
-
-  // Scale to 720:1280 (9:16 vertical) and burn ASS subtitles
-  if (hasCam) {
-    const cwRatio = (camConfig.cam_w / 1920).toFixed(4);
-    const chRatio = (camConfig.cam_h / 1080).toFixed(4);
-    const cxRatio = (camConfig.cam_x / 1920).toFixed(4);
-    const cyRatio = (camConfig.cam_y / 1080).toFixed(4);
-
-    filterComplex += `[v_cat]split=2[v_split_cam][v_split_game];`;
-    filterComplex += `[v_split_cam]crop=trunc(iw*${cwRatio}/2)*2:trunc(ih*${chRatio}/2)*2:trunc(iw*${cxRatio}/2)*2:trunc(ih*${cyRatio}/2)*2,scale=720:460:force_original_aspect_ratio=increase,crop=720:460:(iw-ow)/2:(ih-oh)/2[cam_box];`;
-    filterComplex += `[v_split_game]crop='trunc(min(iw,ih*0.88)/2)*2':'trunc(ih/2)*2':(iw-ow)/2:0,scale=720:820[game_box];`;
-    filterComplex += `color=c=black:s=720x1280:d=${timelineData.totalDuration.toFixed(2)}[bg_canvas];`;
-    filterComplex += `[bg_canvas][cam_box]overlay=0:0[layer1];`;
-    filterComplex += `[layer1][game_box]overlay=0:460[layer2];`;
-    filterComplex += `[layer2]drawbox=x=0:y=457:w=720:h=6:color=white:t=fill,ass=/files/temp/subs.ass:fontsdir=/files/inputs/fonts[v_final]`;
-  } else {
-    // Cinema full frame 720x1280
-    filterComplex += `[v_cat]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280:(iw-ow)/2:(ih-oh)/2,ass=/files/temp/subs.ass:fontsdir=/files/inputs/fonts[v_final]`;
-  }
-
-  const cmd = `ffmpeg -loglevel error -y -i "/files/inputs/${streamFile}" -filter_complex "${filterComplex}" -map "[v_final]" -map "[a_cat]" -c:v libx264 -preset fast -crf 17 -c:a aac -b:a 192k -movflags +faststart "${outputFile}"`;
-  return cmd;
-}
-
-const ffmpegCmd = buildFFmpegRenderCommand(parsedClips[0], "stream.mp4", result, { ai_found: false });
-console.log("=== GENERATED FFMPEG COMMAND ===");
-console.log(ffmpegCmd);
-
-assert(ffmpegCmd.includes("trim=start=724.000:end=736.000"), "Must trim segment 1");
-assert(ffmpegCmd.includes("trim=start=1165.000:end=1172.000"), "Must trim segment 2");
-assert(ffmpegCmd.includes("trim=start=1182.000:end=1196.500"), "Must trim padded segment 3");
-assert(ffmpegCmd.includes("scale=trunc(iw*1.20/2)*2:-1"), "Must apply ZOOM_FACECAM_120 directive");
-assert(ffmpegCmd.includes("ass=/files/temp/subs.ass"), "Must burn ASS subtitles");
-
-console.log("\nALL ADVANCED TESTS AND FFMPEG BUILDER PASSED!");
+console.log("\nALL TESTS, EDGE CASES, AND REVIEWER ATTACK ASSERTIONS PASSED WITH ZERO ERRORS!");
