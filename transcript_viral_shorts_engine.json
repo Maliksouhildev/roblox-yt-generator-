@@ -12,7 +12,10 @@
       "name": "Transcript Webhook & Manual Trigger",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [200, 300]
+      "position": [
+        200,
+        300
+      ]
     },
     {
       "parameters": {
@@ -22,7 +25,10 @@
       "name": "Transcript Pre-Processor",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [440, 300]
+      "position": [
+        440,
+        300
+      ]
     },
     {
       "parameters": {
@@ -47,7 +53,10 @@
       "name": "Gemini Viral Shorts Director",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [680, 300],
+      "position": [
+        680,
+        300
+      ],
       "credentials": {
         "googlePalmApi": {
           "id": "9NtnnUmLQ5Ydiu6q",
@@ -63,7 +72,10 @@
       "name": "Split & Filter Viral Clips",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [920, 300]
+      "position": [
+        920,
+        300
+      ]
     },
     {
       "parameters": {
@@ -75,7 +87,10 @@
       "name": "Loop Clips",
       "type": "n8n-nodes-base.splitInBatches",
       "typeVersion": 3,
-      "position": [1140, 300]
+      "position": [
+        1140,
+        300
+      ]
     },
     {
       "parameters": {
@@ -85,7 +100,10 @@
       "name": "Timeline Math & Hormozi Subtitles",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1360, 360]
+      "position": [
+        1360,
+        360
+      ]
     },
     {
       "parameters": {
@@ -95,7 +113,10 @@
       "name": "Multi-Segment Assembly FFmpeg Builder",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1580, 360]
+      "position": [
+        1580,
+        360
+      ]
     },
     {
       "parameters": {
@@ -105,7 +126,10 @@
       "name": "Execute Assembly Render",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
-      "position": [1800, 360]
+      "position": [
+        1800,
+        360
+      ]
     }
   ],
   "connections": {

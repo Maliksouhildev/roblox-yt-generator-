@@ -497,16 +497,21 @@ function formatTimeASS(seconds) {
   return \`\${h}:\${String(m).padStart(2, '0')}:\${String(s).padStart(2, '0')}.\${String(cs).padStart(2, '0')}\`;
 }
 
-let assContent = '[Script Info]\\n' +
-  'ScriptType: v4.00+\\n' +
-  'PlayResX: 720\\n' +
-  'PlayResY: 1280\\n' +
-  '[V4+ Styles]\\n' +
-  'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\\n' +
-  \`Style: ViralSubs,Lilita One,\${FONT_SIZE},\${MAIN_COLOR},&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,3,5,20,20,10,1\\n\` +
-  'Style: ViralCaption,Lilita One,42,&H00D7FF&,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,3,5,20,20,10,1\\n' +
-  '[Events]\\n' +
-  'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\\n';
+const NL = String.fromCharCode(10);
+let assContent = [
+  '[Script Info]',
+  'ScriptType: v4.00+',
+  'PlayResX: 720',
+  'PlayResY: 1280',
+  '',
+  '[V4+ Styles]',
+  'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
+  \Style: ViralSubs,Lilita One,\,\,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,3,5,20,20,10,1\,
+  'Style: ViralCaption,Lilita One,42,&H00D7FF&,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,3,5,20,20,10,1',
+  '',
+  '[Events]',
+  'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text'
+].join(NL) + NL;
 
 // Persistent Top Hook Banner
 const hookBanner = (clip.on_screen_hook_banner || clip.title_idea || "").toUpperCase();

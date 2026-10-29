@@ -854,7 +854,7 @@ return [{ pairedItem: { item: 0 }, json: { command: ffmpegCmd, clip_title: clipT
     })
     GetMemeList = {
         command:
-            'mkdir -p /files/inputs/fonts && cp -n /files/inputs/*.ttf /files/inputs/fonts/ 2>/dev/null || true; ls /files/memes && echo "---DIMENSIONS---" && ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 "/files/temp/concatenated_clip.mp4" || echo "1920x1080"',
+            'mkdir -p /files/inputs/fonts && cp -n /files/inputs/*.ttf /files/inputs/fonts/ 2>/dev/null || true; ls -1 /files/memes && echo "---DIMENSIONS---" && ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 "/files/temp/concatenated_clip.mp4" || echo "1920x1080"',
     };
 
     @node({
@@ -865,7 +865,8 @@ return [{ pairedItem: { item: 0 }, json: { command: ffmpegCmd, clip_title: clipT
         position: [-82080, 26080],
     })
     CreateSubtitleBinary = {
-        jsCode: `const FONT_SIZE = 48;
+        jsCode: `const NL = String.fromCharCode(10);
+const FONT_SIZE = 48;
 const HIGHLIGHT_COLOR = "&H00FFFF&";
 const MAIN_COLOR = "&HFFFFFF&";
 function formatTimeASS(seconds) {
@@ -886,7 +887,7 @@ const hasCam = !!(camConfig && camConfig.ai_found);
 
 const getMemeOutput = $('Get Meme List').first().json.stdout || "";
 const parts = getMemeOutput.split("---DIMENSIONS---");
-const realFiles = (parts[0] || "").split('\\n').map(f => f.trim()).filter(f => f.length > 3);
+const realFiles = (parts[0] || "").split(NL).map(f => f.trim().replace(/\r/g, '')).filter(f => f.length > 3);
 
 let isVertical = false;
 if (parts.length > 1) {
@@ -1093,16 +1094,20 @@ const camZoomEnable = climaxEnable;
 const subY = hasCam ? 500 : 1040;
 const captionY = hasCam ? 440 : 95;
 
-let assContent = '[Script Info]\\n' +
-  'ScriptType: v4.00+\\n' +
-  'PlayResX: 720\\n' +
-  'PlayResY: 1280\\n' +
-  '[V4+ Styles]\\n' +
-  'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\\n' +
-  'Style: ViralSubs,Lilita One,' + FONT_SIZE + ',' + MAIN_COLOR + ',&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,3,5,20,20,10,1\\n' +
-  'Style: ViralCaption,Lilita One,42,&H00D7FF&,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,3,5,20,20,10,1\\n' +
-  '[Events]\\n' +
-  'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\\n';
+let assContent = [
+  '[Script Info]',
+  'ScriptType: v4.00+',
+  'PlayResX: 720',
+  'PlayResY: 1280',
+  '',
+  '[V4+ Styles]',
+  'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
+  'Style: ViralSubs,Lilita One,' + FONT_SIZE + ',' + MAIN_COLOR + ',&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,3,5,20,20,10,1',
+  'Style: ViralCaption,Lilita One,42,&H00D7FF&,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,3,5,20,20,10,1',
+  '',
+  '[Events]',
+  'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text'
+].join(NL) + NL;
 
 // ── Semantic Phrase Grouping Subtitles ────────────────────────────────────
 if (wordData.length > 0) {
@@ -1158,23 +1163,23 @@ if (wordData.length > 0) {
         return txt;
       }).join(" ");
 
-      assContent += 'Dialogue: 1,' + formatTimeASS(wStart) + ',' + formatTimeASS(wEnd) + ',ViralSubs,,0,0,0,,{\\\\pos(360,' + subY + ')}' + lineText + '\\n';
+      assContent += 'Dialogue: 1,' + formatTimeASS(wStart) + ',' + formatTimeASS(wEnd) + ',ViralSubs,,0,0,0,,{\\\\pos(360,' + subY + ')}' + lineText + NL;
     }
   }
 }
 
 // ── Hook Banner & Persistent Top Header ───────────────────────────────────
 if (rawCaption) {
-  const cleanCaption = rawCaption.replace(/['"\`]/g, '').trim().toUpperCase();
+  const cleanCaption = rawCaption.replace(/[{}\x27\x22\`]/g, '').trim().toUpperCase();
   if (!hasCam) {
     // Cinema No-Cam: Persistent banner across entire video in top banner zone (y=0 to y=180)
     const capStart = remotionOverlayFile ? "0:00:03.50" : "0:00:00.00";
     const capEnd = formatTimeASS(clipDur);
-    assContent += 'Dialogue: 2,' + capStart + ',' + capEnd + ',ViralCaption,,0,0,0,,{\\\\pos(360,' + captionY + ')\\\\t(0,80,\\\\fscx108\\\\fscy108)\\\\t(80,180,\\\\fscx100\\\\fscy100)}' + cleanCaption + '\\n';
+    assContent += 'Dialogue: 2,' + capStart + ',' + capEnd + ',ViralCaption,,0,0,0,,{\\\\pos(360,' + captionY + ')\\\\t(0,80,\\\\fscx108\\\\fscy108)\\\\t(80,180,\\\\fscx100\\\\fscy100)}' + cleanCaption + NL;
   } else {
     // Facecam mode: 3.5s punch hook banner cleanly centered at divider seam (y=440)
     if (!remotionOverlayFile) {
-      assContent += 'Dialogue: 2,0:00:00.00,0:00:03.50,ViralCaption,,0,0,0,,{\\\\pos(360,' + captionY + ')\\\\fad(0,350)\\\\t(0,80,\\\\fscx110\\\\fscy110)\\\\t(80,200,\\\\fscx100\\\\fscy100)}' + cleanCaption + '\\n';
+      assContent += 'Dialogue: 2,0:00:00.00,0:00:03.50,ViralCaption,,0,0,0,,{\\\\pos(360,' + captionY + ')\\\\fad(0,350)\\\\t(0,80,\\\\fscx110\\\\fscy110)\\\\t(80,200,\\\\fscx100\\\\fscy100)}' + cleanCaption + NL;
     }
   }
 }
@@ -1218,6 +1223,12 @@ const outputFile = "/files/outputs/" + title + ".mp4";
 const extraInputs = overlayInput ? (' ' + overlayInput) : "";
 
 const cmd = 'ffmpeg -loglevel error -y -i "/files/temp/concatenated_clip.mp4"' + extraInputs + (audioInputs.length > 0 ? (' ' + audioInputs.join(" ")) : "") + ' -filter_complex "' + filter + ';' + audioMixFilter + '" -map "[v]" -map "[a_out]" -c:v libx264 -preset medium -crf 18 -c:a aac "' + outputFile + '"';
+
+try {
+  const fs = require('fs');
+  if (!fs.existsSync('/files/temp')) fs.mkdirSync('/files/temp', { recursive: true });
+  fs.writeFileSync('/files/temp/subs.ass', assContent, 'utf-8');
+} catch(e) {}
 
 return [{json: {command: cmd}, binary: {data: {data: Buffer.from(assContent).toString('base64'), mimeType: 'text/plain', fileName: 'subs.ass'}}}];
 `,
