@@ -1323,7 +1323,7 @@ OUTPUT JSON FORMAT EXACTLY AND ONLY JSON. NO MARKDOWN:
         waitBetweenTries: 65000,
     })
     GeminiModel1 = {
-        modelName: 'models/gemini-1.5-flash',
+        modelName: 'models/gemini-3.5-flash-lite',
         options: {
             temperature: 0.1,
         },
@@ -1398,7 +1398,7 @@ Output ONLY valid raw JSON:
         waitBetweenTries: 65000,
     })
     GeminiModel2 = {
-        modelName: 'models/gemini-1.5-flash',
+        modelName: 'models/gemini-3.5-flash-lite',
         options: {
             temperature: 0.2,
         },
@@ -1487,7 +1487,7 @@ OUTPUT JSON FORMAT EXACTLY AND ONLY JSON. NO MARKDOWN:
         waitBetweenTries: 65000,
     })
     GeminiBackupModel1 = {
-        modelName: 'models/gemini-1.5-flash',
+        modelName: 'models/gemini-3.5-flash-lite',
         options: {
             temperature: 0.1,
         },
@@ -1590,7 +1590,7 @@ Output ONLY valid raw JSON:
         waitBetweenTries: 65000,
     })
     GeminiBackupModel3 = {
-        modelName: 'models/gemini-1.5-flash',
+        modelName: 'models/gemini-3.5-flash-lite',
         options: {
             temperature: 0.2,
         },
@@ -1823,7 +1823,7 @@ return results;
         waitBetweenTries: 65000,
     })
     GeminiModelScout = {
-        modelName: 'models/gemini-1.5-flash',
+        modelName: 'models/gemini-3.5-flash-lite',
         options: {
             temperature: 0.4,
         },
@@ -1974,7 +1974,7 @@ return [{ pairedItem: { item: 0 }, json: { prompt, targetClips } }];
         waitBetweenTries: 65000,
     })
     GeminiModelDirector = {
-        modelName: 'models/gemini-1.5-flash',
+        modelName: 'models/gemini-3.5-flash-lite',
         options: {
             temperature: 0.1,
         },
