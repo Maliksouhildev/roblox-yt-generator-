@@ -373,7 +373,7 @@ return [{ pairedItem: { item: 0 }, json: { cam_vision_payload: {
     })
     CamVisionCall = {
         method: 'POST',
-        url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=AIzaSyDqACFpgY2IsbUFoul7D62V17DPTXGkTrQ',
+        url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={{ $env.GEMINI_API_KEY }}',
         sendBody: true,
         specifyBody: 'json',
         jsonBody: '={{ $json.cam_vision_payload }}',
@@ -2278,7 +2278,7 @@ return [{ pairedItem: { item: 0 }, json: { url: randomUrl } }];`,
     })
     GroqVisionAnalyzer = {
         method: 'POST',
-        url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=AIzaSyDqACFpgY2IsbUFoul7D62V17DPTXGkTrQ',
+        url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={{ $env.GEMINI_API_KEY }}',
         sendBody: true,
         specifyBody: 'json',
         jsonBody: '={{ $json.vision_payload }}',

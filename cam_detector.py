@@ -28,7 +28,7 @@ import numpy as np
 YUNET_MODEL = "/files/face_detection_yunet.onnx"
 DEFAULT_CONFIG_PATH = "/files/temp/cam_config.json"
 GEMINI_KEY_FILE = "/files/gemini_key.txt"
-FALLBACK_GEMINI_KEY = "AIzaSyDqACFpgY2IsbUFoul7D62V17DPTXGkTrQ"
+FALLBACK_GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 
 def log(msg: str):

@@ -1,72 +1,182 @@
-# Roblox YouTube Shorts Generator
+# 🎮 Roblox YouTube Shorts Generator — Autonomous Vision & AI Editing Engine
 
-Automated n8n workflow system for generating YouTube Shorts content from Roblox gameplay, with vision-based camera detection and auto-publishing.
+<div align="center">
 
-## Workflows
+[![Python](https://img.shields.io/badge/Vision%20Engine-Python%203.10+-3776ab?style=for-the-badge&logo=python)](https://python.org)
+[![OpenCV](https://img.shields.io/badge/Computer%20Vision-OpenCV%20+%20YuNet-5c3ee8?style=for-the-badge&logo=opencv)](https://opencv.org)
+[![n8n](https://img.shields.io/badge/Orchestrator-n8n--as--code-ea4b71?style=for-the-badge&logo=n8n)](https://n8n.io)
+[![Gemini](https://img.shields.io/badge/AI%20Vision-Google%20Gemini%202.5-4285f4?style=for-the-badge&logo=google)](https://ai.google.dev)
+[![YouTube](https://img.shields.io/badge/Publishing-YouTube%20Data%20API%20v3-ff0000?style=for-the-badge&logo=youtube)](https://developers.google.com/youtube/v3)
+[![License](https://img.shields.io/badge/License-MIT-orange?style=for-the-badge)](LICENSE)
 
-| File | Description |
-|------|-------------|
-| `workflow.ts` | Main YouTube Short automation workflow (n8n-as-code) |
-| `workflow_bypassed.ts` | Bypassed/debug version of the workflow |
+**An end-to-end automated pipeline transforming raw Roblox gameplay footage into viral, vertical 9:16 YouTube Shorts with smart facecam cropping, AI narrative pacing, and hands-free publishing.**
 
-## Vision Scripts
+[Architecture](#-architecture) • [Core Components](#-core-components) • [Quick Start](#-quick-start) • [Vision Detection](#-vision--facecam-engine) • [Workflow Deployment](#-workflow-deployment)
 
-| File | Description |
-|------|-------------|
-| `cam_detector.py` | Camera/scene detector — analyzes frames for cuts, POV detection, and visual events |
-| `test_vision.py` | Test harness for the vision detection pipeline |
+</div>
 
-## What the Workflow Does
-1. **Trigger** — Manual or webhook-based activation
-2. **Gameplay capture** — Pulls Roblox session footage/clips
-3. **Vision analysis** — `cam_detector.py` scans frames to detect camera angles, scenes, and highlights
-4. **Script generation** — AI generates commentary or voiceover script for the short
-5. **Publishing** — Sends to the YouTube Shorts publishing pipeline
+---
 
-## Files
+## 📖 Overview
 
-| File | Description |
-|------|-------------|
-| `workflow.ts` | n8n-as-code TypeScript workflow |
-| `cam_detector.py` | Python vision/frame detection script |
-| `test_vision.py` | Vision pipeline tests |
-| `n8n-workflows.d.ts` | TypeScript type declarations |
-| `package.json` | n8n-as-code package config |
-| `tsconfig.json` | TypeScript config |
+Creating engaging YouTube Shorts from long-form gaming streams requires tedious manual framing: tracking the creator's webcam, detecting funny reactions or jumpscares, re-cropping 16:9 gameplay to vertical 9:16, generating catchy voiceovers, and rendering burn-in subtitles.
 
-## Setup
+**Roblox YouTube Shorts Generator** automates the entire lifecycle:
+1. Ingests raw Roblox session footage.
+2. Uses **YuNet ONNX** and OpenCV to locate the creator's facecam box with sub-pixel precision.
+3. Automatically composes vertical split-screen layouts (top: reaction facecam, bottom: action gameplay).
+4. Employs multimodal AI (Google Gemini) to craft high-retention hooks and viral commentary.
+5. Uploads and schedules directly to YouTube with optimized titles, descriptions, and tags.
 
-### 1. Install n8n
-```bash
-npm install -g n8n
+---
+
+## 🏛️ Architecture
+
+```mermaid
+flowchart TD
+    subgraph Input["Media Ingestion"]
+        Clip["Raw Roblox Footage (.mp4 / stream)"]
+        Meta["Stream Session Metadata"]
+    end
+
+    subgraph Vision["Vision AI & Layout Engine"]
+        YuNet["YuNet Face Detection (ONNX)"]
+        CamDet["cam_detector.py"]
+        GeminiVis["Gemini 2.5 Flash Vision Fallback"]
+        Split["Split-Canvas 9:16 Cropper"]
+    end
+
+    subgraph Audio_Script["Narrative & Audio Intelligence"]
+        AudioTrans["Whisper / Audio Transcription"]
+        HookGen["Viral Hook & Pacing Director"]
+        TTS["AI Voiceover & SFX Synthesizer"]
+    end
+
+    subgraph Orchestrator["n8n-as-code Pipeline"]
+        N8n["workflow.ts / workflow.json"]
+        SubtitleBurn["Burn-In Word Subtitles"]
+        Exporter["Final 1080x1920 MP4 Exporter"]
+    end
+
+    subgraph Output["Auto-Publishing"]
+        YT["YouTube Data API v3 (Shorts Feed)"]
+        TG["Telegram Status Alert"]
+    end
+
+    Input --> CamDet
+    CamDet --> YuNet
+    YuNet -.->|Ambiguous Overlays| GeminiVis
+    CamDet --> Split
+    Input --> AudioTrans
+    AudioTrans --> HookGen
+    HookGen --> TTS
+    Split --> N8n
+    TTS --> N8n
+    N8n --> SubtitleBurn
+    SubtitleBurn --> Exporter
+    Exporter --> YT
+    YT --> TG
 ```
 
-### 2. Python Vision Dependencies
+---
+
+## ⚙️ Core Components
+
+| Component | File | Description |
+|:----------|:-----|:------------|
+| **Camera & Facecam Detector** | [`cam_detector.py`](cam_detector.py) | Hybrid OpenCV + YuNet ONNX face tracker that extracts webcam coordinates, aspect ratios, and visual cuts from gameplay. |
+| **Vision Test Suite** | [`test_vision.py`](test_vision.py) | Comprehensive test harness asserting facecam boundary extraction across multiple resolutions. |
+| **Viral Shorts Orchestrator** | [`workflow.ts`](workflow.ts) | Declarative TypeScript n8n workflow coordinating frame extraction, AI scripting, and publishing. |
+| **Bypassed Debug Pipeline** | [`workflow_bypassed.ts`](workflow_bypassed.ts) | Streamlined workflow variant allowing local offline validation without external API rate limits. |
+| **Package Declarations** | [`package.json`](package.json) | Manages `n8n-as-code` dependencies and compilation targets. |
+
+---
+
+## 🚀 Quick Start
+
+### 1. Prerequisites
+- **Python**: 3.10+
+- **Node.js**: 18+
+- **FFmpeg**: Must be available on system `PATH`
+- **n8n**: 1.0+ (`npm install -g n8n` or Docker)
+
+### 2. Python Setup
+
 ```bash
-pip install opencv-python numpy
+# Clone the repository
+git clone https://github.com/Maliksouhildev/roblox-yt-generator-.git
+cd roblox-yt-generator-
+
+# Install Python dependencies
+pip install opencv-python opencv-contrib-python numpy requests
 ```
 
-### 3. Import Workflow
-Option A — n8n-as-code CLI:
+### 3. Environment Configuration
+
+Copy `.env.example` to `.env` and fill in your keys:
+
+```bash
+cp .env.example .env
+```
+
+```ini
+GEMINI_API_KEY=AIzaSy...
+YOUTUBE_CLIENT_ID=your_youtube_client_id
+YOUTUBE_CLIENT_SECRET=your_youtube_client_secret
+```
+
+### 4. Run the Vision Detector
+
+Test the camera detection on a sample gameplay frame:
+
+```bash
+python cam_detector.py --input sample_gameplay.mp4 --output-config cam_config.json
+```
+
+Run test suite:
+
+```bash
+python test_vision.py
+```
+
+---
+
+## 🎬 Vision & Facecam Engine
+
+`cam_detector.py` uses a multi-tier detection cascade:
+
+1. **Local YuNet Inference**: Runs ultra-fast face detection (<10ms per frame) on CPU to locate the gamer in corners.
+2. **Temporal Smoothing**: Applies a moving-average filter over 30 consecutive frames to prevent jitter and erroneous crops.
+3. **Multimodal Fallback**: If lighting is dark or the creator uses a VTuber avatar, the frame is sent to **Google Gemini 2.5 Flash** with spatial coordinates extraction prompts.
+4. **Layout Composition**: Produces clean JSON geometry:
+   ```json
+   {
+     "facecam_detected": true,
+     "bbox": {"x": 1420, "y": 40, "width": 460, "height": 320},
+     "target_layout": "split_vertical_9_16"
+   }
+   ```
+
+---
+
+## 🔄 Workflow Deployment (n8n)
+
+### Option A: Using n8n-as-code CLI
 ```bash
 npm install
 npx n8nac push
 ```
 
-Option B — Import JSON directly in n8n UI
+### Option B: Direct Import in n8n UI
+1. Open n8n at `http://localhost:5678`.
+2. Navigate to **Workflows → Import from File**.
+3. Select `workflow.json` or `transcript_viral_shorts_engine.json`.
+4. Configure your YouTube OAuth credentials and Gemini API credentials in the n8n credentials vault.
 
-### 4. Configure Credentials
-- YouTube Data API v3 key (n8n credentials panel)
-- Any AI/LLM API keys used for script generation
+---
 
-### 5. Run Vision Tests
-```bash
-python test_vision.py
-```
+## 🤝 Contributing & License
 
-## Requirements
-- n8n v1.0+
-- Node.js 18+
-- Python 3.9+
-- OpenCV (`pip install opencv-python`)
-- YouTube Data API v3 credentials
+Contributions, bug reports, and pull requests are warmly welcomed.
+
+Distributed under the **MIT License**. Created & maintained by [Maliksouhildev](https://github.com/Maliksouhildev).
