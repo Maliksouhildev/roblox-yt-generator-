@@ -85,9 +85,9 @@ flowchart TD
 | Component | File | Description |
 |:----------|:-----|:------------|
 | **Camera & Facecam Detector** | [`cam_detector.py`](cam_detector.py) | Hybrid OpenCV + YuNet ONNX face tracker that extracts webcam coordinates, aspect ratios, and visual cuts from gameplay. |
-| **Vision Test Suite** | [`test_vision.py`](test_vision.py) | Comprehensive test harness asserting facecam boundary extraction across multiple resolutions. |
-| **Viral Shorts Orchestrator** | [`workflow.ts`](workflow.ts) | Declarative TypeScript n8n workflow coordinating frame extraction, AI scripting, and publishing. |
-| **Bypassed Debug Pipeline** | [`workflow_bypassed.ts`](workflow_bypassed.ts) | Streamlined workflow variant allowing local offline validation without external API rate limits. |
+| **Vision Test Suite** | [`tests/test_vision.py`](tests/test_vision.py) | Comprehensive test harness asserting facecam boundary extraction across multiple resolutions. |
+| **Viral Shorts Orchestrator** | [`workflows/transcript_viral_shorts_engine.workflow.ts`](workflows/transcript_viral_shorts_engine.workflow.ts) | Declarative TypeScript n8n workflow coordinating frame extraction, AI scripting, and publishing. |
+| **Bypassed Debug Pipeline** | [`workflows/workflow_bypassed.ts`](workflows/workflow_bypassed.ts) | Streamlined workflow variant allowing local offline validation without external API rate limits. |
 | **Package Declarations** | [`package.json`](package.json) | Manages `n8n-as-code` dependencies and compilation targets. |
 
 ---
@@ -136,7 +136,7 @@ python cam_detector.py --input sample_gameplay.mp4 --output-config cam_config.js
 Run test suite:
 
 ```bash
-python test_vision.py
+python tests/test_vision.py
 ```
 
 ---
@@ -170,7 +170,7 @@ npx n8nac push
 ### Option B: Direct Import in n8n UI
 1. Open n8n at `http://localhost:5678`.
 2. Navigate to **Workflows → Import from File**.
-3. Select `workflow.json` or `transcript_viral_shorts_engine.json`.
+3. Select `workflows/workflow.json` or `workflows/transcript_viral_shorts_engine.json`.
 4. Configure your YouTube OAuth credentials and Gemini API credentials in the n8n credentials vault.
 
 ---
