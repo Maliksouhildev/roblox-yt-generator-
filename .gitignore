@@ -7,3 +7,5 @@ __pycache__/
 *.pyc
 n8nac-config.json
 workflows/
+
+!docs/images/*

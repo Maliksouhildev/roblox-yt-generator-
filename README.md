@@ -30,53 +30,26 @@ Creating engaging YouTube Shorts from long-form gaming streams requires tedious 
 
 ---
 
-## 🏛️ Architecture
+## 📸 Vision Detection & Shorts Composition Preview
 
-```mermaid
-flowchart TD
-    subgraph Input["Media Ingestion"]
-        Clip["Raw Roblox Footage (.mp4 / stream)"]
-        Meta["Stream Session Metadata"]
-    end
+<div align="center">
 
-    subgraph Vision["Vision AI & Layout Engine"]
-        YuNet["YuNet Face Detection (ONNX)"]
-        CamDet["cam_detector.py"]
-        GeminiVis["Gemini 2.5 Flash Vision Fallback"]
-        Split["Split-Canvas 9:16 Cropper"]
-    end
+### 1. Smart Facecam & Reaction Tracking
+<p align="center">
+  <img src="docs/images/facecam_detection_raw.png" width="48%" alt="YuNet Facecam Proposal" />
+  <img src="docs/images/facecam_crop_tracking.png" width="48%" alt="Temporal Bounding Box Anchor" />
+</p>
 
-    subgraph Audio_Script["Narrative & Audio Intelligence"]
-        AudioTrans["Whisper / Audio Transcription"]
-        HookGen["Viral Hook & Pacing Director"]
-        TTS["AI Voiceover & SFX Synthesizer"]
-    end
+*Sub-pixel YuNet ONNX face detection isolates creator reaction box across gameplay streams, eliminating coordinate jitter with a 30-frame temporal smoothing filter.*
 
-    subgraph Orchestrator["n8n-as-code Pipeline"]
-        N8n["workflow.ts / workflow.json"]
-        SubtitleBurn["Burn-In Word Subtitles"]
-        Exporter["Final 1080x1920 MP4 Exporter"]
-    end
+---
 
-    subgraph Output["Auto-Publishing"]
-        YT["YouTube Data API v3 (Shorts Feed)"]
-        TG["Telegram Status Alert"]
-    end
+### 2. Vertical 9:16 Shorts Generation
+![Vertical Short Preview](docs/images/vertical_short_preview.png)
 
-    Input --> CamDet
-    CamDet --> YuNet
-    YuNet -.->|Ambiguous Overlays| GeminiVis
-    CamDet --> Split
-    Input --> AudioTrans
-    AudioTrans --> HookGen
-    HookGen --> TTS
-    Split --> N8n
-    TTS --> N8n
-    N8n --> SubtitleBurn
-    SubtitleBurn --> Exporter
-    Exporter --> YT
-    YT --> TG
-```
+*Split-screen vertical composite: top reaction webcam, lower gameplay action, and synchronized animated karaoke subtitles ready for YouTube Shorts.*
+
+</div>
 
 ---
 
