@@ -72,7 +72,7 @@
         26300
       ],
       "parameters": {
-        "command": "file=$(ls -1 /files/inputs/ | grep \"\\.mp4$\" | grep -v \"\\.processing\\.mp4$\" | head -n 1); if [ -n \"$file\" ]; then mv \"/files/inputs/$file\" \"/files/inputs/${file%.mp4}.processing.mp4\"; echo \"${file%.mp4}.processing.mp4\"; else echo \"\"; fi"
+        "command": "file=$(ls -1 /files/inputs/ | grep \"\\.mp4$\" | grep -v \"\\.processing\\.mp4$\" | head -n 1); if [ -z \"$file\" ]; then stale=$(ls -1 /files/inputs/ | grep \"\\.processing\\.mp4$\" | head -n 1); if [ -n \"$stale\" ]; then mv \"/files/inputs/$stale\" \"/files/inputs/${stale%.processing.mp4}.mp4\"; file=\"${stale%.processing.mp4}.mp4\"; fi; fi; if [ -n \"$file\" ]; then mv \"/files/inputs/$file\" \"/files/inputs/${file%.mp4}.processing.mp4\"; echo \"${file%.mp4}.processing.mp4\"; else echo \"\"; fi"
       }
     },
     {
@@ -1047,7 +1047,7 @@
         26840
       ],
       "parameters": {
-        "command": "={{ (function(){ let loopItem = {}; try { loopItem = $('Loop Clips').item.json || {}; } catch(e) { try { loopItem = $('Loop Clips').first().json || {}; } catch(e2) {} } const title = (loopItem.title || 'clip').replace(/[\\/\\\\\"'<>|&;:]/g, '_').trim(); const sidecarFile = '/files/outputs/' + title + '.json'; let summary = {}; try { summary = JSON.parse($('1. Global Summary AI').first().json.output || '{}'); } catch(e) {} let caption = title; try { let raw = ($('Context Merge Agent').first().json.output || '{}').replace(/```json/gi,'').replace(/```/g,'').trim(); caption = JSON.parse(raw).story_hook || title; } catch(e) {} const meta = { viral_caption: caption, game: summary.game || 'Gaming', global_summary: summary.global_summary || '', vibe: summary.vibe || '', theme: loopItem.theme || '', key_themes: summary.key_themes || [] }; const jsonStr = JSON.stringify(meta); return `cat <<'SIDECAR_EOF' > \"${sidecarFile}\"\n${jsonStr}\nSIDECAR_EOF`; })() }}"
+        "command": "={{ (function(){ let loopItem = {}; try { loopItem = $('Loop Clips').item.json || {}; } catch(e) { try { loopItem = $('Loop Clips').first().json || {}; } catch(e2) {} } const title = (loopItem.title || 'clip').replace(/[\\/\\\\\"'<>|&;:]/g, '_').trim(); const sidecarFile = '/files/outputs/' + title + '.json'; let summary = {}; try { summary = JSON.parse($('1. Global Summary AI').first().json.output || '{}'); } catch(e) {} let caption = loopItem.hook_caption || title; try { let raw = ($('Context Merge Agent').first().json.output || '{}').replace(/```json/gi,'').replace(/```/g,'').trim(); let parsedHook = JSON.parse(raw).story_hook; if (parsedHook && !/[\\$({]|item\\.json|loop\\s*clips/i.test(parsedHook)) caption = parsedHook; } catch(e) {} if (/[\\$({]|item\\.json|loop\\s*clips/i.test(caption)) caption = title; const meta = { viral_caption: caption, game: summary.game || 'Gaming', global_summary: summary.global_summary || '', vibe: summary.vibe || '', theme: loopItem.theme || '', key_themes: summary.key_themes || [] }; const jsonStr = JSON.stringify(meta); return `cat <<'SIDECAR_EOF' > \"${sidecarFile}\"\n${jsonStr}\nSIDECAR_EOF`; })() }}"
       }
     },
     {
@@ -1060,7 +1060,7 @@
         26480
       ],
       "parameters": {
-        "jsCode": "const streamers = [\n  'https://www.youtube.com/@KreekCraft/streams',\n  'https://www.youtube.com/@LankyBox/streams',\n  'https://www.youtube.com/@RussoPlays/streams',\n  'https://www.youtube.com/@TanqR/streams',\n  'https://www.youtube.com/@Sketch/streams',\n  'https://www.youtube.com/@flamingo/streams',\n  'https://www.youtube.com/@ItsFunneh/streams',\n  'https://www.youtube.com/@MeganPlays/streams',\n  'https://www.youtube.com/@Poke/streams',\n  'https://www.youtube.com/@tofuu/streams',\n  'https://www.youtube.com/@LeahAshe/streams',\n  'https://www.youtube.com/@IBella/streams',\n  'https://www.youtube.com/@MyUsernamesThis/streams',\n  'https://www.youtube.com/@SharkBlox/streams',\n  'https://www.youtube.com/@Chaseroony/streams',\n  'https://www.youtube.com/@Folty/streams',\n  'https://www.twitch.tv/kreekcraft',\n  'https://www.twitch.tv/tanqr',\n  'https://www.twitch.tv/bandites'\n];\nconst randomUrl = streamers[Math.floor(Math.random() * streamers.length)];\nreturn [{ pairedItem: { item: 0 }, json: { url: randomUrl } }];"
+        "jsCode": "const streamers = [\n  'https://www.youtube.com/@KreekCraft/streams',\n  'https://www.youtube.com/@LankyBox/streams',\n  'https://www.youtube.com/@RussoPlays/streams',\n  'https://www.youtube.com/@Sketch/streams',\n  'https://www.youtube.com/@flamingo/streams',\n  'https://www.youtube.com/@ItsFunneh/streams',\n  'https://www.youtube.com/@MeganPlays/streams',\n  'https://www.youtube.com/@Poke/streams',\n  'https://www.youtube.com/@LeahAshe/streams',\n  'https://www.youtube.com/@IBella/streams',\n  'https://www.youtube.com/@Chaseroony/streams',\n  'https://www.youtube.com/@Folty/streams',\n  'https://www.twitch.tv/kreekcraft',\n  'https://www.twitch.tv/bandites'\n];\nconst randomUrl = streamers[Math.floor(Math.random() * streamers.length)];\nreturn [{ pairedItem: { item: 0 }, json: { url: randomUrl } }];"
       }
     },
     {

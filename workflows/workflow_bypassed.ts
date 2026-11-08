@@ -274,7 +274,7 @@ export class YoutubeShortAutomationBypassedVersionWorkflow {
     })
     FindStream = {
         command:
-            'file=$(ls -1 /files/inputs/ | grep "\\.mp4$" | grep -v "\\.processing\\.mp4$" | head -n 1); if [ -n "$file" ]; then mv "/files/inputs/$file" "/files/inputs/${file%.mp4}.processing.mp4"; echo "${file%.mp4}.processing.mp4"; else echo ""; fi',
+            'file=$(ls -1 /files/inputs/ | grep "\\.mp4$" | grep -v "\\.processing\\.mp4$" | head -n 1); if [ -z "$file" ]; then stale=$(ls -1 /files/inputs/ | grep "\\.processing\\.mp4$" | head -n 1); if [ -n "$stale" ]; then mv "/files/inputs/$stale" "/files/inputs/${stale%.processing.mp4}.mp4"; file="${stale%.processing.mp4}.mp4"; fi; fi; if [ -n "$file" ]; then mv "/files/inputs/$file" "/files/inputs/${file%.mp4}.processing.mp4"; echo "${file%.mp4}.processing.mp4"; else echo ""; fi',
     };
 
     @node({
@@ -2232,21 +2232,16 @@ SIDECAR_EOF\`; })() }}`,
   'https://www.youtube.com/@KreekCraft/streams',
   'https://www.youtube.com/@LankyBox/streams',
   'https://www.youtube.com/@RussoPlays/streams',
-  'https://www.youtube.com/@TanqR/streams',
   'https://www.youtube.com/@Sketch/streams',
   'https://www.youtube.com/@flamingo/streams',
   'https://www.youtube.com/@ItsFunneh/streams',
   'https://www.youtube.com/@MeganPlays/streams',
   'https://www.youtube.com/@Poke/streams',
-  'https://www.youtube.com/@tofuu/streams',
   'https://www.youtube.com/@LeahAshe/streams',
   'https://www.youtube.com/@IBella/streams',
-  'https://www.youtube.com/@MyUsernamesThis/streams',
-  'https://www.youtube.com/@SharkBlox/streams',
   'https://www.youtube.com/@Chaseroony/streams',
   'https://www.youtube.com/@Folty/streams',
   'https://www.twitch.tv/kreekcraft',
-  'https://www.twitch.tv/tanqr',
   'https://www.twitch.tv/bandites'
 ];
 const randomUrl = streamers[Math.floor(Math.random() * streamers.length)];

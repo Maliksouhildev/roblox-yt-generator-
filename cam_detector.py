@@ -272,15 +272,18 @@ def analyze_box_borders(img, face_norm: dict, real_w=1920, real_h=1080) -> tuple
 
         abs_bx = x1 + bx1
         abs_by = y1 + by1
-        abs_bw = max(int(fw * 1.5), bx2 - bx1)
-        abs_bh = max(int(fh * 1.5), by2 - by1)
+        abs_bw = bx2 - bx1
+        abs_bh = by2 - by1
 
         # Scale back to 1920x1080
         norm_bx = int(abs_bx / scale_x)
         norm_by = int(abs_by / scale_y)
         norm_bw = int(abs_bw / scale_x)
         norm_bh = int(abs_bh / scale_y)
-        return True, (norm_bx, norm_by, norm_bw, norm_bh)
+
+        # Reject tight micro-lines (< 300px wide or < 190px tall at 1080p) caused by headphones, glasses, or chair edges
+        if norm_bw >= max(300, int(face_norm["w"] * 2.2)) and norm_bh >= max(190, int(face_norm["h"] * 1.8)):
+            return True, (norm_bx, norm_by, norm_bw, norm_bh)
 
     return False, None
 
@@ -297,38 +300,43 @@ def sanitize_crop(cx: int, cy: int, fw: int, fh: int, camera_type: str, box_coor
     if camera_type == "box" and box_coords is not None:
         bx, by, bw, bh = box_coords
         # Expand target_h to cover head, face, chin, and chest - never zoom in super tight
-        target_h = max(260, min(bh, int(fh * 2.8)))
+        target_h = max(230, min(bh, int(fh * 2.5)))
         target_w = int(target_h * CAM_ASPECT)
-        if target_w > bw:
+        if target_w > bw and bw >= 340:
             target_w = bw
             target_h = int(target_w / CAM_ASPECT)
+        elif target_w > bw:
+            target_w = max(380, int(target_h * CAM_ASPECT))
         cam_h = target_h
         cam_w = target_w
-        # Position face in upper-third: eye-line at 33% from top of crop, leaving 67% below for mouth, chin & reaction
-        cam_y = max(by, min(by + bh - cam_h, int(cy - (cam_h * 0.33))))
-        cam_x = max(bx, min(bx + bw - cam_w, int(cx - (cam_w / 2.0))))
+        # Position face in upper-third: eye-line at 35% from top of crop, leaving 65% below for mouth, chin & reaction
+        cam_y = max(0, min(real_h - cam_h, int(cy - (cam_h * 0.35))))
+        cam_x = max(0, min(real_w - cam_w, int(cx - (cam_w / 2.0))))
+        if bw >= 340 and bh >= 200:
+            cam_x = max(bx, min(bx + bw - cam_w, cam_x))
+            cam_y = max(by, min(by + bh - cam_h, cam_y))
         final_type = "box"
     else:
-        # Scale face height to target webcam height (covers head, chin & upper torso)
-        target_h = int(fh * 2.8)
-        target_h = max(340, min(580, target_h))
-        target_w = int(target_h * CAM_ASPECT)
+        # Scale face height to target webcam height (covers head, chin & upper torso without oversize gameplay bleed)
+        target_h = int(fh * 2.1)
+        target_h = max(220, min(260, target_h))
+        target_w = min(440, int(target_h * CAM_ASPECT))
+        target_h = int(target_w / CAM_ASPECT)
 
         if camera_type == "green_screen_docked" or cy >= real_h * 0.52 or (cy + fh // 2) >= real_h * 0.82:
-            # Streamer anchored to bottom of screen (e.g. KreekCraft)
+            # Streamer anchored to bottom of screen (e.g. KreekCraft / ItsFunneh VTuber)
             cam_h = target_h
             cam_w = target_w
-            cam_y = real_h - cam_h  # Anchored to 1080 -> 0% chin cutoff
+            cam_y = max(real_h - cam_h - 40, min(real_h - cam_h, int(cy - (cam_h * 0.38))))
             cam_x = int(cx - (cam_w / 2.0))
             final_type = "green_screen_docked"
         else:
-            # Physical box or floating PiP: eye-line at 33% leaves 67% below eyes for mouth, chin, and reaction
+            # Physical box or floating PiP: eye-line at 35% leaves 65% below eyes for mouth, chin, and reaction
             cam_h = target_h
             cam_w = target_w
-            cam_y = int(cy - (cam_h * 0.33))
+            cam_y = int(cy - (cam_h * 0.35))
             cam_x = int(cx - (cam_w / 2.0))
             final_type = camera_type if camera_type != "none" else "box"
-
     # Clamp bounds inside frame
     cam_x = max(0, min(real_w - cam_w, cam_x))
     cam_y = max(0, min(real_h - cam_h, cam_y))
