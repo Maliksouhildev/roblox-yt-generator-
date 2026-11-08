@@ -289,26 +289,29 @@ def sanitize_crop(cx: int, cy: int, fw: int, fh: int, camera_type: str, box_coor
     """
     Computes clean aspect-ratio crop coordinates (cam_x, cam_y, cam_w, cam_h)
     anchored cleanly to frame boundaries with even integers for FFmpeg compatibility.
-    Matches 720:460 target webcam frame and avoids capturing adjacent chat windows or follower goals.
+    Matches 720:380 target webcam frame (~30% screen height) to give gameplay 70% space,
+    while maintaining generous headroom and chin clearance for VTuber avatars and live webcams.
     """
-    CAM_ASPECT = 720.0 / 460.0  # Matches zero-gap split screen ratio (~1.565)
+    CAM_ASPECT = 720.0 / 380.0  # Matches zero-gap 720x380 split screen ratio (~1.895)
 
     if camera_type == "box" and box_coords is not None:
         bx, by, bw, bh = box_coords
-        target_h = max(240, min(bh, int(fh * 2.2)))
+        # Expand target_h to cover head, face, chin, and chest - never zoom in super tight
+        target_h = max(260, min(bh, int(fh * 2.8)))
         target_w = int(target_h * CAM_ASPECT)
         if target_w > bw:
             target_w = bw
             target_h = int(target_w / CAM_ASPECT)
         cam_h = target_h
         cam_w = target_w
-        cam_y = max(by, min(by + bh - cam_h, int(cy - (cam_h * 0.42))))
+        # Position face in upper-third: eye-line at 33% from top of crop, leaving 67% below for mouth, chin & reaction
+        cam_y = max(by, min(by + bh - cam_h, int(cy - (cam_h * 0.33))))
         cam_x = max(bx, min(bx + bw - cam_w, int(cx - (cam_w / 2.0))))
         final_type = "box"
     else:
-        # Scale face height to target webcam height (covers head & upper torso)
-        target_h = int(fh * 2.2)
-        target_h = max(320, min(540, target_h))
+        # Scale face height to target webcam height (covers head, chin & upper torso)
+        target_h = int(fh * 2.8)
+        target_h = max(340, min(580, target_h))
         target_w = int(target_h * CAM_ASPECT)
 
         if camera_type == "green_screen_docked" or cy >= real_h * 0.52 or (cy + fh // 2) >= real_h * 0.82:
@@ -319,10 +322,10 @@ def sanitize_crop(cx: int, cy: int, fw: int, fh: int, camera_type: str, box_coor
             cam_x = int(cx - (cam_w / 2.0))
             final_type = "green_screen_docked"
         else:
-            # Physical box or floating PiP
+            # Physical box or floating PiP: eye-line at 33% leaves 67% below eyes for mouth, chin, and reaction
             cam_h = target_h
             cam_w = target_w
-            cam_y = int(cy - (cam_h * 0.42))
+            cam_y = int(cy - (cam_h * 0.33))
             cam_x = int(cx - (cam_w / 2.0))
             final_type = camera_type if camera_type != "none" else "box"
 

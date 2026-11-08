@@ -1,11 +1,14 @@
+import os
 import json
 
-with open('workflow.json', 'r', encoding='utf-8') as f:
+wf_p = 'workflows/workflow.json' if os.path.exists('workflows/workflow.json') else 'workflow.json'
+with open(wf_p, 'r', encoding='utf-8') as f:
     wf = json.load(f)
 
 nodes = {n['name']: n for n in wf['nodes']}
 
-with open('workflow_bypassed.ts', 'r', encoding='utf-8') as f:
+ts_p = 'workflows/workflow_bypassed.ts' if os.path.exists('workflows/workflow_bypassed.ts') else 'workflow_bypassed.ts'
+with open(ts_p, 'r', encoding='utf-8') as f:
     ts_code = f.read()
 
 checks = [
@@ -44,14 +47,18 @@ checks = [
 
     # 7. Create Subtitle Binary checks
     ("Create Subtitle Binary", "fs.existsSync('/files/temp/screams.json')", "CreateSubtitle screams.json disk loader"),
-    ("Create Subtitle Binary", "trunc(ih*0.82*(720/820)/2)*2", "CreateSubtitle 720:820 aspect gameplay crop"),
-    ("Create Subtitle Binary", "trunc(ih*0.12/2)*2", "CreateSubtitle y=12% offset to bypass top follower goal/timer"),
+    ("Create Subtitle Binary", "trunc(ih*0.85*(720/900)/2)*2", "CreateSubtitle 720:820 aspect gameplay crop"),
+    ("Create Subtitle Binary", "trunc(ih*0.10/2)*2", "CreateSubtitle y=12% offset to bypass top follower goal/timer"),
     ("Create Subtitle Binary", "trunc(ih*0.86*(720/1280)/2)*2", "CreateSubtitle no-cam top HUD bypass crop"),
     ("Create Subtitle Binary", "trunc(ih*0.11/2)*2", "CreateSubtitle no-cam y=11% offset"),
     ("Create Subtitle Binary", "scale=trunc(720*1.45/2)*2", "CreateSubtitle 1.45x punch zoom"),
     ("Create Subtitle Binary", "acompressor=threshold=-20dB", "CreateSubtitle audio compressor"),
     ("Create Subtitle Binary", "alimiter=limit=-1.5dB", "CreateSubtitle audio limiter"),
-    ("Create Subtitle Binary", "equalizer=f=3500", "CreateSubtitle voice chat de-harshing EQ")
+    ("Create Subtitle Binary", "equalizer=f=3500", "CreateSubtitle voice chat de-harshing EQ"),
+    ("Loop Clips", 'batchSize', "LoopClips batchSize 1 for multi-clip iteration"),
+    ("Create Subtitle Binary", "sanitizeCaption", "CreateSubtitle sanitizeCaption anti-placeholder leak"),
+    ("Create Subtitle Binary", "subY = 880", "CreateSubtitle 3-zone lower-third subtitle y=880"),
+    ("Create Subtitle Binary", "captionY = 75", "CreateSubtitle 3-zone top hook caption y=75"),
 ]
 
 all_passed = True

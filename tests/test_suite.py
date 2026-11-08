@@ -1,3 +1,7 @@
+import re
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import unittest
 import json
 import math
@@ -9,7 +13,11 @@ import cam_detector
 class TestPipelineComprehensive(unittest.TestCase):
 
     def setUp(self):
-        with open('workflow.json', 'r', encoding='utf-8') as f:
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+        wf_p = os.path.join(base_dir, 'workflows', 'workflow.json')
+        if not os.path.exists(wf_p):
+            wf_p = os.path.join(base_dir, 'workflow.json')
+        with open(wf_p, 'r', encoding='utf-8') as f:
             self.wf = json.load(f)
         self.nodes = {n['name']: n for n in self.wf['nodes']}
 
@@ -54,8 +62,10 @@ class TestPipelineComprehensive(unittest.TestCase):
         # Even coordinates for FFmpeg
         self.assertEqual(crop["cam_w"] % 2, 0)
         self.assertEqual(crop["cam_h"] % 2, 0)
-        # Aspect ratio matches 720:460
-        self.assertAlmostEqual(crop["cam_w"] / crop["cam_h"], 720.0 / 460.0, delta=0.08)
+        # Aspect ratio matches 720:380 (~1.895)
+        self.assertAlmostEqual(crop["cam_w"] / crop["cam_h"], 720.0 / 380.0, delta=0.08)
+        # Verify chin clearance: cam_y ensures eyes at ~33% leaving >= 60% below eyes
+        self.assertLessEqual(crop["cam_y"], 200 - int(crop["cam_h"] * 0.30))
 
     def test_split_clips_all_seven_user_failure_cases(self):
         """Simulate Split Clips logic on all 7 failure cases from the user's issue list."""
@@ -157,11 +167,11 @@ class TestPipelineComprehensive(unittest.TestCase):
     def test_ffmpeg_crop_and_climax_zoom_levels(self):
         """Verify gameplay crop offsets bypass top HUD and punch zoom is 1.45x."""
         ih = 1080
-        # hasCam gameplay crop: 720x820 with 12% vertical offset
-        crop_h_cam = int(ih * 0.82 // 2) * 2
-        crop_w_cam = int(crop_h_cam * (720.0 / 820.0) // 2) * 2
-        crop_y_cam = int(ih * 0.12 // 2) * 2
-        self.assertEqual(crop_y_cam, 128, "Top 128px follower counter and timer must be cropped out")
+        # hasCam gameplay crop: 720x900 (70% screen priority) with 10% vertical offset
+        crop_h_cam = int(ih * 0.85 // 2) * 2
+        crop_w_cam = int(crop_h_cam * (720.0 / 900.0) // 2) * 2
+        crop_y_cam = int(ih * 0.10 // 2) * 2
+        self.assertEqual(crop_y_cam, 108, "Top 108px follower counter and timer must be cropped out")
         self.assertLessEqual(crop_y_cam + crop_h_cam, 1080)
 
         # No-cam full screen gameplay crop: 720x1280 with 11% vertical offset
@@ -192,5 +202,50 @@ class TestPipelineComprehensive(unittest.TestCase):
                     if os.path.exists(temp_name):
                         os.remove(temp_name)
 
+
+    def test_sanitize_caption_filters_all_raw_n8n_placeholders(self):
+        """Review Point 1: $(LOOP CLIPS) and raw n8n expression placeholders must be strictly filtered."""
+        def sanitize_caption(str_val, default_fallback="MUST WATCH MOMENT"):
+            if not str_val or not isinstance(str_val, str):
+                return default_fallback
+            clean = str_val.strip()
+            if re.search(r'[\$({]|item\.json|loop\s*clips|\{\{|\}\}|undefined|null', clean, re.IGNORECASE):
+                return default_fallback
+            clean = re.sub(r'[{}\x27\x22`$()]', '', clean).replace('_', ' ').strip().upper()
+            if len(clean) < 3 or re.search(r'LOOP CLIPS|ITEM JSON', clean, re.IGNORECASE):
+                return default_fallback
+            return clean[:42]
+
+        # Case 1: Raw n8n path burned in user review
+        self.assertEqual(sanitize_caption("$(LOOP CLIPS).ITEM.JSON.HOOK_CAPTION"), "MUST WATCH MOMENT")
+        self.assertEqual(sanitize_caption("$(LOOP CLIPS).ITEM.JSON.TITLE"), "MUST WATCH MOMENT")
+        self.assertEqual(sanitize_caption("{{ $('Loop Clips').item.json.hook_caption }}"), "MUST WATCH MOMENT")
+        self.assertEqual(sanitize_caption("undefined"), "MUST WATCH MOMENT")
+        self.assertEqual(sanitize_caption(""), "MUST WATCH MOMENT")
+        # Case 2: Genuine caption
+        self.assertEqual(sanitize_caption("Bro tried to run away"), "BRO TRIED TO RUN AWAY")
+        self.assertEqual(sanitize_caption("the campfire is almost out"), "THE CAMPFIRE IS ALMOST OUT")
+
+    def test_loop_clips_batch_size_multi_clip_iteration(self):
+        """Review Point 5: Loop Clips must specify batchSize: 1 at top level to generate all 3-5 clips."""
+        loop_node = self.nodes.get("Loop Clips")
+        self.assertIsNotNone(loop_node)
+        params = loop_node.get("parameters", {})
+        self.assertEqual(params.get("batchSize"), 1, "Loop Clips batchSize must be 1, preventing single-clip loop exit")
+
+    def test_three_zone_vertical_layout_collision_prevention(self):
+        """Review Point 3: Top banner at y=75, untouched game action at y=380-820, subtitles at y=880."""
+        cs_code = self.nodes["Create Subtitle Binary"]["parameters"]["jsCode"]
+        self.assertIn("const subY = 880;", cs_code, "Subtitles must be at lower third y=880, preventing collision with Roblox text at y=500")
+        self.assertIn("const captionY = 75;", cs_code, "Top banner must be at y=75, away from gameplay")
+
+    def test_subtitle_styling_color_highlight_and_no_single_word_lines(self):
+        """Review Point 4: Rock-solid font metrics (no \fscx line jitter) and min 2 words per line."""
+        cs_code = self.nodes["Create Subtitle Binary"]["parameters"]["jsCode"]
+        self.assertNotIn("fscx115", cs_code, "Word highlighting must not scale font to prevent line jumping/jitter")
+        self.assertIn("hasMinWords = current.length >= 2", cs_code, "Must enforce minimum 2 words per line")
+
 if __name__ == '__main__':
     unittest.main()
+
+

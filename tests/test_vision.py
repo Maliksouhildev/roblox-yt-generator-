@@ -1,7 +1,10 @@
 import urllib.request, json, base64
 
-with open('/files/openai_key.txt') as f:
-    api_key = f.read().strip()
+import os
+api_key = os.environ.get('OPENAI_API_KEY', '')
+if not api_key and os.path.exists('/files/openai_key.txt'):
+    with open('/files/openai_key.txt') as f:
+        api_key = f.read().strip()
 
 def test_vision(img_path):
     with open(img_path, 'rb') as f:

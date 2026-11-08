@@ -363,9 +363,8 @@ return outputClips.map(clip => ({ json: clip }));
         position: [1140, 300],
     })
     LoopClips = {
-        options: {
-            batchSize: 1,
-        },
+        batchSize: 1,
+        options: {},
     };
 
     @node({
@@ -457,11 +456,7 @@ for (let i = 0; i < segments.length; i++) {
   });
 
   // Group words strictly within this segment to eliminate caption bleed across jump cuts
-  const PAUSE_BREAK = 0.40;
-  const MAX_CHARS = 16;
-  const MAX_WORDS = 4;
-  const PUNCT_RE = /[.!?,;:]$/;
-
+  const SENTENCE_END_RE = /[.!?]$/;
   let current = [];
   for (let j = 0; j < segAligned.length; j++) {
     const w = segAligned[j];
@@ -470,14 +465,27 @@ for (let i = 0; i < segments.length; i++) {
     const currentChars = current.reduce((s, x) => s + x.word.length, 0);
     const nextW = segAligned[j + 1];
     const gapToNext = nextW ? (nextW.start - w.end) : 9999;
-    const endsPhrase = PUNCT_RE.test(w.word);
-    const shouldBreak = current.length >= MAX_WORDS || currentChars >= MAX_CHARS || gapToNext > PAUSE_BREAK || endsPhrase;
+    const hasMinWords = current.length >= 2;
+    const isHardBreak = gapToNext > 0.60;
+    const isSentenceEnd = SENTENCE_END_RE.test(w.word);
+    const shouldBreak = current.length >= 4 || currentChars >= 22 || (hasMinWords && (isHardBreak || isSentenceEnd)) || (j === segAligned.length - 1);
     if (shouldBreak && current.length > 0) {
+      if (current.length === 1 && j < segAligned.length - 1 && gapToNext <= 0.60) {
+        continue;
+      }
       allGroups.push([...current]);
       current = [];
     }
   }
-  if (current.length > 0) allGroups.push(current);
+  if (current.length > 0) {
+    if (allGroups.length > 0 && current.length === 1) {
+      const prev = allGroups[allGroups.length - 1];
+      if (prev.length < 4) prev.push(current[0]);
+      else allGroups.push(current);
+    } else {
+      allGroups.push(current);
+    }
+  }
 
   currentTimeline = timelineEnd;
 }
@@ -485,8 +493,8 @@ for (let i = 0; i < segments.length; i++) {
 // Generate Hormozi-style ASS subtitle content
 const FONT_SIZE = 48;
 const MAIN_COLOR = "&HFFFFFF&";
-const subY = 1040; // bottom center for 9:16
-const captionY = 95;  // top banner zone
+const subY = 880; // lower third (safe above YouTube Shorts bottom UI)
+const captionY = 75;  // top banner zone (safe away from gameplay)
 
 function formatTimeASS(seconds) {
   const sTotal = Math.max(0, parseFloat(seconds) || 0);
@@ -514,7 +522,21 @@ let assContent = [
 ].join(NL) + NL;
 
 // Persistent Top Hook Banner
-const hookBanner = (clip.on_screen_hook_banner || clip.title_idea || "").toUpperCase();
+function sanitizeCaption(str, defaultFallback) {
+  if (!str || typeof str !== 'string') return defaultFallback || "MUST WATCH MOMENT";
+  let clean = str.trim();
+  if (/[\$({]|item\.json|loop\s*clips|\{\{|\}\}|undefined|null/i.test(clean)) {
+    return defaultFallback || "MUST WATCH MOMENT";
+  }
+  clean = clean.replace(/[{}\x27\x22`$()]/g, '').replace(/_/g, ' ').trim().toUpperCase();
+  if (clean.length < 3 || /LOOP CLIPS|ITEM JSON/i.test(clean)) {
+    return defaultFallback || "MUST WATCH MOMENT";
+  }
+  return clean.substring(0, 42);
+}
+
+// Persistent Top Hook Banner (Sanitized to prevent raw expression leaks)
+const hookBanner = sanitizeCaption(clip.on_screen_hook_banner || clip.title_idea, "MUST WATCH MOMENT");
 if (hookBanner) {
   assContent += \`Dialogue: 2,0:00:00.00,\${formatTimeASS(currentTimeline)},ViralCaption,,0,0,0,,{\\\\pos(360,\${captionY})\\\\t(0,80,\\\\fscx108\\\\fscy108)\\\\t(80,180,\\\\fscx100\\\\fscy100)}\${hookBanner}\\n\`;
 }
