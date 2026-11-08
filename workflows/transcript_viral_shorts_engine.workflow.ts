@@ -328,7 +328,7 @@ for (const c of parsed.clips) {
   if (payoff) dur += 1.5; // +1.5s ragdoll aftermath padding
 
   // Enforce viral duration window: 18s to 55s
-  if (dur >= 18 && dur <= 55) {
+  if (dur >= 14 && dur <= 58) {
     validClips.push({
       clip_id: c.clip_id || ('clip_' + (validClips.length + 1)),
       archetype: c.archetype || 'COMEDIC_JUXTAPOSITION',
@@ -345,10 +345,11 @@ for (const c of parsed.clips) {
   }
 }
 
-// Filter clips where viral_score >= 85 (per prompt spec) with top clips fallback
-let outputClips = validClips.filter(c => c.viral_score >= 85);
-if (outputClips.length === 0) {
-  outputClips = validClips.slice(0, 5);
+// Guarantee 3 to 5 clips: Sort by viral score descending and guarantee top 3-5 clips
+validClips.sort((a, b) => (b.viral_score || 0) - (a.viral_score || 0));
+let outputClips = validClips.filter(c => c.viral_score >= 80);
+if (outputClips.length < 3) {
+  outputClips = validClips.slice(0, Math.min(5, Math.max(3, validClips.length)));
 }
 
 return outputClips.map(clip => ({ json: clip }));
