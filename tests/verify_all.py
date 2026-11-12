@@ -59,6 +59,22 @@ checks = [
     ("Create Subtitle Binary", "sanitizeCaption", "CreateSubtitle sanitizeCaption anti-placeholder leak"),
     ("Create Subtitle Binary", "subY = 880", "CreateSubtitle 3-zone lower-third subtitle y=880"),
     ("Create Subtitle Binary", "captionY = 75", "CreateSubtitle 3-zone top hook caption y=75"),
+
+    # 8. Hook & Zero-Second Retention checks
+    ("1. Prepare Scout Prompt", "ZERO-SECOND RETENTION & STRICT ANTI-MID-THOUGHT PREAMBLE", "Scout zero-second retention & anti-mid-thought preamble rule"),
+    ("1. Prepare Scout Prompt", "CAUSE-EFFECT NARRATIVE THROUGH-LINE & ANTI-CHAOS", "Scout cause-effect narrative through-line rule"),
+    ("3. Prepare Director Prompt", "ZERO-SECOND RETENTION & STRICT ANTI-MID-THOUGHT PREAMBLE", "Director zero-second retention rule"),
+    ("3. Prepare Director Prompt", "COLD OPEN RETENTION TRAP & ZERO-SECOND HOOK", "Director cold open retention trap rule"),
+    ("3. Prepare Director Prompt", "CAUSE-EFFECT EDL (ANTI-CHAOS)", "Director cause-effect EDL rule"),
+
+    # 9. Cold Open & Segment checks
+    ("6. Extract Viral Segments", "ColdOpen_teaser", "ExtractViral cold open teaser splicing"),
+    ("6. Extract Viral Segments", "fillerWords", "ExtractViral conversational hesitation filler trimming"),
+
+    # 10. Subtitles & Layout Dynamic checks
+    ("Create Subtitle Binary", "DANGER_WORDS", "CreateSubtitle high-impact categorical dictionaries"),
+    ("Create Subtitle Binary", "scale=trunc(720*1.15/2)*2", "CreateSubtitle 115% reaction punch zoom for screams/kills"),
+    ("Create Subtitle Binary", "ZERO-GAP SPLIT SCREEN", "CreateSubtitle standardized 9:16 vertical layout constraint"),
 ]
 
 all_passed = True

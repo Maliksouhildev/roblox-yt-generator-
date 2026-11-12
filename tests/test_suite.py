@@ -245,6 +245,32 @@ class TestPipelineComprehensive(unittest.TestCase):
         self.assertNotIn("fscx115", cs_code, "Word highlighting must not scale font to prevent line jumping/jitter")
         self.assertIn("hasMinWords = current.length >= 2", cs_code, "Must enforce minimum 2 words per line")
 
+    def test_reaction_triggers_and_115_punch_zoom(self):
+        """Virality Update: Reaction triggers scale up gameplay or webcam by 115% for aggressive punchy zoom."""
+        cs_code = self.nodes["Create Subtitle Binary"]["parameters"]["jsCode"]
+        self.assertIn("scale=trunc(720*1.15/2)*2", cs_code, "FFmpeg must scale by 115% for scream and reaction punch zooms")
+        self.assertIn("DANGER_WORDS", cs_code, "Must detect danger words for dynamic color and emoji injection")
+
+    def test_cold_open_splicing_and_filler_trimming(self):
+        """Virality Update: 1.8s cold open retention trap and conversational filler word trimming."""
+        ev_code = self.nodes["6. Extract Viral Segments"]["parameters"]["jsCode"]
+        self.assertIn("ColdOpen_teaser", ev_code, "Extract Viral Segments must support ColdOpen_teaser splicing")
+        self.assertIn("fillerWords", ev_code, "Must trim conversational hesitation filler words")
+
+    def test_dead_space_avatar_row_filter(self):
+        """Virality Update: cam_detector.py detects static row of non-animated VTuber avatars in top third."""
+        real_w, real_h = 1920, 1080
+        clusters = [
+            {"avg_cx": 400, "avg_cy": 180, "avg_w": 80, "avg_h": 80},
+            {"avg_cx": 960, "avg_cy": 170, "avg_w": 85, "avg_h": 85},
+            {"avg_cx": 1500, "avg_cy": 185, "avg_w": 80, "avg_h": 80}
+        ]
+        top_avatars = [c for c in clusters if c["avg_cy"] < real_h * 0.38]
+        self.assertEqual(len(top_avatars), 3)
+        xs = [c["avg_cx"] for c in top_avatars]
+        is_avatar_row = (max(xs) - min(xs)) > real_w * 0.25
+        self.assertTrue(is_avatar_row, "Top avatar row across screen width must be detected as dead space")
+
 if __name__ == '__main__':
     unittest.main()
 

@@ -537,6 +537,19 @@ def run_pipeline(input_arg: str = "/files/temp/ref_*.jpg", out_config: str = DEF
         save_and_output(fallback_res, out_config)
         return fallback_res
 
+    # 3c. Dead Space & Static Avatar Row Filter (VTuber / Discord Multi-Avatars)
+    # Detect if multiple static/non-animated avatars form a horizontal row in the top third (y < 38%).
+    # Rejecting them prevents wasting valuable screen real estate and killing visual momentum.
+    top_avatars = [c for c in clusters if c["avg_cy"] < real_h * 0.38]
+    if len(top_avatars) >= 2:
+        xs = [c["avg_cx"] for c in top_avatars]
+        if max(xs) - min(xs) > real_w * 0.25:
+            log("Dead Space / Avatar Row Filter: Detected static horizontal row of non-animated VTuber avatars in top third. Rejecting as webcam to let gameplay fill frame.")
+            fallback_res["avatar_row_detected"] = True
+            fallback_res["avatar_row_height"] = int(max(c["avg_cy"] + c["avg_h"] for c in top_avatars))
+            save_and_output(fallback_res, out_config)
+            return fallback_res
+
     # 4. Anti-Static Temporal Motion Check
     if num_frames >= 2:
         is_dynamic, avg_diff, max_pct = check_temporal_motion(candidate_box, frames, real_w, real_h)
