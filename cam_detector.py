@@ -496,6 +496,87 @@ def compute_bulletproof_crop_from_vision(layout: dict, real_w=1920, real_h=1080)
     return compute_bulletproof_framing(face, has_box, box_coords, real_w, real_h)
 
 
+def build_piecewise_timeline(frames, loaded_imgs, dets_per_frame, primary_crop, detector, real_w=1920, real_h=1080):
+    """
+    Checks if facecam shifted position across the reference frame timeline.
+    Outputs a timestamped list of layout coordinates.
+    """
+    timestamps = []
+    for idx, f in enumerate(frames):
+        ts = 180.0 + idx * 270.0
+        base = os.path.basename(f)
+        if "ref_1" in base: ts = 180.0
+        elif "ref_2" in base: ts = 450.0
+        elif "ref_3" in base: ts = 720.0
+        elif "ref_4" in base: ts = 990.0
+        elif "ref_5" in base: ts = 1260.0
+        timestamps.append(ts)
+
+    p_cx = primary_crop["cam_x"] * real_w + (primary_crop["cam_w"] * real_w) / 2.0
+    p_cy = primary_crop["cam_y"] * real_h + (primary_crop["cam_h"] * real_h) / 2.0
+
+    frame_crops = []
+    for idx, dets in enumerate(dets_per_frame):
+        t = timestamps[idx] if idx < len(timestamps) else idx * 300.0
+        if not dets:
+            frame_crops.append((t, primary_crop))
+            continue
+
+        best_d = 999999
+        closest_f = None
+        for d in dets:
+            dist = math.hypot(d["cx"] - p_cx, d["cy"] - p_cy)
+            if dist < best_d:
+                best_d = dist
+                closest_f = d
+
+        if best_d > 180 and closest_f and closest_f.get("confidence", 0) > 0.6:
+            has_b, b_coords = find_physical_box_borders(loaded_imgs[idx:idx+1], closest_f, real_w, real_h)
+            shift_crop = compute_bulletproof_framing(closest_f, has_b, b_coords, real_w, real_h)
+            frame_crops.append((t, shift_crop))
+        else:
+            frame_crops.append((t, primary_crop))
+
+    if not frame_crops:
+        return [{
+            "start": 0.0, "end": 999999.0,
+            "cam_x": primary_crop["cam_x"], "cam_y": primary_crop["cam_y"],
+            "cam_w": primary_crop["cam_w"], "cam_h": primary_crop["cam_h"],
+            "camera_type": primary_crop["camera_type"]
+        }]
+
+    timeline = []
+    curr_crop = frame_crops[0][1]
+    seg_start = 0.0
+
+    for idx in range(1, len(frame_crops)):
+        t, c = frame_crops[idx]
+        dx = abs(c["cam_x"] - curr_crop["cam_x"])
+        dy = abs(c["cam_y"] - curr_crop["cam_y"])
+        if dx > 0.08 or dy > 0.08:
+            prev_t = frame_crops[idx - 1][0]
+            split_t = (prev_t + t) / 2.0
+            timeline.append({
+                "start": round(seg_start, 1),
+                "end": round(split_t, 1),
+                "cam_x": curr_crop["cam_x"], "cam_y": curr_crop["cam_y"],
+                "cam_w": curr_crop["cam_w"], "cam_h": curr_crop["cam_h"],
+                "camera_type": curr_crop["camera_type"]
+            })
+            curr_crop = c
+            seg_start = split_t
+
+    timeline.append({
+        "start": round(seg_start, 1),
+        "end": 999999.0,
+        "cam_x": curr_crop["cam_x"], "cam_y": curr_crop["cam_y"],
+        "cam_w": curr_crop["cam_w"], "cam_h": curr_crop["cam_h"],
+        "camera_type": curr_crop["camera_type"]
+    })
+
+    return timeline
+
+
 def save_and_output(result: dict, out_config: str):
     if out_config and out_config != "/dev/null":
         try:

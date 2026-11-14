@@ -2,12 +2,12 @@
 """
 chat_analyzer.py
 ----------------
-Free, zero-dependency stream chat parser & audience reaction heatmap generator.
-Analyzes YouTube/Twitch live chat replay JSON (downloaded via yt-dlp).
+Universal, zero-dependency stream chat parser & audience reaction heatmap generator.
+Supports both YouTube Live Replay and Twitch VOD chat JSON (via yt-dlp or TwitchDownloader).
 
 Calculates:
 1. Sub-second message velocity (msgs/10s).
-2. Gamer emote bursts (Laughter, Shock, Hype, Superchats).
+2. Gamer & Twitch emote bursts (Laughter, Shock, Hype, Superchats/Bits).
 3. Statistical velocity spikes relative to rolling baseline.
 4. Outputs structured JSON for multimodal fusion.
 """
@@ -18,31 +18,27 @@ import json
 import re
 from collections import Counter
 
-# Gamer emote & keyword dictionary
+# Gamer, YouTube & Twitch emote dictionary
 LEXICON = {
     "laugh": {
         "lol", "lmao", "lmfao", "kekw", "haha", "hahaha", "💀", "😂", "rofl", "dying", "dead",
-        "xd", "crying", "omg haha", "he really did that", "no he didnt"
+        "xd", "crying", "omg haha", "he really did that", "no he didnt", "omegalul", "lul",
+        "luzz", "kek", "kekerino", "jajaja", "catjam"
     },
     "shock": {
         "wtf", "what", "omg", "no way", "hacker", "wait", "whaaat", "how", "???", "😱",
-        "bro", "aint no way", "bruh", "caught", "sus", "run", "behind you", "watch out"
+        "bro", "aint no way", "bruh", "caught", "sus", "run", "behind you", "watch out",
+        "monkas", "monkaw", "notlikethis", "wutface", "clueless", "huh", "aimbot"
     },
     "hype": {
-        "w", "l", "pog", "poggers", "gg", "rip", "clutch", "lets go", "sheesh",
-        "hype", "fire", "cooked", "banned"
+        "w", "l", "pog", "poggers", "pogchamp", "gg", "rip", "clutch", "lets go", "sheesh",
+        "hype", "fire", "cooked", "banned", "gigachad", "ez", "pepehands", "sadge", "copium"
     }
 }
 
 
-def parse_chat_line(line_str: str):
-    """Parses a single yt-dlp live chat JSON line."""
-    try:
-        data = json.loads(line_str)
-    except Exception:
-        return None
-
-    # Locate videoOffsetTimeMsec
+def parse_youtube_line(data: dict):
+    """Parses a YouTube live chat JSON line."""
     offset_ms = data.get("videoOffsetTimeMsec")
     replay_action = data.get("replayChatItemAction") or {}
     if offset_ms is None:
@@ -56,14 +52,11 @@ def parse_chat_line(line_str: str):
     except (ValueError, TypeError):
         return None
 
-    # Extract actions
     actions = replay_action.get("actions") or []
     results = []
 
     for action in actions:
         add_item = action.get("addChatItemAction", {}).get("item", {})
-        
-        # 1. Normal Text Message
         text_renderer = add_item.get("liveChatTextMessageRenderer")
         if text_renderer:
             runs = text_renderer.get("message", {}).get("runs") or []
@@ -80,44 +73,115 @@ def parse_chat_line(line_str: str):
                 "time": offset_sec,
                 "text": msg_text,
                 "author": author,
-                "type": "text"
+                "type": "text",
+                "platform": "youtube"
             })
             continue
 
-        # 2. Superchat / Paid Message
         paid_renderer = add_item.get("liveChatPaidMessageRenderer")
         if paid_renderer:
             runs = paid_renderer.get("message", {}).get("runs") or []
-            msg_text = " ".join([r.get("text", "") for r in runs]).strip()
+            msg_parts = [r.get("text", "") for r in runs if "text" in r]
             amount = paid_renderer.get("purchaseAmountText", {}).get("simpleText", "$0")
             author = paid_renderer.get("authorName", {}).get("simpleText", "anonymous")
             results.append({
                 "time": offset_sec,
-                "text": msg_text,
+                "text": " ".join(msg_parts).strip(),
                 "amount": amount,
                 "author": author,
-                "type": "superchat"
+                "type": "superchat",
+                "platform": "youtube"
             })
 
     return results
 
 
+def parse_twitch_comment(comment: dict):
+    """Parses a Twitch chat JSON comment object (from TwitchDownloader or yt-dlp)."""
+    offset_sec = comment.get("content_offset_seconds")
+    if offset_sec is None:
+        offset_ms = comment.get("offset_ms") or comment.get("time")
+        if offset_ms is not None:
+            offset_sec = float(offset_ms) / 1000.0
+
+    if offset_sec is None:
+        return None
+
+    author = comment.get("commenter", {}).get("display_name") or comment.get("author", {}).get("name", "anonymous")
+    
+    # Message text
+    msg_obj = comment.get("message", {})
+    if isinstance(msg_obj, str):
+        msg_text = msg_obj
+    else:
+        msg_text = msg_obj.get("body", "")
+        if not msg_text and "fragments" in msg_obj:
+            msg_text = "".join([f.get("text", "") for f in msg_obj["fragments"]])
+
+    # Bits check
+    bits = msg_obj.get("bits_spent") or 0 if isinstance(msg_obj, dict) else 0
+
+    return [{
+        "time": float(offset_sec),
+        "text": msg_text.strip(),
+        "author": author,
+        "type": "bits" if bits > 0 else "text",
+        "amount": f"{bits} bits" if bits > 0 else "$0",
+        "platform": "twitch"
+    }]
+
+
 def analyze_chat(file_path: str, window_sec: float = 10.0, step_sec: float = 2.5):
     """
-    Reads .live_chat.json line-by-line and computes rolling velocity & sentiment heatmap.
+    Reads .live_chat.json or .chat.json (YouTube or Twitch) and computes rolling velocity & sentiment heatmap.
     """
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Chat file not found: {file_path}")
 
     messages = []
+    platform = "unknown"
+
     with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-        for line in f:
-            parsed = parse_chat_line(line)
-            if parsed:
-                messages.extend(parsed)
+        # Check first line / block to see if it's a monolithic JSON (Twitch) or JSONL (YouTube/yt-dlp)
+        first_chunk = f.read(2048)
+        f.seek(0)
+
+        if '"comments":' in first_chunk or '"comments" :' in first_chunk:
+            # Monolithic Twitch JSON structure
+            platform = "twitch"
+            try:
+                full_doc = json.load(f)
+                comments = full_doc.get("comments") or []
+                for c in comments:
+                    parsed = parse_twitch_comment(c)
+                    if parsed:
+                        messages.extend(parsed)
+            except Exception as e:
+                print(f"[Chat Analyzer] Error parsing monolithic Twitch JSON: {e}", file=sys.stderr)
+        else:
+            # Line-delimited JSON (YouTube or yt-dlp Twitch)
+            for line in f:
+                line_s = line.strip()
+                if not line_s:
+                    continue
+                try:
+                    data = json.loads(line_s)
+                    if "replayChatItemAction" in data or "videoOffsetTimeMsec" in data:
+                        platform = "youtube"
+                        parsed = parse_youtube_line(data)
+                        if parsed:
+                            messages.extend(parsed)
+                    elif "content_offset_seconds" in data or "commenter" in data:
+                        platform = "twitch"
+                        parsed = parse_twitch_comment(data)
+                        if parsed:
+                            messages.extend(parsed)
+                except Exception:
+                    pass
 
     if not messages:
         return {
+            "platform": platform,
             "total_messages": 0,
             "duration": 0,
             "spikes": [],
@@ -133,24 +197,15 @@ def analyze_chat(file_path: str, window_sec: float = 10.0, step_sec: float = 2.5
     # Binning with sliding window
     buckets = []
     curr = start_time
-    idx = 0
 
     while curr <= end_time:
         w_start = curr
         w_end = curr + window_sec
 
-        # Collect messages in this window
-        window_msgs = []
-        for m in messages:
-            if m["time"] > w_end:
-                break
-            if m["time"] >= w_start:
-                window_msgs.append(m)
-
+        window_msgs = [m for m in messages if w_start <= m["time"] <= w_end]
         count = len(window_msgs)
         velocity = count / (window_sec / 10.0)  # msgs per 10s
 
-        # Emote counts
         laugh_count = 0
         shock_count = 0
         hype_count = 0
@@ -159,10 +214,9 @@ def analyze_chat(file_path: str, window_sec: float = 10.0, step_sec: float = 2.5
 
         for m in window_msgs:
             t_lower = m["text"].lower()
-            if m.get("type") == "superchat":
+            if m.get("type") in ["superchat", "bits"]:
                 superchats += 1
 
-            # Keyword matches
             for word in LEXICON["laugh"]:
                 if word in t_lower:
                     laugh_count += 1
@@ -176,9 +230,8 @@ def analyze_chat(file_path: str, window_sec: float = 10.0, step_sec: float = 2.5
                     hype_count += 1
                     break
 
-            # Collect tokens for top words
             clean_tokens = re.findall(r'\b\w+\b|[💀😂😱]', t_lower)
-            all_words.extend([tk for tk in clean_tokens if len(tk) > 2 or tk in ['w', 'l', '💀', '😂', '😱']])
+            all_words.extend([tk for tk in clean_tokens if len(tk) > 2 or tk in ['w', 'l', '💀', '😂', '😱', 'gg']])
 
         word_counts = Counter(all_words).most_common(5)
         top_emotes = [f"{w}({c})" for w, c in word_counts if c >= 2]
@@ -198,26 +251,20 @@ def analyze_chat(file_path: str, window_sec: float = 10.0, step_sec: float = 2.5
 
         curr += step_sec
 
-    # Compute baseline statistics
+    # Baseline statistics
     all_velocities = [b["velocity"] for b in buckets]
     median_vel = float(sorted(all_velocities)[len(all_velocities) // 2]) if all_velocities else 1.0
     mean_vel = float(sum(all_velocities) / max(1, len(all_velocities)))
     baseline_vel = max(1.0, median_vel)
 
-    # Identify Velocity & Sentiment Spikes
     spikes = []
     for b in buckets:
         v = b["velocity"]
         vel_ratio = v / baseline_vel
-        
-        # Emote bonus
         emote_burst = (b["laugh_count"] * 1.5 + b["shock_count"] * 1.8 + b["hype_count"] * 1.2 + b["superchats"] * 3.0)
-        
-        # Viral score for chat window: 0 to 100
         score = min(100.0, (vel_ratio * 25.0) + (emote_burst * 5.0))
         b["chat_score"] = round(score, 1)
 
-        # Trigger spike if velocity > 2.2x baseline OR high emote burst
         if (vel_ratio >= 2.2 and v >= 5) or emote_burst >= 6 or b["superchats"] > 0:
             spikes.append({
                 "start": b["start"],
@@ -233,7 +280,7 @@ def analyze_chat(file_path: str, window_sec: float = 10.0, step_sec: float = 2.5
                 "score": round(score, 1)
             })
 
-    # Cluster overlapping spikes into cohesive scenes
+    # Cluster overlapping spikes
     clustered_spikes = []
     if spikes:
         curr_cluster = [spikes[0]]
@@ -242,7 +289,6 @@ def analyze_chat(file_path: str, window_sec: float = 10.0, step_sec: float = 2.5
             if sp["start"] <= last["end"] + 7.5:
                 curr_cluster.append(sp)
             else:
-                # Merge cluster
                 c_start = curr_cluster[0]["start"]
                 c_end = curr_cluster[-1]["end"]
                 c_peak_vel = max(c["velocity"] for c in curr_cluster)
@@ -251,7 +297,6 @@ def analyze_chat(file_path: str, window_sec: float = 10.0, step_sec: float = 2.5
                 c_shock = sum(c["shock"] for c in curr_cluster)
                 c_hype = sum(c["hype"] for c in curr_cluster)
                 c_super = sum(c["superchats"] for c in curr_cluster)
-                # Combine top emotes
                 all_top = []
                 for c in curr_cluster:
                     all_top.extend(c["top_emotes"])
@@ -294,10 +339,10 @@ def analyze_chat(file_path: str, window_sec: float = 10.0, step_sec: float = 2.5
                 "sample_emotes": list(set(all_top))[:6]
             })
 
-    # Sort clustered spikes by max_score descending
     clustered_spikes.sort(key=lambda s: s["max_score"], reverse=True)
 
     return {
+        "platform": platform,
         "total_messages": total_msgs,
         "duration_sec": round(end_time, 1),
         "baseline_velocity": round(baseline_vel, 2),
@@ -310,15 +355,15 @@ def analyze_chat(file_path: str, window_sec: float = 10.0, step_sec: float = 2.5
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python3 chat_analyzer.py <input.live_chat.json> [output.json]")
+        print("Usage: python3 chat_analyzer.py <input.live_chat.json|input.chat.json> [output.json]")
         sys.exit(1)
 
     in_file = sys.argv[1]
-    out_file = sys.argv[2] if len(sys.argv) > 2 else in_file.replace(".live_chat.json", ".chat_analysis.json")
+    out_file = sys.argv[2] if len(sys.argv) > 2 else in_file.replace(".json", ".analysis.json")
 
     print(f"[Chat Analyzer] Parsing {in_file}...")
     res = analyze_chat(in_file)
-    print(f"[Chat Analyzer] Total Messages: {res['total_messages']}, Baseline Velocity: {res['baseline_velocity']} msgs/10s")
+    print(f"[Chat Analyzer] Platform: {res['platform'].upper()} | Total Messages: {res['total_messages']} | Baseline: {res['baseline_velocity']} msgs/10s")
     print(f"[Chat Analyzer] Identified {len(res['top_clusters'])} High-Hype Scene Clusters.")
     for i, sc in enumerate(res['top_clusters'][:5], 1):
         print(f"  #{i}: [{sc['start']}s - {sc['end']}s] Score: {sc['max_score']} | Peak Vel: {sc['peak_velocity']} | Laugh: {sc['laugh_count']} | Shock: {sc['shock_count']} | Emotes: {', '.join(sc['sample_emotes'])}")
