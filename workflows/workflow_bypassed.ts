@@ -1857,6 +1857,32 @@ const overlap = 10;
 
 const MAX_CHUNK_CHARS = 10000;
 
+// ── Multimodal Viral Anchors Extraction ──────────────────────
+let viralAnchors = [];
+try {
+  const fusionItem = $('Run Multimodal Fusion').first();
+  if (fusionItem && fusionItem.json && fusionItem.json.stdout) {
+    const parsed = JSON.parse(fusionItem.json.stdout);
+    if (parsed && parsed.anchors && parsed.anchors.length > 0) {
+      viralAnchors = parsed.anchors;
+    }
+  }
+} catch(e) {}
+
+let multimodalHeader = "";
+if (viralAnchors.length > 0) {
+  multimodalHeader = "\n=== [PROVEN MULTIMODAL VIRAL PEAKS (AUDIENCE CHAT, FACECAM & VOCAL ENERGY)] ===\n" +
+    "The following moments have been empirically pre-verified by live chat velocity bursts (LMAO, 💀, WTF), streamer face reactions (laughter/shock), and vocal scream spikes.\n" +
+    "YOU MUST PRIORITIZE SELECTING YOUR 3 MOMENTS FROM OR DIRECTLY AROUND THESE PROVEN PEAKS:\n\n";
+
+  for (let a of viralAnchors) {
+    multimodalHeader += `• [ANCHOR #${a.anchor_id}] [${a.start}s - ${a.end}s] (Peak at ${a.peak_time}s | Score: ${a.virality_score}/100)\n` +
+      `  - Audience Chat: ${a.chat_signal}\n` +
+      `  - Streamer Facecam: ${a.face_signal}\n` +
+      `  - Audio Energy: ${a.audio_signal}\n\n`;
+  }
+}
+
 const results = [];
 for (let i = 0; i < numChunks; i++) {
   const start = Math.max(0, i * linesPerChunk - overlap);
@@ -1868,7 +1894,7 @@ for (let i = 0; i < numChunks; i++) {
   }
 
   const prompt = 
-    'SYSTEM: You are an elite YouTube Shorts Viral Content Scout. Read the numbered transcript chunk and identify the top 3 most explosive, high-retention gaming moments.\n\n' +
+    'SYSTEM: You are an elite YouTube Shorts Viral Content Scout. Read the numbered transcript chunk and identify the top 3 most explosive, high-retention gaming moments.\n\n' + (multimodalHeader ? multimodalHeader + '\n' : '') +
     '=== CRITICAL ANTI-ADMIN, ANTI-IDLE & ANTI-BROWSER FILTER ===\n' +
     'The streamer frequently Alt-Tabs out of Roblox into Chrome, Notepad, or OBS, or idles between matches. You MUST REJECT any segments containing:\n' +
     '• Typing player usernames into search bars, accepting friend requests on the Roblox website, Discord DMs, or settings.\n' +
@@ -2005,6 +2031,20 @@ items.forEach((item, index) => {
 });
 
 // Pull the Global Summary for title context
+
+// Pull Proven Multimodal Anchors
+let viralContext = "";
+try {
+  const fusionItem = $('Run Multimodal Fusion').first();
+  if (fusionItem && fusionItem.json && fusionItem.json.stdout) {
+    const parsed = JSON.parse(fusionItem.json.stdout);
+    if (parsed && parsed.anchors && parsed.anchors.length > 0) {
+      viralContext = "\n=== PROVEN AUDIENCE & REACTION ANCHORS ===\n" +
+        parsed.anchors.map(a => `[ANCHOR #${a.anchor_id}] Peak at ${a.peak_time}s | Score: ${a.virality_score}/100 | Chat: ${a.chat_signal} | Face: ${a.face_signal}`).join("\n") + "\n";
+    }
+  }
+} catch(e) {}
+
 let streamContext = "";
 try {
   const summaryRaw = $('1. Global Summary AI').first().json.output || $('1. Global Summary Fallback').first().json.output || "{}";
@@ -2362,6 +2402,20 @@ return [{ pairedItem: { item: 0 }, json: { url: randomUrl } }];`,
         version: 1.1,
         position: [-89280, 26000],
     })
+    
+    @node({
+        id: 'run-multimodal-fusion-id',
+        name: 'Run Multimodal Fusion',
+        type: 'n8n-nodes-base.executeCommand',
+        version: 1,
+        position: [-88880, 26000],
+        onError: 'continueRegularOutput',
+    })
+    RunMultimodalFusion = {
+        command:
+            '=python3 /files/multimodal_analyzer.py "/files/inputs/{{ $(\'Edit Fields\').first().json.stream_file }}" "/files/temp/audio.mp3" "/files/temp/cam_config.json" "/files/temp/viral_anchors.json"',
+    };
+
     WaitBeforeScout = {
         amount: 1,
     };
@@ -2971,8 +3025,9 @@ return [{ pairedItem: { item: 0 }, json: { url: randomUrl } }];`,
         this.PrepareFrames.out(0).to(this.ReadReference.in(0));
         this.IfSummaryOk.out(0).to(this.WaitBeforeScout.in(0));
         this.IfSummaryOk.out(1).to(this._1GlobalSummaryFallback.in(0));
-        this.WaitBeforeScout.out(0).to(this._1PrepareScoutPrompt.in(0));
-        this._1GlobalSummaryFallback.out(0).to(this._1PrepareScoutPrompt.in(0));
+        this.WaitBeforeScout.out(0).to(this.RunMultimodalFusion.in(0));
+        this.RunMultimodalFusion.out(0).to(this._1PrepareScoutPrompt.in(0));
+        this._1GlobalSummaryFallback.out(0).to(this.RunMultimodalFusion.in(0));
         this._1GlobalSummaryFallback.out(1).to(this.IfSummaryFallback429.in(0));
         this.IfSummaryFallback429.out(0).to(this.WaitSummaryFallbackError.in(0));
         this.IfSummaryFallback429.out(1).to(this.WaitBeforeScout.in(0));

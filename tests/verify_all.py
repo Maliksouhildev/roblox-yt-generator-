@@ -75,6 +75,11 @@ checks = [
     ("Create Subtitle Binary", "DANGER_WORDS", "CreateSubtitle high-impact categorical dictionaries"),
     ("Create Subtitle Binary", "scale=trunc(720*1.15/2)*2", "CreateSubtitle 115% reaction punch zoom for screams/kills"),
     ("Create Subtitle Binary", "ZERO-GAP SPLIT SCREEN", "CreateSubtitle standardized 9:16 vertical layout constraint"),
+
+    # 11. Multimodal Virality Fusion Engine checks
+    ("Run Multimodal Fusion", "multimodal_analyzer.py", "RunMultimodalFusion analyzer script execution"),
+    ("1. Prepare Scout Prompt", "PROVEN MULTIMODAL VIRAL PEAKS", "Scout multimodal viral anchors extraction"),
+    ("3. Prepare Director Prompt", "PROVEN AUDIENCE & REACTION ANCHORS", "Director multimodal anchors alignment"),
 ]
 
 all_passed = True
