@@ -1267,8 +1267,10 @@ if (isVertical) {
   const bgPart = "[0:v]split=3[v_bg][v_game][v_cam];[v_bg]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,boxblur=20:5[bg]";
   
   // Tightly cropped webcam centered on face/shoulders with 115% reaction punch zoom and 1.35x climax zoom
-  const camPart = "[v_cam]crop=trunc(iw*" + cwRatio + "/2)*2:trunc(ih*" + chRatio + "/2)*2:trunc(iw*" + cxRatio + "/2)*2:trunc(ih*" + cyRatio + "/2)*2," +
-    "scale=720:380:force_original_aspect_ratio=increase,crop=720:380:(iw-ow)/2:(ih-oh)/2,split=3[c_norm][c_react_src][c_punch_src];" +
+  const camPart = "[v_cam]crop=trunc(iw*" + cwRatio + "/2)*2:trunc(ih*" + chRatio + "/2)*2:trunc(iw*" + cxRatio + "/2)*2:trunc(ih*" + cyRatio + "/2)*2,split=2[c_fg_raw][c_bg_raw];" +
+    "[c_bg_raw]scale=720:380:force_original_aspect_ratio=increase,crop=720:380,boxblur=25:5[c_bg_blur];" +
+    "[c_fg_raw]scale=720:380:force_original_aspect_ratio=decrease[c_fit];" +
+    "[c_bg_blur][c_fit]overlay=(W-w)/2:(H-h)/2,split=3[c_norm][c_react_src][c_punch_src];" +
     "[c_react_src]scale=trunc(720*1.15/2)*2:-1,crop=720:380:(iw-ow)/2:(ih-oh)/2[c_react];" +
     "[c_punch_src]scale=trunc(720*1.35/2)*2:-1,crop=720:380:(iw-ow)/2:(ih-oh)/2[c_punch];" +
     "[c_norm][c_react]overlay=0:0:enable='" + reactionEnable + "'[c_after_react];" +
