@@ -2,39 +2,37 @@
 """
 chat_analyzer.py
 ----------------
-Universal, zero-dependency stream chat parser & audience reaction heatmap generator.
-Supports both YouTube Live Replay and Twitch VOD chat JSON (via yt-dlp or TwitchDownloader).
-
-Calculates:
-1. Sub-second message velocity (msgs/10s).
-2. Gamer & Twitch emote bursts (Laughter, Shock, Hype, Superchats/Bits).
-3. Statistical velocity spikes relative to rolling baseline.
-4. Outputs structured JSON for multimodal fusion.
+Universal Audience Reaction & Laughter Anomaly Engine for YouTube & Twitch.
+Upgraded with:
+1. Regex-based elongated laughter token matching (ha+h+a+, lo+l+, lmf*a+o+, KEKW, OMEGALUL, LULW, ICANT, 💀, 😂, 🤣, 😭).
+2. Rolling 5-Minute Z-Score Anomaly Detection (Z >= 2.5 sigma above rolling baseline).
+3. Laughter Density Ratio Filter (> 30% of messages in window are laughter tokens).
+4. Scientifically Calibrated Causal Window [T_laugh - 15s, T_laugh - 1s] accounting for HLS latency + human reaction delay.
+5. Unified YouTube & Twitch schema normalization with millisecond precision.
 """
 
 import sys
 import os
 import json
 import re
+import math
 from collections import Counter
 
-# Gamer, YouTube & Twitch emote dictionary
-LEXICON = {
-    "laugh": {
-        "lol", "lmao", "lmfao", "kekw", "haha", "hahaha", "💀", "😂", "rofl", "dying", "dead",
-        "xd", "crying", "omg haha", "he really did that", "no he didnt", "omegalul", "lul",
-        "luzz", "kek", "kekerino", "jajaja", "catjam"
-    },
-    "shock": {
-        "wtf", "what", "omg", "no way", "hacker", "wait", "whaaat", "how", "???", "😱",
-        "bro", "aint no way", "bruh", "caught", "sus", "run", "behind you", "watch out",
-        "monkas", "monkaw", "notlikethis", "wutface", "clueless", "huh", "aimbot"
-    },
-    "hype": {
-        "w", "l", "pog", "poggers", "pogchamp", "gg", "rip", "clutch", "lets go", "sheesh",
-        "hype", "fire", "cooked", "banned", "gigachad", "ez", "pepehands", "sadge", "copium"
-    }
-}
+# ── 1. Regex Token Analyzers ────────────────────────────────────────────────
+RE_LAUGH = re.compile(
+    r'\b((?:h+[aeiou]+){2,}|(?:j+[aeiou]+){2,}|l+o+l+[a-z]*|l+m+f*a+o+|r+o+f+l+|k+e+k+w*|o+m+e+g+a+l+u+l+|l+u+l+w*|i+c+a+n+t+|d+e+a+d+|d+y+i+n+g+|x+d+)\b|[💀😂🤣😭]',
+    re.IGNORECASE
+)
+
+RE_SHOCK = re.compile(
+    r'\b(w+t+f+|w+h+a+t+|o+m+g+|n+o+\s*w+a+y+|h+a+c+k+e+r+|w+a+i+t+|b+r+o+|b+r+u+h+|s+u+s+|m+o+n+k+a+[sw]|c+l+u+e+l+e+s+s+|w+u+t+f+a+c+e+|a+i+m+b+o+t+|n+o+t+l+i+k+e+t+h+i+s+)\b|\?{2,}|[😱]',
+    re.IGNORECASE
+)
+
+RE_HYPE = re.compile(
+    r'\b(p+o+g+[a-z]*|g+g+|r+i+p+|c+l+u+t+c+h+|s+h+e+e+s+h+|c+o+o+k+e+d+|f+i+r+e+|g+i+g+a+c+h+a+d+|e+z+|c+o+p+i+u+m+|b+a+n+n+e+d+)\b|^[wl]$',
+    re.IGNORECASE
+)
 
 
 def parse_youtube_line(data: dict):
@@ -97,7 +95,7 @@ def parse_youtube_line(data: dict):
 
 
 def parse_twitch_comment(comment: dict):
-    """Parses a Twitch chat JSON comment object (from TwitchDownloader or yt-dlp)."""
+    """Parses a Twitch chat comment (from Twitch GraphQL or TwitchDownloader)."""
     offset_sec = comment.get("content_offset_seconds")
     if offset_sec is None:
         offset_ms = comment.get("offset_ms") or comment.get("time")
@@ -108,8 +106,6 @@ def parse_twitch_comment(comment: dict):
         return None
 
     author = comment.get("commenter", {}).get("display_name") or comment.get("author", {}).get("name", "anonymous")
-    
-    # Message text
     msg_obj = comment.get("message", {})
     if isinstance(msg_obj, str):
         msg_text = msg_obj
@@ -118,7 +114,6 @@ def parse_twitch_comment(comment: dict):
         if not msg_text and "fragments" in msg_obj:
             msg_text = "".join([f.get("text", "") for f in msg_obj["fragments"]])
 
-    # Bits check
     bits = msg_obj.get("bits_spent") or 0 if isinstance(msg_obj, dict) else 0
 
     return [{
@@ -131,9 +126,10 @@ def parse_twitch_comment(comment: dict):
     }]
 
 
-def analyze_chat(file_path: str, window_sec: float = 10.0, step_sec: float = 2.5):
+def analyze_chat(file_path: str, window_sec: float = 10.0, step_sec: float = 2.5, rolling_window_sec: float = 300.0):
     """
-    Reads .live_chat.json or .chat.json (YouTube or Twitch) and computes rolling velocity & sentiment heatmap.
+    Parses chat JSON, computes sliding-window statistics, and extracts high-precision laughter & hype anomalies
+    using a 5-minute rolling Z-score.
     """
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Chat file not found: {file_path}")
@@ -142,12 +138,10 @@ def analyze_chat(file_path: str, window_sec: float = 10.0, step_sec: float = 2.5
     platform = "unknown"
 
     with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-        # Check first line / block to see if it's a monolithic JSON (Twitch) or JSONL (YouTube/yt-dlp)
         first_chunk = f.read(2048)
         f.seek(0)
 
         if '"comments":' in first_chunk or '"comments" :' in first_chunk:
-            # Monolithic Twitch JSON structure
             platform = "twitch"
             try:
                 full_doc = json.load(f)
@@ -159,7 +153,6 @@ def analyze_chat(file_path: str, window_sec: float = 10.0, step_sec: float = 2.5
             except Exception as e:
                 print(f"[Chat Analyzer] Error parsing monolithic Twitch JSON: {e}", file=sys.stderr)
         else:
-            # Line-delimited JSON (YouTube or yt-dlp Twitch)
             for line in f:
                 line_s = line.strip()
                 if not line_s:
@@ -184,7 +177,7 @@ def analyze_chat(file_path: str, window_sec: float = 10.0, step_sec: float = 2.5
             "platform": platform,
             "total_messages": 0,
             "duration": 0,
-            "spikes": [],
+            "laughter_clusters": [],
             "buckets": []
         }
 
@@ -194,15 +187,24 @@ def analyze_chat(file_path: str, window_sec: float = 10.0, step_sec: float = 2.5
     end_time = messages[-1]["time"]
     total_msgs = len(messages)
 
-    # Binning with sliding window
+    # ── 2. Time-series Binning (Sliding Window) ──────────────────────────────
     buckets = []
     curr = start_time
+    msg_idx = 0
+    total_count = len(messages)
 
     while curr <= end_time:
         w_start = curr
         w_end = curr + window_sec
 
-        window_msgs = [m for m in messages if w_start <= m["time"] <= w_end]
+        # Collect messages in this window
+        window_msgs = []
+        for m in messages:
+            if m["time"] > w_end:
+                break
+            if m["time"] >= w_start:
+                window_msgs.append(m)
+
         count = len(window_msgs)
         velocity = count / (window_sec / 10.0)  # msgs per 10s
 
@@ -211,30 +213,34 @@ def analyze_chat(file_path: str, window_sec: float = 10.0, step_sec: float = 2.5
         hype_count = 0
         superchats = 0
         all_words = []
+        sample_snippets = []
 
         for m in window_msgs:
-            t_lower = m["text"].lower()
+            t = m["text"]
             if m.get("type") in ["superchat", "bits"]:
                 superchats += 1
 
-            for word in LEXICON["laugh"]:
-                if word in t_lower:
-                    laugh_count += 1
-                    break
-            for word in LEXICON["shock"]:
-                if word in t_lower:
-                    shock_count += 1
-                    break
-            for word in LEXICON["hype"]:
-                if word in t_lower:
-                    hype_count += 1
-                    break
+            is_laugh = bool(RE_LAUGH.search(t))
+            is_shock = bool(RE_SHOCK.search(t))
+            is_hype = bool(RE_HYPE.search(t))
 
-            clean_tokens = re.findall(r'\b\w+\b|[💀😂😱]', t_lower)
-            all_words.extend([tk for tk in clean_tokens if len(tk) > 2 or tk in ['w', 'l', '💀', '😂', '😱', 'gg']])
+            if is_laugh:
+                laugh_count += 1
+                if len(sample_snippets) < 6:
+                    sample_snippets.append(t)
+            if is_shock:
+                shock_count += 1
+            if is_hype:
+                hype_count += 1
+
+            clean_tokens = re.findall(r'\b\w+\b|[💀😂🤣😭😱]', t.lower())
+            all_words.extend([tk for tk in clean_tokens if len(tk) > 2 or tk in ['w', 'l', '💀', '😂', '🤣', '😭', 'gg']])
 
         word_counts = Counter(all_words).most_common(5)
         top_emotes = [f"{w}({c})" for w, c in word_counts if c >= 2]
+
+        laugh_velocity = laugh_count / (window_sec / 10.0)
+        laugh_ratio = float(laugh_count / max(1, count))
 
         buckets.append({
             "start": round(w_start, 2),
@@ -243,112 +249,134 @@ def analyze_chat(file_path: str, window_sec: float = 10.0, step_sec: float = 2.5
             "count": count,
             "velocity": round(velocity, 2),
             "laugh_count": laugh_count,
+            "laugh_velocity": round(laugh_velocity, 2),
+            "laugh_ratio": round(laugh_ratio, 3),
             "shock_count": shock_count,
             "hype_count": hype_count,
             "superchats": superchats,
-            "top_emotes": top_emotes
+            "top_emotes": top_emotes,
+            "sample_snippets": sample_snippets
         })
-
         curr += step_sec
 
-    # Baseline statistics
-    all_velocities = [b["velocity"] for b in buckets]
-    median_vel = float(sorted(all_velocities)[len(all_velocities) // 2]) if all_velocities else 1.0
-    mean_vel = float(sum(all_velocities) / max(1, len(all_velocities)))
+    # ── 3. Rolling 5-Minute Z-Score Anomaly Detection ────────────────────────
+    # rolling_window_sec / step_sec = number of buckets in rolling window (e.g. 300 / 2.5 = 120 buckets)
+    rolling_steps = int(math.ceil(rolling_window_sec / step_sec))
+    all_laugh_vels = [b["laugh_velocity"] for b in buckets]
+    all_total_vels = [b["velocity"] for b in buckets]
+
+    median_vel = float(sorted(all_total_vels)[len(all_total_vels) // 2]) if all_total_vels else 1.0
     baseline_vel = max(1.0, median_vel)
 
-    spikes = []
+    for i, b in enumerate(buckets):
+        r_start = max(0, i - rolling_steps)
+        r_slice_laugh = all_laugh_vels[r_start:i+1]
+        r_slice_total = all_total_vels[r_start:i+1]
+
+        mu_laugh = float(sum(r_slice_laugh) / max(1, len(r_slice_laugh)))
+        var_laugh = float(sum((x - mu_laugh) ** 2 for x in r_slice_laugh) / max(1, len(r_slice_laugh)))
+        sigma_laugh = math.sqrt(var_laugh)
+
+        mu_total = float(sum(r_slice_total) / max(1, len(r_slice_total)))
+        var_total = float(sum((x - mu_total) ** 2 for x in r_slice_total) / max(1, len(r_slice_total)))
+        sigma_total = math.sqrt(var_total)
+
+        z_laugh = (b["laugh_velocity"] - mu_laugh) / (sigma_laugh + 1e-4)
+        z_total = (b["velocity"] - mu_total) / (sigma_total + 1e-4)
+
+        b["z_laugh"] = round(z_laugh, 2)
+        b["z_total"] = round(z_total, 2)
+
+        # Composite Chat Score (0.0 to 100.0) based on Z-Score & Density
+        comp_score = min(100.0, max(0.0, (z_laugh * 20.0) + (b["laugh_ratio"] * 40.0) + (z_total * 10.0)))
+        b["chat_score"] = round(comp_score, 1)
+
+    # ── 4. Laughter Cluster & Causal Window Extraction ──────────────────────
+    # Peak Trigger: Z_laugh >= 2.5 AND laugh_ratio >= 0.30 AND laugh_count >= 2
+    raw_peaks = []
     for b in buckets:
-        v = b["velocity"]
-        vel_ratio = v / baseline_vel
-        emote_burst = (b["laugh_count"] * 1.5 + b["shock_count"] * 1.8 + b["hype_count"] * 1.2 + b["superchats"] * 3.0)
-        score = min(100.0, (vel_ratio * 25.0) + (emote_burst * 5.0))
-        b["chat_score"] = round(score, 1)
+        if (b["z_laugh"] >= 2.5 and b["laugh_ratio"] >= 0.30 and b["laugh_count"] >= 2) or (b["z_laugh"] >= 3.5 and b["laugh_count"] >= 3):
+            raw_peaks.append(b)
 
-        if (vel_ratio >= 2.2 and v >= 5) or emote_burst >= 6 or b["superchats"] > 0:
-            spikes.append({
-                "start": b["start"],
-                "end": b["end"],
-                "mid": b["mid"],
-                "velocity": b["velocity"],
-                "vel_ratio": round(vel_ratio, 2),
-                "laugh": b["laugh_count"],
-                "shock": b["shock_count"],
-                "hype": b["hype_count"],
-                "superchats": b["superchats"],
-                "top_emotes": b["top_emotes"],
-                "score": round(score, 1)
-            })
-
-    # Cluster overlapping spikes
-    clustered_spikes = []
-    if spikes:
-        curr_cluster = [spikes[0]]
-        for sp in spikes[1:]:
+    # Cluster adjacent peaks into cohesive laughter bursts
+    clusters = []
+    if raw_peaks:
+        curr_cluster = [raw_peaks[0]]
+        for p in raw_peaks[1:]:
             last = curr_cluster[-1]
-            if sp["start"] <= last["end"] + 7.5:
-                curr_cluster.append(sp)
+            if p["start"] <= last["end"] + 7.5:
+                curr_cluster.append(p)
             else:
+                # Merge cluster
                 c_start = curr_cluster[0]["start"]
                 c_end = curr_cluster[-1]["end"]
-                c_peak_vel = max(c["velocity"] for c in curr_cluster)
-                c_max_score = max(c["score"] for c in curr_cluster)
-                c_laugh = sum(c["laugh"] for c in curr_cluster)
-                c_shock = sum(c["shock"] for c in curr_cluster)
-                c_hype = sum(c["hype"] for c in curr_cluster)
-                c_super = sum(c["superchats"] for c in curr_cluster)
-                all_top = []
-                for c in curr_cluster:
-                    all_top.extend(c["top_emotes"])
-                clustered_spikes.append({
-                    "start": c_start,
-                    "end": c_end,
-                    "duration": round(c_end - c_start, 1),
+                peak_bucket = max(curr_cluster, key=lambda x: (x["z_laugh"], x["laugh_velocity"]))
+                c_peak_t = peak_bucket["mid"]
+                c_max_z = peak_bucket["z_laugh"]
+                c_peak_vel = peak_bucket["velocity"]
+                c_tot_laugh = sum(x["laugh_count"] for x in curr_cluster)
+                c_tot_msgs = sum(x["count"] for x in curr_cluster)
+                all_snips = []
+                for x in curr_cluster:
+                    all_snips.extend(x["sample_snippets"])
+
+                # Causal Trigger Window: [T_laugh - 15s, T_laugh - 1s]
+                causal_start = max(0.0, c_peak_t - 15.0)
+                causal_end = max(0.0, c_peak_t - 1.0)
+
+                clusters.append({
+                    "cluster_id": len(clusters) + 1,
+                    "peak_time": c_peak_t,
+                    "burst_window": [c_start, c_end],
+                    "causal_window": [round(causal_start, 1), round(causal_end, 1)],
+                    "z_score": c_max_z,
+                    "laugh_count": c_tot_laugh,
+                    "total_messages": c_tot_msgs,
+                    "laugh_ratio": round(c_tot_laugh / max(1, c_tot_msgs), 3),
                     "peak_velocity": c_peak_vel,
-                    "max_score": c_max_score,
-                    "laugh_count": c_laugh,
-                    "shock_count": c_shock,
-                    "hype_count": c_hype,
-                    "superchats": c_super,
-                    "sample_emotes": list(set(all_top))[:6]
+                    "sample_messages": list(dict.fromkeys(all_snips))[:8]
                 })
-                curr_cluster = [sp]
+                curr_cluster = [p]
 
         if curr_cluster:
             c_start = curr_cluster[0]["start"]
             c_end = curr_cluster[-1]["end"]
-            c_peak_vel = max(c["velocity"] for c in curr_cluster)
-            c_max_score = max(c["score"] for c in curr_cluster)
-            c_laugh = sum(c["laugh"] for c in curr_cluster)
-            c_shock = sum(c["shock"] for c in curr_cluster)
-            c_hype = sum(c["hype"] for c in curr_cluster)
-            c_super = sum(c["superchats"] for c in curr_cluster)
-            all_top = []
-            for c in curr_cluster:
-                all_top.extend(c["top_emotes"])
-            clustered_spikes.append({
-                "start": c_start,
-                "end": c_end,
-                "duration": round(c_end - c_start, 1),
+            peak_bucket = max(curr_cluster, key=lambda x: (x["z_laugh"], x["laugh_velocity"]))
+            c_peak_t = peak_bucket["mid"]
+            c_max_z = peak_bucket["z_laugh"]
+            c_peak_vel = peak_bucket["velocity"]
+            c_tot_laugh = sum(x["laugh_count"] for x in curr_cluster)
+            c_tot_msgs = sum(x["count"] for x in curr_cluster)
+            all_snips = []
+            for x in curr_cluster:
+                all_snips.extend(x["sample_snippets"])
+
+            causal_start = max(0.0, c_peak_t - 15.0)
+            causal_end = max(0.0, c_peak_t - 1.0)
+
+            clusters.append({
+                "cluster_id": len(clusters) + 1,
+                "peak_time": c_peak_t,
+                "burst_window": [c_start, c_end],
+                "causal_window": [round(causal_start, 1), round(causal_end, 1)],
+                "z_score": c_max_z,
+                "laugh_count": c_tot_laugh,
+                "total_messages": c_tot_msgs,
+                "laugh_ratio": round(c_tot_laugh / max(1, c_tot_msgs), 3),
                 "peak_velocity": c_peak_vel,
-                "max_score": c_max_score,
-                "laugh_count": c_laugh,
-                "shock_count": c_shock,
-                "hype_count": c_hype,
-                "superchats": c_super,
-                "sample_emotes": list(set(all_top))[:6]
+                "sample_messages": list(dict.fromkeys(all_snips))[:8]
             })
 
-    clustered_spikes.sort(key=lambda s: s["max_score"], reverse=True)
+    # Sort clusters by Z-Score descending
+    clusters.sort(key=lambda c: c["z_score"], reverse=True)
 
     return {
         "platform": platform,
         "total_messages": total_msgs,
         "duration_sec": round(end_time, 1),
         "baseline_velocity": round(baseline_vel, 2),
-        "mean_velocity": round(mean_vel, 2),
-        "total_spikes_found": len(clustered_spikes),
-        "top_clusters": clustered_spikes[:15],
+        "total_laughter_bursts": len(clusters),
+        "top_clusters": clusters[:15],
         "buckets": buckets
     }
 
@@ -363,10 +391,11 @@ if __name__ == "__main__":
 
     print(f"[Chat Analyzer] Parsing {in_file}...")
     res = analyze_chat(in_file)
-    print(f"[Chat Analyzer] Platform: {res['platform'].upper()} | Total Messages: {res['total_messages']} | Baseline: {res['baseline_velocity']} msgs/10s")
-    print(f"[Chat Analyzer] Identified {len(res['top_clusters'])} High-Hype Scene Clusters.")
-    for i, sc in enumerate(res['top_clusters'][:5], 1):
-        print(f"  #{i}: [{sc['start']}s - {sc['end']}s] Score: {sc['max_score']} | Peak Vel: {sc['peak_velocity']} | Laugh: {sc['laugh_count']} | Shock: {sc['shock_count']} | Emotes: {', '.join(sc['sample_emotes'])}")
+    print(f"[Chat Analyzer] Platform: {res['platform'].upper()} | Total Msgs: {res['total_messages']} | Baseline: {res['baseline_velocity']} msgs/10s")
+    print(f"[Chat Analyzer] Discovered {len(res['top_clusters'])} Statistical Laughter Bursts (Z >= 2.5 sigma).")
+    for i, cl in enumerate(res['top_clusters'][:5], 1):
+        print(f"  #{i}: Peak at {cl['peak_time']}s | Z-Score: {cl['z_score']}σ | Laughs: {cl['laugh_count']} ({int(cl['laugh_ratio']*100)}%) | Causal Window: [{cl['causal_window'][0]}s - {cl['causal_window'][1]}s]")
+        print(f"      Top Chat: {', '.join(cl['sample_messages'][:4])}")
 
     with open(out_file, "w", encoding="utf-8") as f:
         json.dump(res, f, indent=2)

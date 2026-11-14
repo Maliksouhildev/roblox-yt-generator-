@@ -1879,7 +1879,13 @@ if (viralAnchors.length > 0) {
     multimodalHeader += `• [ANCHOR #${a.anchor_id}] [${a.start}s - ${a.end}s] (Peak at ${a.peak_time}s | Score: ${a.virality_score}/100)\n` +
       `  - Audience Chat: ${a.chat_signal}\n` +
       `  - Streamer Facecam: ${a.face_signal}\n` +
-      `  - Audio Energy: ${a.audio_signal}\n\n`;
+      `  - Audio Energy: ${a.audio_signal}\n` +
+      (a.why_chat_laughed ? `  - Why Chat Laughed: ${a.why_chat_laughed}\n` : '') +
+      (a.comedy_mechanism ? `  - Comedic Catalyst: ${a.comedy_mechanism}\n` : '') +
+      (a.setup_tension_hook ? `  - Setup Tension Hook (In-Media-Res): Start hook at ${a.setup_tension_hook}\n` : '') +
+      (a.is_multi_beat && a.beat_2 ? `  - Compound Multi-Beat Callback: Beat 2 at ${a.beat_2.peak_time}s ("it happened again")\n` : '') +
+      (a.recommended_structure ? `  - Recommended Arc: ${a.recommended_structure}\n` : '') +
+      `\n`;
   }
 }
 
@@ -2040,7 +2046,7 @@ try {
     const parsed = JSON.parse(fusionItem.json.stdout);
     if (parsed && parsed.anchors && parsed.anchors.length > 0) {
       viralContext = "\n=== PROVEN AUDIENCE & REACTION ANCHORS ===\n" +
-        parsed.anchors.map(a => `[ANCHOR #${a.anchor_id}] Peak at ${a.peak_time}s | Score: ${a.virality_score}/100 | Chat: ${a.chat_signal} | Face: ${a.face_signal}`).join("\n") + "\n";
+        parsed.anchors.map(a => `[ANCHOR #${a.anchor_id}] Peak at ${a.peak_time}s | Score: ${a.virality_score}/100 | ${a.comedy_mechanism || 'Comedy'}\n  - Why They Laughed: ${a.why_chat_laughed || a.chat_signal}\n  - Tension Hook: ${a.setup_tension_hook || '0.5s before catalyst'}\n  - Multi-Beat Callback: ${a.is_multi_beat ? 'Yes (Beat 2 at ' + a.beat_2?.peak_time + 's)' : 'No (Keep tight 12-18s single beat)'}`).join("\n") + "\n";
     }
   }
 } catch(e) {}

@@ -6,10 +6,11 @@ All-in-one Multimodal Virality Analyzer for n8n Pipeline.
 Runs locally in Docker container with zero GPU / API cost.
 
 Combines:
-1. Live Chat Analyzer (yt-dlp .live_chat.json velocity & gamer emotes)
+1. Universal Live Chat Analyzer (Z-Score >= 2.5 sigma, Laughter Density > 30%, regex elongated tokens)
 2. Face Reaction Tracker (OpenCV DNN + emotion-ferplus ONNX + YuNet MAR)
 3. Audio Energy & Vocal Spike Scanner (FFmpeg astats bandpass)
-4. Fusion Ranker & Viral Anchor Extractor (Top 6 High-Retention Moments)
+4. Laughter-Triggered Comedic Beat Reasoner (Why Chat Laughed + Visual Comedy + Conditional Multi-Beat + Setup Tension Hook)
+5. Fusion Ranker & Viral Anchor Extractor (Top 6 High-Retention Moments)
 
 Outputs JSON to stdout and file for n8n execution.
 """
@@ -25,24 +26,13 @@ from collections import Counter
 import cv2
 import numpy as np
 
+# Import upgraded chat analyzer & humor reasoner
+from chat_analyzer import analyze_chat
+from chat_humor_reasoner import process_comedic_beats
+
 EMOTION_MODEL_PATH = "/files/emotion-ferplus-8.onnx"
 YUNET_MODEL_PATH = "/files/face_detection_yunet.onnx"
 EMOTIONS = ["neutral", "happiness", "surprise", "sadness", "anger", "disgust", "fear", "contempt"]
-
-LEXICON = {
-    "laugh": {
-        "lol", "lmao", "lmfao", "kekw", "haha", "hahaha", "💀", "😂", "rofl", "dying", "dead",
-        "xd", "crying", "omg haha", "he really did that", "no he didnt"
-    },
-    "shock": {
-        "wtf", "what", "omg", "no way", "hacker", "wait", "whaaat", "how", "???", "😱",
-        "bro", "aint no way", "bruh", "caught", "sus", "run", "behind you", "watch out"
-    },
-    "hype": {
-        "w", "l", "pog", "poggers", "gg", "rip", "clutch", "lets go", "sheesh",
-        "hype", "fire", "cooked", "banned"
-    }
-}
 
 
 def format_timestamp(seconds: float) -> str:
@@ -54,106 +44,7 @@ def format_timestamp(seconds: float) -> str:
     return f"{m:02d}:{s:02d}.{cs:02d}"
 
 
-# ── 1. Live Chat Analysis ───────────────────────────────────────────────────
-def analyze_live_chat(chat_path: str, window_sec: float = 10.0, step_sec: float = 2.5):
-    if not chat_path or not os.path.exists(chat_path):
-        return None
-
-    messages = []
-    try:
-        with open(chat_path, "r", encoding="utf-8", errors="ignore") as f:
-            for line in f:
-                try:
-                    data = json.loads(line)
-                    offset_ms = data.get("videoOffsetTimeMsec")
-                    replay_action = data.get("replayChatItemAction") or {}
-                    if offset_ms is None:
-                        offset_ms = replay_action.get("videoOffsetTimeMsec")
-                    if offset_ms is None:
-                        continue
-                    offset_sec = float(offset_ms) / 1000.0
-
-                    actions = replay_action.get("actions") or []
-                    for action in actions:
-                        add_item = action.get("addChatItemAction", {}).get("item", {})
-                        text_renderer = add_item.get("liveChatTextMessageRenderer")
-                        if text_renderer:
-                            runs = text_renderer.get("message", {}).get("runs") or []
-                            msg_parts = [r.get("text", "") for r in runs if "text" in r]
-                            messages.append({"time": offset_sec, "text": " ".join(msg_parts).strip(), "super": False})
-                        paid_renderer = add_item.get("liveChatPaidMessageRenderer")
-                        if paid_renderer:
-                            runs = paid_renderer.get("message", {}).get("runs") or []
-                            msg_parts = [r.get("text", "") for r in runs if "text" in r]
-                            messages.append({"time": offset_sec, "text": " ".join(msg_parts).strip(), "super": True})
-                except Exception:
-                    pass
-    except Exception as e:
-        print(f"[Multimodal Warning] Error reading chat {chat_path}: {e}", file=sys.stderr)
-        return None
-
-    if not messages:
-        return None
-
-    messages.sort(key=lambda m: m["time"])
-    start_t, end_t = messages[0]["time"], messages[-1]["time"]
-
-    buckets = []
-    curr = max(0.0, start_t)
-    while curr <= end_t:
-        w_start, w_end = curr, curr + window_sec
-        window_msgs = [m for m in messages if w_start <= m["time"] <= w_end]
-        count = len(window_msgs)
-        velocity = count / (window_sec / 10.0)
-
-        laugh, shock, hype, supers = 0, 0, 0, 0
-        all_words = []
-        for m in window_msgs:
-            if m["super"]: supers += 1
-            t_low = m["text"].lower()
-            for w in LEXICON["laugh"]:
-                if w in t_low: laugh += 1; break
-            for w in LEXICON["shock"]:
-                if w in t_low: shock += 1; break
-            for w in LEXICON["hype"]:
-                if w in t_low: hype += 1; break
-            clean_tokens = re.findall(r'\b\w+\b|[💀😂😱]', t_low)
-            all_words.extend([tk for tk in clean_tokens if len(tk) > 2 or tk in ['w', 'l', '💀', '😂', '😱']])
-
-        word_counts = Counter(all_words).most_common(4)
-        top_emotes = [f"{w}({c})" for w, c in word_counts if c >= 2]
-
-        buckets.append({
-            "start": round(w_start, 2),
-            "end": round(w_end, 2),
-            "velocity": round(velocity, 2),
-            "laugh": laugh,
-            "shock": shock,
-            "hype": hype,
-            "supers": supers,
-            "top_emotes": top_emotes
-        })
-        curr += step_sec
-
-    # Baseline & score
-    all_vel = [b["velocity"] for b in buckets]
-    median_vel = float(sorted(all_vel)[len(all_vel) // 2]) if all_vel else 1.0
-    baseline_vel = max(1.0, median_vel)
-
-    for b in buckets:
-        vel_ratio = b["velocity"] / baseline_vel
-        emote_burst = (b["laugh"] * 1.5 + b["shock"] * 1.8 + b["hype"] * 1.2 + b["supers"] * 3.0)
-        score = min(100.0, (vel_ratio * 25.0) + (emote_burst * 5.0))
-        b["chat_score"] = round(score, 1)
-
-    return {
-        "duration": end_t,
-        "baseline_velocity": baseline_vel,
-        "buckets": buckets
-    }
-
-
-# ── 2. Vocal Energy & Scream Spikes ─────────────────────────────────────────
+# ── 1. Vocal Energy & Scream Spikes ─────────────────────────────────────────
 def analyze_audio_spikes(audio_path: str, spike_offset: float = 8.0):
     if not audio_path or not os.path.exists(audio_path):
         return []
@@ -185,7 +76,6 @@ def analyze_audio_spikes(audio_path: str, spike_offset: float = 8.0):
         if not raw_rms:
             return []
 
-        # Calculate baseline
         vals = [r[1] for r in raw_rms]
         median_rms = float(sorted(vals)[len(vals) // 2])
         spike_thresh = median_rms + spike_offset
@@ -195,7 +85,6 @@ def analyze_audio_spikes(audio_path: str, spike_offset: float = 8.0):
             if val >= spike_thresh:
                 spikes.append((round(t, 2), round(val, 1)))
 
-        # Cluster spikes into windows
         windows = []
         if spikes:
             w_start, w_end = spikes[0][0], spikes[0][0] + 1.5
@@ -213,7 +102,7 @@ def analyze_audio_spikes(audio_path: str, spike_offset: float = 8.0):
         return []
 
 
-# ── 3. Face Reaction Analysis ───────────────────────────────────────────────
+# ── 2. Face Reaction Analysis ───────────────────────────────────────────────
 def get_mouth_aspect_ratio(landmarks):
     if landmarks is None or len(landmarks) < 10: return 0.0
     rmc = np.array([landmarks[6], landmarks[7]])
@@ -231,7 +120,6 @@ def analyze_face_reactions(video_path: str, cam_config_path: str, sample_interva
     if not os.path.exists(EMOTION_MODEL_PATH):
         return None
 
-    # Load Cam Config if exists
     cam_box = None
     if cam_config_path and os.path.exists(cam_config_path):
         try:
@@ -352,7 +240,7 @@ def analyze_face_reactions(video_path: str, cam_config_path: str, sample_interva
     }
 
 
-# ── 4. Multimodal Fusion Engine ─────────────────────────────────────────────
+# ── 3. Multimodal Fusion Engine ─────────────────────────────────────────────
 def run_fusion(
     video_path: str,
     audio_path: str,
@@ -362,42 +250,58 @@ def run_fusion(
 ):
     print(f"[Multimodal Pipeline] Starting analysis for: {video_path}", file=sys.stderr)
 
-    # 1. Look for live chat file
     base_name = os.path.splitext(os.path.basename(video_path))[0]
-    # Remove .processing if present
     if base_name.endswith(".processing"):
         base_name = base_name[:-11]
     
     chat_file = None
     input_dir = os.path.dirname(video_path)
-    # Check possible chat filenames
     candidates = [
         os.path.join(input_dir, f"{base_name}.live_chat.json"),
+        os.path.join(input_dir, f"{base_name}.chat.json"),
         os.path.join(input_dir, f"{base_name}!.live_chat.json"),
-        os.path.join("/files/inputs", f"{base_name}.live_chat.json")
+        os.path.join("/files/inputs", f"{base_name}.live_chat.json"),
+        os.path.join("/files/inputs", f"{base_name}.chat.json")
     ]
     for c in candidates:
         if os.path.exists(c):
             chat_file = c
             break
 
-    # If not found, fuzzy match in input_dir
     if not chat_file and os.path.exists(input_dir):
         for f in os.listdir(input_dir):
-            if f.endswith(".live_chat.json") and (base_name[:15].lower() in f.lower() or f[:15].lower() in base_name.lower()):
+            if (f.endswith(".live_chat.json") or f.endswith(".chat.json")) and (base_name[:15].lower() in f.lower() or f[:15].lower() in base_name.lower()):
                 chat_file = os.path.join(input_dir, f)
                 break
 
-    chat_res = analyze_live_chat(chat_file)
+    chat_res = None
+    comedic_beats_map = {}
+    if chat_file:
+        try:
+            chat_res = analyze_chat(chat_file)
+            chat_out_temp = "/files/temp/chat_analysis.json"
+            with open(chat_out_temp, "w", encoding="utf-8") as f:
+                json.dump(chat_res, f, indent=2)
+
+            # Run Laughter-Triggered Comedic Beat Reasoner
+            beats_res = process_comedic_beats(
+                video_path=video_path,
+                chat_analysis_path=chat_out_temp,
+                whisper_path="/files/temp/whisper.json"
+            )
+            for b in beats_res.get("comedic_beats", []):
+                comedic_beats_map[b["peak_laugh_time"]] = b
+        except Exception as e:
+            print(f"[Multimodal Warning] Error analyzing chat: {e}", file=sys.stderr)
+
     audio_spikes = analyze_audio_spikes(audio_path)
     face_res = analyze_face_reactions(video_path, cam_config_path)
 
-    # Determine duration
     duration = 300.0
     if face_res and face_res.get("duration"):
         duration = face_res["duration"]
-    elif chat_res and chat_res.get("duration"):
-        duration = chat_res["duration"]
+    elif chat_res and chat_res.get("duration_sec"):
+        duration = chat_res["duration_sec"]
 
     step = 1.0
     num_bins = int(math.ceil(duration / step))
@@ -424,7 +328,7 @@ def run_fusion(
                 if b_start <= item["time"] <= b_end:
                     if b_score > item["chat_score"]:
                         item["chat_score"] = b_score
-                        item["chat_info"] = f"Chat Velocity {b.get('velocity', 0)} msgs/10s | Spammed: {', '.join(emotes[:3])}"
+                        item["chat_info"] = f"Chat Velocity {b.get('velocity', 0)} msgs/10s (Z={b.get('z_laugh', 0)}σ) | Emotes: {', '.join(emotes[:3])}"
 
     has_face = face_res is not None and len(face_res.get("samples", [])) > 0
     if has_face:
@@ -443,7 +347,7 @@ def run_fusion(
             if s_start <= item["time"] <= s_end:
                 item["audio_score"] = 100.0
 
-    # Weights
+    # Dynamic Weighting
     if has_chat and has_face:
         w_chat, w_face, w_audio = 0.40, 0.35, 0.25
     elif has_face:
@@ -480,9 +384,33 @@ def run_fusion(
         if overlap:
             continue
 
-        anchor_start = max(0.0, peak_t - 12.0)
-        anchor_end = min(duration, peak_t + 18.0)
-        dur = anchor_end - anchor_start
+        # Check if matched with a Comedic Beat
+        matched_beat = None
+        for b_time, beat in comedic_beats_map.items():
+            if abs(peak_t - b_time) <= 15.0:
+                matched_beat = beat
+                break
+
+        if matched_beat:
+            anchor_start = matched_beat["clip_start"]
+            anchor_end = matched_beat["clip_end"]
+            dur = matched_beat["clip_duration"]
+            why_laughed = matched_beat["why_chat_laughed"]
+            mechanism = matched_beat["comedy_mechanism"]
+            tension_hook = matched_beat["setup_tension_hook"]
+            is_multi_beat = matched_beat["is_multi_beat"]
+            beat_2 = matched_beat.get("beat_2")
+            rec_structure = matched_beat["recommended_structure"]
+        else:
+            anchor_start = max(0.0, peak_t - 12.0)
+            anchor_end = min(duration, peak_t + 5.0)
+            dur = round(anchor_end - anchor_start, 1)
+            why_laughed = "Streamer reaction & gameplay activity"
+            mechanism = "High-energy gameplay reaction"
+            tension_hook = format_timestamp(anchor_start)
+            is_multi_beat = False
+            beat_2 = None
+            rec_structure = f"Single-Beat Moment ({dur}s): In-media-res setup leading into climax at {format_timestamp(peak_t)}"
 
         c_infos = [it["chat_info"] for it in timeline if anchor_start <= it["time"] <= anchor_end and it["chat_info"]]
         f_infos = [it["face_info"] for it in timeline if anchor_start <= it["time"] <= anchor_end and it["face_info"]]
@@ -497,7 +425,13 @@ def run_fusion(
             "virality_score": p["composite_score"],
             "chat_signal": c_infos[0] if c_infos else "Normal chat pace",
             "face_signal": f_infos[0] if f_infos else "Active gameplay expression",
-            "audio_signal": "Vocal volume spike (+8dB to +12dB scream/laugh)" if has_screams else "Standard vocal dialogue"
+            "audio_signal": "Vocal volume spike (+8dB to +12dB scream/laugh)" if has_screams else "Standard vocal dialogue",
+            "why_chat_laughed": why_laughed,
+            "comedy_mechanism": mechanism,
+            "setup_tension_hook": tension_hook,
+            "is_multi_beat": is_multi_beat,
+            "beat_2": beat_2,
+            "recommended_structure": rec_structure
         })
         used_intervals.append((anchor_start, anchor_end))
         if len(anchors) >= top_k:
@@ -513,12 +447,10 @@ def run_fusion(
         "anchors": anchors
     }
 
-    # Save to file
     if output_path:
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(result, f, indent=2)
 
-    # Output JSON string to stdout for n8n
     print(json.dumps(result))
     return result
 
