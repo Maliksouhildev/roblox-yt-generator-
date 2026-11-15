@@ -26,6 +26,11 @@ from collections import Counter
 import cv2
 import numpy as np
 
+# Ensure local sibling imports resolve regardless of current working directory
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
+
 # Import upgraded chat analyzer & humor reasoner
 from chat_analyzer import analyze_chat
 from chat_humor_reasoner import process_comedic_beats
@@ -283,11 +288,12 @@ def run_fusion(
             with open(chat_out_temp, "w", encoding="utf-8") as f:
                 json.dump(chat_res, f, indent=2)
 
-            # Run Laughter-Triggered Comedic Beat Reasoner
+            # Run Laughter-Triggered Comedic Beat Reasoner on live transcript
+            live_whisper = "/files/temp/transcript.json" if os.path.exists("/files/temp/transcript.json") else "/files/temp/whisper.json"
             beats_res = process_comedic_beats(
                 video_path=video_path,
                 chat_analysis_path=chat_out_temp,
-                whisper_path="/files/temp/whisper.json"
+                whisper_path=live_whisper
             )
             for b in beats_res.get("comedic_beats", []):
                 comedic_beats_map[b["peak_laugh_time"]] = b
@@ -451,7 +457,9 @@ def run_fusion(
             with open("/files/temp/face_emotions.json", "w", encoding="utf-8") as f:
                 json.dump({"top_events": f_ev, "samples": face_res.get("samples", [])[:1500]}, f, indent=2)
         from telemetry_fusion_indexer import build_unified_index
+        live_tx = "/files/temp/transcript.json" if os.path.exists("/files/temp/transcript.json") else None
         build_unified_index(
+            transcript_path=live_tx,
             audio_energy_path="/files/temp/audio_energy.json",
             chat_path="/files/temp/chat_laughter_clusters.json" if chat_res else None,
             face_path="/files/temp/face_emotions.json" if face_res else None,
@@ -460,7 +468,7 @@ def run_fusion(
             save_cache=True,
         )
     except Exception as e_idx:
-        print(f"[Multimodal Warning] Sandbox cache build skipped: {e_idx}", file=sys.stderr)
+        print(f"[Multimodal Warning] Unified timeline index build failed: {e_idx}", file=sys.stderr)
 
     result = {
         "status": "success",

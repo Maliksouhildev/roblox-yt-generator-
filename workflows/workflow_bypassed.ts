@@ -686,6 +686,52 @@ inputItems.forEach((clipData, clipIdx) => {
     rawIntervals = rawIntervals.slice(1);
   }
 
+  const payoffRef = parseFloat(clipData.payoff_time) || (rawIntervals[rawIntervals.length - 1] ? rawIntervals[rawIntervals.length - 1].end : 0);
+  const origLastEndPreTrim = rawIntervals.length > 0 ? rawIntervals[rawIntervals.length - 1].end : 0;
+
+  // Trim dead silent looting/walking windows (> 5.0s with < 0.3 words/sec) while protecting <=5s combat pauses & payoff
+  const deadTrimmedIntervals = [];
+  rawIntervals.forEach((iv) => {
+    let st = Math.max(3.0, iv.start);
+    let en = Math.max(st + 1.0, iv.end);
+    const role = String(iv.role || 'STORY_BEAT').toUpperCase();
+    if (role !== 'HOOK_CLIMAX' && words.length > 0 && (en - st) > 8.0) {
+      const ivWords = words.filter(w => w.end >= st && w.start <= en);
+      if (ivWords.length > 0) {
+        // Trim dead trailing air > 5.0s after last spoken word & payoff
+        const lastSpoken = ivWords[ivWords.length - 1].end;
+        const safeTailBound = Math.max(lastSpoken + 1.5, (payoffRef >= st && payoffRef <= en) ? (payoffRef + 2.5) : 0);
+        if ((en - safeTailBound) > 5.0 && (safeTailBound - st) >= 6.0) {
+          en = Number(safeTailBound.toFixed(3));
+        }
+        // Split out internal > 5.0s sparse/silent spans (< 0.3 words/sec)
+        const subSpans = [];
+        let spanStart = st;
+        let lastWordEnd = ivWords[0].start > st + 5.0 ? ivWords[0].start - 0.5 : st;
+        if (ivWords[0].start - st > 5.5 && !(payoffRef >= st && payoffRef <= ivWords[0].start + 1.0)) {
+          spanStart = Math.max(st, ivWords[0].start - 0.5);
+        }
+        for (let wi = 1; wi < ivWords.length; wi++) {
+          const gapStart = ivWords[wi - 1].end;
+          const gapEnd = ivWords[wi].start;
+          if ((gapEnd - gapStart) > 5.0 && !(payoffRef >= gapStart - 2.0 && payoffRef <= gapEnd + 2.0)) {
+            const subEnd = Math.min(en, gapStart + 1.5);
+            if (subEnd - spanStart >= 2.0) subSpans.push({ start: Number(spanStart.toFixed(3)), end: Number(subEnd.toFixed(3)), role });
+            spanStart = Math.max(spanStart, gapEnd - 0.5);
+          }
+          lastWordEnd = ivWords[wi].end;
+        }
+        if (en - spanStart >= 2.0) subSpans.push({ start: Number(spanStart.toFixed(3)), end: Number(en.toFixed(3)), role });
+        if (subSpans.length > 0) {
+          subSpans.forEach(ss => deadTrimmedIntervals.push(ss));
+          return;
+        }
+      }
+    }
+    deadTrimmedIntervals.push({ start: st, end: en, role });
+  });
+  if (deadTrimmedIntervals.length > 0) rawIntervals = deadTrimmedIntervals;
+
   // Preserve continuous [interval.start, interval.end] story-beat boundaries so gameplay action is never shredded
   rawIntervals.forEach((interval, intervalIdx) => {
     let segStart = Math.max(3.0, interval.start);
@@ -718,18 +764,25 @@ inputItems.forEach((clipData, clipIdx) => {
     });
   });
 
-  // Strictly enforce final stitched clip duration between 24.0s and 45.0s
+  // Strictly enforce duration within 24.0s-45.0s; expand backward up to -12s, NEVER pad >+2.5s after payoff/lastSeg.end
   let totalClipDur = finalSegs.reduce((acc, s) => acc + Math.max(0, s.end - s.start), 0);
   if (totalClipDur < 24.0 && finalSegs.length > 0) {
-    const deficit = 24.0 - totalClipDur;
-    const firstSeg = finalSegs[0];
+    let deficit = 24.0 - totalClipDur;
+    const bodyIdx = (String(finalSegs[0].role || '').toUpperCase() === 'HOOK_CLIMAX' && finalSegs.length > 1) ? 1 : 0;
+    const bodySeg = finalSegs[bodyIdx];
     const lastSeg = finalSegs[finalSegs.length - 1];
-    let preExpand = 0;
-    if (String(firstSeg.role || '').toUpperCase() !== 'HOOK_CLIMAX') {
-      preExpand = Math.min(deficit * 0.4, Math.max(0, firstSeg.start - 3.0));
-      firstSeg.start = Number((firstSeg.start - preExpand).toFixed(3));
+    if (String(bodySeg.role || '').toUpperCase() !== 'HOOK_CLIMAX') {
+      const maxBack = Math.min(12.0, Math.max(0, bodySeg.start - 3.0));
+      const preExpand = Math.min(deficit, maxBack);
+      bodySeg.start = Number((bodySeg.start - preExpand).toFixed(3));
+      deficit -= preExpand;
     }
-    lastSeg.end = Number((lastSeg.end + (deficit - preExpand)).toFixed(3));
+    if (deficit > 0) {
+      const maxTailEnd = Math.min(origLastEndPreTrim + 2.5, (payoffRef > 0 && payoffRef <= origLastEndPreTrim + 2.5) ? (payoffRef + 2.5) : (origLastEndPreTrim + 2.5));
+      const postHeadroom = Math.max(0, maxTailEnd - lastSeg.end);
+      const postExpand = Math.min(deficit, postHeadroom);
+      if (postExpand > 0) lastSeg.end = Number((lastSeg.end + postExpand).toFixed(3));
+    }
   } else if (totalClipDur > 45.0 && finalSegs.length > 0) {
     let excess = totalClipDur - 45.0;
     for (let i = finalSegs.length - 1; i >= 0 && excess > 0; i--) {
@@ -926,7 +979,7 @@ return [{ pairedItem: { item: 0 }, json: { command: ffmpegCmd, clip_title: clipT
     })
     GetMemeList = {
         command:
-            'mkdir -p /files/inputs/fonts && cp -n /files/inputs/*.ttf /files/inputs/fonts/ 2>/dev/null || true; ls -1 /files/memes && echo "---DIMENSIONS---" && (ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 "/files/temp/concatenated_clip.mp4" || echo "1920x1080") && echo "---BROWSER_INTERVALS---" && python3 -c "import cv2,json,numpy as np; cap=cv2.VideoCapture(\'/files/temp/concatenated_clip.mp4\'); fps=cap.get(cv2.CAP_PROP_FPS) or 30.0; tot=int(cap.get(cv2.CAP_PROP_FRAME_COUNT)); dur=tot/fps if tot>0 else 0; ivs=[]; b_cnt=0; s_cnt=0;\nfor t in np.arange(0.5, max(0.6, dur), 2.0):\n cap.set(cv2.CAP_PROP_POS_MSEC, float(t)*1000.0); ok,fr=cap.read()\n if not ok or fr is None: continue\n s_cnt+=1; h,w=fr.shape[:2]; hsv=cv2.cvtColor(fr,cv2.COLOR_BGR2HSV); gray=cv2.cvtColor(fr,cv2.COLOR_BGR2GRAY)\n white_ui=float(np.mean((hsv[:,:,2]>205)&(hsv[:,:,1]<35))); dark_ui=float(np.mean((hsv[:,:,2]<52)&(hsv[:,:,1]<35))); colorful=float(np.mean(hsv[:,:,1]>65))\n row_w=np.mean((hsv[:,:,2]>215)&(hsv[:,:,1]<30),axis=1); url_bar=False; run=0\n for r in range(int(h*0.85)):\n  if row_w[r]>0.50: run+=1\n  else: run=0\n  if run>=max(6,int(h*0.015)): url_bar=True; break\n edges=cv2.Canny(gray,50,150); lines=cv2.HoughLinesP(edges,1,np.pi/180,threshold=80,minLineLength=int(w*0.35),maxLineGap=10)\n lh=0; lv=0\n if lines is not None:\n  for ln in lines:\n   x1,y1,x2,y2=ln[0]\n   if abs(y2-y1)<=2 and abs(x2-x1)>=w*0.35: lh+=1\n   elif abs(x2-x1)<=2 and abs(y2-y1)>=h*0.25: lv+=1\n is_b=(colorful<0.32 and ((url_bar and (dark_ui>0.18 or white_ui>0.26)) or (white_ui>0.30 and lh>=2) or (dark_ui>0.24 and lh>=3 and lv>=1)))\n if is_b:\n  b_cnt+=1; st=round(max(0.0,float(t)-1.0),1); en=round(min(float(dur),float(t)+1.0),1)\n  if ivs and st<=ivs[-1][1]+0.5: ivs[-1][1]=en\n  else: ivs.append([st,en])\ncap.release(); print(json.dumps({\'browser_intervals\':ivs,\'browser_ratio\':round(b_cnt/max(1,s_cnt),2),\'clip_duration\':round(dur,2)}))" 2>/dev/null || echo \'{"browser_intervals":[],"browser_ratio":0}\'',
+            'mkdir -p /files/inputs/fonts && cp -n /files/inputs/*.ttf /files/inputs/fonts/ 2>/dev/null || true; ls -1 /files/memes && echo "---DIMENSIONS---" && (ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=s=x:p=0 "/files/temp/concatenated_clip.mp4" || echo "1920x1080")',
     };
 
     @node({
@@ -938,6 +991,7 @@ return [{ pairedItem: { item: 0 }, json: { command: ffmpegCmd, clip_title: clipT
     })
     CreateSubtitleBinary = {
         jsCode: `const NL = String.fromCharCode(10);
+const BS = String.fromCharCode(92);
 const FONT_SIZE = 48;
 const MAIN_COLOR = "&HFFFFFF&";
 
@@ -955,45 +1009,51 @@ function formatTimeASS(seconds) {
   return h + ":" + String(m).padStart(2,'0') + ":" + String(s).padStart(2,'0') + "." + String(cs).padStart(2,'0');
 }
 
+function getLoopNodeJson(nodeName, fallbackJson) {
+  try {
+    const it = $(nodeName).item;
+    if (it && it.json && Object.keys(it.json).length > 0) return it.json;
+  } catch(e) {}
+  try {
+    const lt = $(nodeName).last();
+    if (lt && lt.json && Object.keys(lt.json).length > 0) return lt.json;
+  } catch(e2) {}
+  return fallbackJson || {};
+}
+
 // ── Strict Caption & Placeholder Sanitizer ───────────────────────────────
+const BANNED_CAPTION_RE = /^(I CALLED TIME OUT|HE ACTUALLY FELL FOR IT|THAT DOES NOT COUNT|MY WORST BLUNDER|MUST WATCH MOMENT|VIRAL MOMENT)$/i;
 function sanitizeCaption(str, defaultFallback) {
-  if (!str || typeof str !== 'string') return defaultFallback || "MUST WATCH MOMENT";
+  const safeFallback = (defaultFallback && !BANNED_CAPTION_RE.test(String(defaultFallback).trim()) && !/<[^>]+>/.test(String(defaultFallback))) ? defaultFallback : "GAMING MOMENT";
+  if (!str || typeof str !== 'string') return safeFallback;
   let clean = str.trim();
-  if (/[\$({]|item\.json|loop\s*clips|\{\{|\}\}|undefined|null/i.test(clean)) {
-    return defaultFallback || "MUST WATCH MOMENT";
+  if (/[\$({]|<[^>]+>|item\.json|loop\s*clips|\{\{|\}\}|undefined|null/i.test(clean)) {
+    return safeFallback;
   }
-  clean = clean.replace(/[{}\\x27\\x22`$()]/g, '').replace(/_/g, ' ').trim().toUpperCase();
-  if (clean.length < 3 || /LOOP CLIPS|ITEM JSON/i.test(clean)) {
-    return defaultFallback || "MUST WATCH MOMENT";
+  clean = clean.replace(/[{}\\x27\\x22\`$()<>]/g, '').replace(/_/g, ' ').trim().toUpperCase();
+  if (clean.length < 3 || BANNED_CAPTION_RE.test(clean) || /LOOP CLIPS|ITEM JSON/i.test(clean)) {
+    return safeFallback;
   }
   return clean.substring(0, 42);
 }
 
-const subInput = $('7d. Get Subtitles (SRT)').first().json;
+const subInput = getLoopNodeJson('7d. Get Subtitles (SRT)', $input.first().json || {});
 let wordData = subInput.words || (subInput.x_groq && subInput.x_groq.words) || [];
 
-const camConfig = $('Parse Cam Config').first().json || {};
+const camConfig = $('Parse Cam Config').last().json || {};
 const camW = camConfig.cam_w || 400, camH = camConfig.cam_h || 250, camX = camConfig.cam_x || 0, camY = camConfig.cam_y || 0;
 const hasCam = !!(camConfig && camConfig.ai_found);
 const avatarRowDetected = !!(camConfig && camConfig.avatar_row_detected);
 
-const getMemeOutput = $('Get Meme List').first().json.stdout || "";
+const getMemeOutput = getLoopNodeJson('Get Meme List', {}).stdout || "";
 const parts = getMemeOutput.split("---DIMENSIONS---");
 const realFiles = (parts[0] || "").split(NL).map(f => f.trim().replace(/\r/g, '')).filter(f => f.length > 3);
 
 let isVertical = false;
-let browserTelemetry = { browser_intervals: [], browser_ratio: 0, clip_duration: 0 };
 if (parts.length > 1) {
-  const dimParts = parts[1].split("---BROWSER_INTERVALS---");
-  const dims = (dimParts[0] || "").trim().split('x');
+  const dims = parts[1].trim().split('x');
   if (dims.length === 2 && parseInt(dims[0]) < parseInt(dims[1])) {
     isVertical = true;
-  }
-  if (dimParts.length > 1) {
-    try {
-      const parsedBt = JSON.parse(dimParts[1].trim());
-      if (parsedBt && typeof parsedBt === 'object') browserTelemetry = parsedBt;
-    } catch(e) {}
   }
 }
 
@@ -1007,25 +1067,25 @@ function getBestMatch(aiFile) {
   }) || null;
 }
 
-// ── Caption & Context Parsing ────────────────────────────────────────────
-let loopItem = {};
-try { loopItem = $('Loop Clips').item.json || {}; } catch(e) {
-  try { loopItem = $('Loop Clips').first().json || {}; } catch(e2) {}
-}
-const clipData = loopItem;
+// ── Caption & Context Parsing (Per-Iteration via .item / .last) ──────────
+const clipData = getLoopNodeJson('Loop Clips', $input.first().json || {});
 
 const clipStart = parseFloat(clipData.start_time) || 0;
 const clipEnd = parseFloat(clipData.end_time) || (clipStart + 36);
 const segSumDur = (Array.isArray(clipData.segments) && clipData.segments.length > 0)
   ? clipData.segments.reduce((acc, s) => acc + Math.max(0, (parseFloat(s.end) || 0) - (parseFloat(s.start) || 0)), 0)
   : 0;
-let clipDur = parseFloat(browserTelemetry.clip_duration) || segSumDur || Math.max(1, (clipEnd - clipStart));
+let probedDur = 0;
+try {
+  const pOut = require('child_process').execSync('ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "/files/temp/concatenated_clip.mp4"', { timeout: 5000 }).toString().trim();
+  probedDur = parseFloat(pOut) || 0;
+} catch(e) {}
+let clipDur = probedDur || segSumDur || Math.max(1, (clipEnd - clipStart));
 clipDur = Math.max(1, Math.round(clipDur * 10) / 10);
 
-let rawCaption = sanitizeCaption(clipData.hook_caption || clipData.title, "MUST WATCH MOMENT");
+const fallbackTitleHook = sanitizeCaption(clipData.title, "GAMING MOMENT");
+let rawCaption = sanitizeCaption(clipData.hook_caption || clipData.title, fallbackTitleHook);
 let screams = [], memes = [], climaxQuote = "", reactionTriggers = [];
-let rejectClip = false;
-let aiBrowserIntervals = [];
 
 // ── Read screams.json if generated by scream_detector.py ────────────────
 try {
@@ -1039,10 +1099,9 @@ try {
 } catch(e) {}
 
 try {
-  let raw = "";
-  try { raw = $('Context Merge Agent').first().json.output || ""; } catch(e0) {}
+  let raw = getLoopNodeJson('Context Merge Agent', {}).output || "";
   if (!raw) {
-    try { raw = $('Context Merge Fallback').first().json.output || ""; } catch(e1) {}
+    raw = getLoopNodeJson('Context Merge Fallback', {}).output || "";
   }
   if (raw) {
     const b3 = String.fromCharCode(96).repeat(3);
@@ -1056,165 +1115,12 @@ try {
       reactionTriggers = reactionTriggers.concat(parsed.reaction_triggers);
     }
     if (parsed.memes && Array.isArray(parsed.memes)) memes = parsed.memes;
-    if (parsed.reject_clip === true) rejectClip = true;
-    if (Array.isArray(parsed.browser_intervals)) aiBrowserIntervals = parsed.browser_intervals;
   }
 } catch(e) {}
 
-// ── Detect Climax Timing for Impact Zoom (after Browser UI Filter) ───────
-function normalizeBrowserIntervals(rawList, maxDur) {
-  const valid = [];
-  if (!Array.isArray(rawList)) return valid;
-  for (let i = 0; i < rawList.length; i++) {
-    const item = rawList[i];
-    let s = NaN, e = NaN;
-    if (Array.isArray(item) && item.length >= 2) {
-      s = parseFloat(item[0]); e = parseFloat(item[1]);
-    } else if (item && typeof item === 'object') {
-      s = parseFloat(item.start); e = parseFloat(item.end);
-    }
-    if (!isNaN(s) && !isNaN(e)) {
-      const cs = Math.max(0, Math.min(maxDur, s));
-      const ce = Math.max(0, Math.min(maxDur, e));
-      if (ce - cs > 0.05) valid.push([cs, ce]);
-    }
-  }
-  valid.sort((a, b) => a[0] - b[0]);
-  const merged = [];
-  for (let i = 0; i < valid.length; i++) {
-    const cur = valid[i];
-    if (merged.length > 0 && cur[0] <= merged[merged.length - 1][1] + 0.5) {
-      merged[merged.length - 1][1] = Math.max(merged[merged.length - 1][1], cur[1]);
-    } else {
-      merged.push([cur[0], cur[1]]);
-    }
-  }
-  return merged;
-}
-
-const rawBrowserCombined = [].concat(browserTelemetry.browser_intervals || [], aiBrowserIntervals || []);
-const browserIntervals = normalizeBrowserIntervals(rawBrowserCombined, clipDur);
-const cleanIntervals = [];
-let bCursor = 0;
-for (let i = 0; i < browserIntervals.length; i++) {
-  const bs = browserIntervals[i][0], be = browserIntervals[i][1];
-  if (bs - bCursor >= 0.4) {
-    cleanIntervals.push([Math.round(bCursor * 100) / 100, Math.round(bs * 100) / 100]);
-  }
-  bCursor = Math.max(bCursor, be);
-}
-if (clipDur - bCursor >= 0.4) {
-  cleanIntervals.push([Math.round(bCursor * 100) / 100, Math.round(clipDur * 100) / 100]);
-}
-
-const browserDur = browserIntervals.reduce((acc, iv) => acc + (iv[1] - iv[0]), 0);
-const cleanDur = cleanIntervals.reduce((acc, iv) => acc + (iv[1] - iv[0]), 0);
-const browserRatio = Math.max(parseFloat(browserTelemetry.browser_ratio) || 0, browserDur / Math.max(1, clipDur));
-let rejectedBrowser = false;
-
+// ── Detect Climax Timing for Impact Zoom ─────────────────────────────────
 const absolutePayoff = parseFloat(clipData.payoff_time) || 0;
 let relativePayoff = (absolutePayoff > clipStart) ? (absolutePayoff - clipStart) : absolutePayoff;
-
-if (rejectClip || browserRatio > 0.45 || (browserIntervals.length > 0 && cleanDur < 20.0)) {
-  rejectedBrowser = true;
-} else if (browserIntervals.length > 0 && cleanDur >= 20.0 && cleanIntervals.length > 0) {
-  try {
-    const fs = require('fs');
-    const execSync = require('child_process').execSync;
-    const trimOut = '/files/temp/concatenated_clean.mp4';
-    const vSegs = [];
-    const aSegs = [];
-    const concatPairs = [];
-    for (let idx = 0; idx < cleanIntervals.length; idx++) {
-      const st = cleanIntervals[idx][0].toFixed(3);
-      const en = cleanIntervals[idx][1].toFixed(3);
-      vSegs.push('[0:v]trim=start=' + st + ':end=' + en + ',setpts=PTS-STARTPTS[vc' + idx + ']');
-      aSegs.push('[0:a]atrim=start=' + st + ':end=' + en + ',asetpts=PTS-STARTPTS[ac' + idx + ']');
-      concatPairs.push('[vc' + idx + '][ac' + idx + ']');
-    }
-    const trimFilter = vSegs.concat(aSegs).join(';') + ';' + concatPairs.join('') + 'concat=n=' + cleanIntervals.length + ':v=1:a=1[v_trim][a_trim]';
-    const trimCmd = 'ffmpeg -loglevel error -y -i "/files/temp/concatenated_clip.mp4" -filter_complex "' + trimFilter + '" -map "[v_trim]" -map "[a_trim]" -c:v libx264 -preset veryfast -crf 18 -c:a aac "' + trimOut + '"';
-    execSync(trimCmd, { timeout: 120000 });
-    if (fs.existsSync(trimOut) && fs.statSync(trimOut).size > 1000) {
-      fs.renameSync(trimOut, '/files/temp/concatenated_clip.mp4');
-      const mappedWindows = [];
-      let offAcc = 0;
-      for (let idx = 0; idx < cleanIntervals.length; idx++) {
-        const s = cleanIntervals[idx][0], e = cleanIntervals[idx][1];
-        mappedWindows.push({ s: s, e: e, off: offAcc });
-        offAcc += (e - s);
-      }
-      const remapPoint = function(t) {
-        if (isNaN(t)) return null;
-        for (let k = 0; k < mappedWindows.length; k++) {
-          const w = mappedWindows[k];
-          if (t >= w.s && t <= w.e) return Math.round((w.off + (t - w.s)) * 1000) / 1000;
-        }
-        return null;
-      };
-      if (Array.isArray(wordData) && wordData.length > 0) {
-        const remappedWords = [];
-        for (let wi = 0; wi < wordData.length; wi++) {
-          const wd = wordData[wi];
-          const ws = parseFloat(wd.start);
-          const we = parseFloat(wd.end);
-          for (let k = 0; k < mappedWindows.length; k++) {
-            const mw = mappedWindows[k];
-            if (we > mw.s && ws < mw.e) {
-              const ns = mw.off + (Math.max(mw.s, ws) - mw.s);
-              const ne = mw.off + (Math.min(mw.e, we) - mw.s);
-              if (ne - ns > 0.01) {
-                remappedWords.push(Object.assign({}, wd, {
-                  start: Math.round(ns * 1000) / 1000,
-                  end: Math.round(ne * 1000) / 1000
-                }));
-              }
-              break;
-            }
-          }
-        }
-        wordData = remappedWords;
-      }
-      if (Array.isArray(screams) && screams.length > 0) {
-        const remappedScreams = [];
-        for (let si = 0; si < screams.length; si++) {
-          const sc = screams[si];
-          if (!Array.isArray(sc) || sc.length < 1) continue;
-          const s0 = parseFloat(sc[0]);
-          const s1 = sc.length >= 2 ? parseFloat(sc[1]) : (s0 + 1.5);
-          for (let k = 0; k < mappedWindows.length; k++) {
-            const mw = mappedWindows[k];
-            const os = Math.max(mw.s, s0), oe = Math.min(mw.e, s1);
-            if (oe - os >= 0.2) {
-              remappedScreams.push([
-                Math.round((mw.off + (os - mw.s)) * 100) / 100,
-                Math.round((mw.off + (oe - mw.s)) * 100) / 100
-              ]);
-            }
-          }
-        }
-        screams = remappedScreams;
-      }
-      if (Array.isArray(reactionTriggers) && reactionTriggers.length > 0) {
-        reactionTriggers = reactionTriggers.map(t => remapPoint(parseFloat(t))).filter(v => v !== null);
-      }
-      if (Array.isArray(memes) && memes.length > 0) {
-        const remappedMemes = [];
-        for (let mi = 0; mi < memes.length; mi++) {
-          const mm = memes[mi];
-          const rt = remapPoint(parseFloat(mm && mm.timestamp));
-          if (rt !== null) {
-            remappedMemes.push(Object.assign({}, mm, { timestamp: Math.round(rt * 100) / 100 }));
-          }
-        }
-        memes = remappedMemes;
-      }
-      const mappedPayoff = remapPoint(relativePayoff);
-      relativePayoff = mappedPayoff !== null ? mappedPayoff : 0;
-      clipDur = Math.max(1, Math.round(offAcc * 10) / 10);
-    }
-  } catch(e) {}
-}
 
 if (relativePayoff <= 0 || relativePayoff >= clipDur) {
   relativePayoff = Math.max(0, clipDur - 3.5);
@@ -1377,8 +1283,8 @@ const camZoomEnable = climaxEnable;
 // ── Non-Overlapping 3-Zone Vertical Layout ────────────────────────────────
 // Zone 1: Persistent Top Hook Banner at y=75 (safe top zone, away from gameplay)
 // Zone 2: Untouched Gameplay Action Zone (y=380 to y=820, zero text collisions)
-// Zone 3: Dynamic Spoken Subtitles at y=880 (safe lower third, above YouTube/TikTok UI)
-const subY = 880;
+// Zone 3: Dynamic Spoken Subtitles at y=920 (safe lower third, above YouTube/TikTok UI)
+const subY = 920;
 const captionY = 75;
 
 let assContent = [
@@ -1389,8 +1295,8 @@ let assContent = [
   '',
   '[V4+ Styles]',
   'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
-  'Style: ViralSubs,Lilita One,' + FONT_SIZE + ',' + MAIN_COLOR + ',&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,3,2,20,20,10,1',
-  'Style: ViralCaption,Lilita One,40,&H00D7FF&,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,3,2,20,20,10,1',
+  'Style: ViralSubs,Lilita One,' + FONT_SIZE + ',' + MAIN_COLOR + ',&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,3,2,20,20,340,1',
+  'Style: ViralCaption,Lilita One,40,&H00D7FF&,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,3,8,20,20,55,1',
   '',
   '[Events]',
   'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text'
@@ -1478,35 +1384,35 @@ if (wordData.length > 0) {
         if (idx === j) {
           // Dynamic high-impact color highlighting:
           let highlightColor = "&H00D7FF&"; // Ka-ching Gold
-          let bounceTag = "\\t(0,40,\\fscx120\\fscy120)\\t(40,110,\\fscx100\\fscy100)";
+          let bounceTag = BS + "t(0,40," + BS + "fscx120" + BS + "fscy120)" + BS + "t(40,110," + BS + "fscx100" + BS + "fscy100)";
 
           if (DANGER_WORDS.has(cleanUpper)) {
             highlightColor = "&H003333FF&"; // Vibrant Crimson/Red
-            bounceTag = "\\t(0,45,\\fscx130\\fscy130)\\t(45,120,\\fscx100\\fscy100)";
+            bounceTag = BS + "t(0,45," + BS + "fscx130" + BS + "fscy130)" + BS + "t(45,120," + BS + "fscx100" + BS + "fscy100)";
           } else if (WIN_WORDS.has(cleanUpper)) {
             highlightColor = "&H0000FF55&"; // Electric Neon Green
-            bounceTag = "\\t(0,45,\\fscx125\\fscy125)\\t(45,120,\\fscx100\\fscy100)";
+            bounceTag = BS + "t(0,45," + BS + "fscx125" + BS + "fscy125)" + BS + "t(45,120," + BS + "fscx100" + BS + "fscy100)";
           } else if (SHOCK_WORDS.has(cleanUpper)) {
             highlightColor = "&H00FFFF00&"; // Electric Cyan
-            bounceTag = "\\t(0,45,\\fscx125\\fscy125)\\t(45,120,\\fscx100\\fscy100)";
+            bounceTag = BS + "t(0,45," + BS + "fscx125" + BS + "fscy125)" + BS + "t(45,120," + BS + "fscx100" + BS + "fscy100)";
           }
 
-          return '{\\c' + highlightColor + bounceTag + '}' + txt + '{\\c' + MAIN_COLOR + '}';
+          return '{' + BS + 'c' + highlightColor + bounceTag + '}' + txt + '{' + BS + 'c' + MAIN_COLOR + '}';
         }
         return txt;
       }).join(" ") + (j === group.length - 1 ? groupEmoji : "");
 
-      assContent += 'Dialogue: 1,' + formatTimeASS(wStart) + ',' + formatTimeASS(wEnd) + ',ViralSubs,,0,0,0,,{\\pos(360,' + subY + ')}' + lineText + NL;
+      assContent += 'Dialogue: 1,' + formatTimeASS(wStart) + ',' + formatTimeASS(wEnd) + ',ViralSubs,,0,0,0,,{' + BS + 'pos(360,' + subY + ')}' + lineText + NL;
     }
   }
 }
 
 // ── Hook Banner in Top Zone (y=75) ─────────────────────────────────────────
 if (rawCaption) {
-  const cleanCaption = rawCaption.replace(/[{}\\x27\\x22`]/g, '').trim().toUpperCase();
+  const cleanCaption = rawCaption.replace(/[{}\\x27\\x22\`]/g, '').trim().toUpperCase();
   const capStart = "0:00:00.00";
   const capEnd = formatTimeASS(clipDur);
-  assContent += 'Dialogue: 2,' + capStart + ',' + capEnd + ',ViralCaption,,0,0,0,,{\\pos(360,' + captionY + ')}' + cleanCaption + NL;
+  assContent += 'Dialogue: 2,' + capStart + ',' + capEnd + ',ViralCaption,,0,0,0,,{' + BS + 'pos(360,' + captionY + ')}' + cleanCaption + NL;
 }
 
 // ── FFmpeg Filter Graph with Standardized 9:16 Vertical Stacking ──────────
@@ -1568,9 +1474,7 @@ if (isVertical) {
 }
 
 const title = (clipData.title || "output_clip").replace(/[\/\\"'<>|&;:]/g, '_').trim();
-const outputFile = rejectedBrowser
-  ? ("/files/temp/rejected_browser_" + title + ".mp4")
-  : ("/files/outputs/" + title + ".mp4");
+const outputFile = "/files/outputs/" + title + ".mp4";
 const extraInputs = overlayInput ? (' ' + overlayInput) : "";
 
 const cmd = 'ffmpeg -loglevel error -y -i "/files/temp/concatenated_clip.mp4"' + extraInputs + (audioInputs.length > 0 ? (' ' + audioInputs.join(" ")) : "") + ' -filter_complex "' + filter + ';' + audioMixFilter + '" -map "[v]" -map "[a_out]" -c:v libx264 -preset medium -crf 18 -c:a aac "' + outputFile + '"';
@@ -1581,7 +1485,7 @@ try {
   fs.writeFileSync('/files/temp/subs.ass', assContent, 'utf-8');
 } catch(e) {}
 
-return [{json: {command: cmd, rejected_browser: rejectedBrowser}, binary: {data: {data: Buffer.from(assContent).toString('base64'), mimeType: 'text/plain', fileName: 'subs.ass'}}}];
+return [{json: {command: cmd}, binary: {data: {data: Buffer.from(assContent).toString('base64'), mimeType: 'text/plain', fileName: 'subs.ass'}}}];
 `,
     };
 
@@ -1700,31 +1604,26 @@ CLIP THEME:
 {{ $('Loop Clips').item.json.theme }}
 
 AVAILABLE SOUNDS (pick from these exact filenames):
-{{ $('Get Meme List').first().json.stdout ? $('Get Meme List').first().json.stdout.split('---DIMENSIONS---')[0].trim().replace(/\\n/g, ', ') : 'vine-boom-sound-effect_KT89XIq.mp3, huh_37bAoRo.mp3, fartmeme.mp3' }}
-
-DETECTED WEB/BROWSER UI TELEMETRY:
-{{ (function(){ const out=$('Get Meme List').first().json.stdout||''; const p=out.split('---BROWSER_INTERVALS---'); return p[1]?p[1].trim():'{"browser_intervals":[],"browser_ratio":0}'; })() }}
+{{ (function(){ let o=''; try{ o=$('Get Meme List').item.json.stdout||''; }catch(e){ try{ o=$('Get Meme List').last().json.stdout||''; }catch(e2){} } return o ? o.split('---DIMENSIONS---')[0].trim().replace(/\\n/g, ', ') : 'vine-boom-sound-effect_KT89XIq.mp3, huh_37bAoRo.mp3, fartmeme.mp3'; })() }}
 
 FULL TIMECODED TRANSCRIPT OF THE CLIP (read every word before placing ANY effects):
-{{ (function(){ const w=$('7d. Get Subtitles (SRT)').first().json.words; return w&&w.length>0?w.map(x=>'['+x.start.toFixed(1)+'s] '+x.word).join(' '):'NO WORDS'; })() }}`,
+{{ (function(){ let j={}; try{ j=$('7d. Get Subtitles (SRT)').item.json||{}; }catch(e){ try{ j=$('7d. Get Subtitles (SRT)').last().json||{}; }catch(e2){} } const w=j.words||(j.x_groq&&j.x_groq.words)||[]; return w.length>0?w.map(x=>'['+x.start.toFixed(1)+'s] '+x.word).join(' '):'NO WORDS'; })() }}`,
         options: {
             systemMessage: `You are an Elite YouTube Shorts Editor & Sound Designer.
-You have the Director's PROPOSED HOOK BANNER, detected screen web/browser UI telemetry, and the full timecoded transcript below.
+You have the Director's PROPOSED HOOK BANNER and the full timecoded transcript below.
 
-YOUR JOB — output ONLY raw JSON with these 6 fields:
+YOUR JOB — output ONLY raw JSON with these 4 fields:
 
 1. STORY HOOK (Top Banner, 3-5 punchy words in ALL CAPS)
-• PRIMARY DIRECTIVE: Keep the Director's PROPOSED HOOK BANNER as your story_hook UNLESS you can make it punchier while staying 100% FACTUAL to the spoken transcript.
-• CRITICAL ANTI-HALLUCINATION RULE: NEVER invent hackers, scams, or teams if they are not explicitly spoken in the transcript! No generic clickbait (e.g. NEVER output "THE HACKER EXPOSED" or "SAVING THE WHOLE TEAM" unless those exact events occurred).
-• Examples: "I CALLED TIME OUT", "THAT DOES NOT COUNT", "HE ACTUALLY FELL FOR IT", "MY WORST BLUNDER".
+• PRIMARY DIRECTIVE: Write a 100% factual 3-5 word hook in ALL CAPS describing the exact in-clip event, object, or threat spoken in the transcript (e.g., name the monster, item, chase, or specific blunder shown).
+• CRITICAL ANTI-HALLUCINATION & ANTI-TEMPLATE RULE: NEVER invent hackers, scams, or teams if they are not explicitly spoken in the transcript! NEVER output placeholder syntax (<...>), generic filler ("MUST WATCH MOMENT", "VIRAL MOMENT"), or copied prompt phrases. If the Director's PROPOSED HOOK BANNER is factual and specific to this clip's transcript, refine or keep it.
 
 2. CLIMAX QUOTE (Exact 3 to 5 words spoken at the peak moment)
-• Find the EXACT 3-5 words spoken at the highest-energy punchline, arrest, scream, jumpscare, or reaction in the transcript.
-• Example: "bro you arrested me" or "no way you pulled that" or "why did you do that".
+• Extract a verbatim 3-5 word substring from the timecoded transcript at the highest-energy punchline, scream, jumpscare, or reaction.
 • This anchors our visual punch-in zoom to the exact spoken climax audio.
 
 3. REACTION & AUDIO-ENERGY TRIGGERS
-• List of timestamps where the streamer screams, yells, or gets killed in-game (screams_or_reactions).
+• List of timestamps where the streamer screams, yells, or gets killed in-game (reaction_triggers).
 • These command FFmpeg to scale up the gameplay or webcam by 115% for an aggressive, punchy zoom.
 
 4. MEMES (0 TO 2 SOUNDS MAXIMUM)
@@ -1735,20 +1634,12 @@ YOUR JOB — output ONLY raw JSON with these 6 fields:
   - fartmeme.mp3 -> Slapstick fail, dying to a silly trap.
 • Volume: 0.35.
 
-5. STRICT ANTI-BROWSER & WEB UI REJECTION / TRIMMING
-• REJECT or TRIM any timestamp interval where the screen or spoken dialogue shows a web browser (Chrome, Edge), a Roblox group web page, Robux transaction/payout web page, Discord, or a YouTube Studio live chat popout.
-• Combine DETECTED WEB/BROWSER UI TELEMETRY with spoken clues (e.g., reading Roblox group wall, checking Robux payouts, browser tabs, opening live chat popout, typing usernames on Roblox website).
-• Set "reject_clip": true if browser/web UI dominates the clip OR if trimming browser intervals leaves < 24.0s of pure gameplay.
-• Set "browser_intervals": [[start_sec, end_sec]] for any timestamp intervals showing a web browser, Roblox group page, or YouTube Studio popout that must be trimmed out.
-
-Output ONLY valid raw JSON:
+Output ONLY valid raw JSON matching this schema (replace angle-bracket placeholders with real content from the clip above):
 {
-  "story_hook": "I CALLED TIME OUT",
-  "climax_quote": "bro you arrested me",
+  "story_hook": "<3_TO_5_WORD_FACTUAL_HOOK_FROM_TRANSCRIPT>",
+  "climax_quote": "<exact 3 to 5 spoken words from transcript>",
   "reaction_triggers": [14.2],
-  "memes": [],
-  "reject_clip": false,
-  "browser_intervals": []
+  "memes": []
 }`,
         },
     };
@@ -1765,7 +1656,7 @@ Output ONLY valid raw JSON:
         waitBetweenTries: 65000,
     })
     GeminiModel2 = {
-        modelName: 'models/gemini-3.5-flash-lite',
+        modelName: 'models/gemini-2.5-flash',
         options: {
             temperature: 0.2,
         },
@@ -1908,31 +1799,26 @@ CLIP THEME:
 {{ $('Loop Clips').item.json.theme }}
 
 AVAILABLE SOUNDS (pick from these exact filenames):
-{{ $('Get Meme List').first().json.stdout ? $('Get Meme List').first().json.stdout.split('---DIMENSIONS---')[0].trim().replace(/\\n/g, ', ') : 'vine-boom-sound-effect_KT89XIq.mp3, huh_37bAoRo.mp3, fartmeme.mp3' }}
-
-DETECTED WEB/BROWSER UI TELEMETRY:
-{{ (function(){ const out=$('Get Meme List').first().json.stdout||''; const p=out.split('---BROWSER_INTERVALS---'); return p[1]?p[1].trim():'{"browser_intervals":[],"browser_ratio":0}'; })() }}
+{{ (function(){ let o=''; try{ o=$('Get Meme List').item.json.stdout||''; }catch(e){ try{ o=$('Get Meme List').last().json.stdout||''; }catch(e2){} } return o ? o.split('---DIMENSIONS---')[0].trim().replace(/\\n/g, ', ') : 'vine-boom-sound-effect_KT89XIq.mp3, huh_37bAoRo.mp3, fartmeme.mp3'; })() }}
 
 FULL TIMECODED TRANSCRIPT OF THE CLIP (read every word before placing ANY effects):
-{{ (function(){ const w=$('7d. Get Subtitles (SRT)').first().json.words; return w&&w.length>0?w.map(x=>'['+x.start.toFixed(1)+'s] '+x.word).join(' '):'NO WORDS'; })() }}`,
+{{ (function(){ let j={}; try{ j=$('7d. Get Subtitles (SRT)').item.json||{}; }catch(e){ try{ j=$('7d. Get Subtitles (SRT)').last().json||{}; }catch(e2){} } const w=j.words||(j.x_groq&&j.x_groq.words)||[]; return w.length>0?w.map(x=>'['+x.start.toFixed(1)+'s] '+x.word).join(' '):'NO WORDS'; })() }}`,
         options: {
             systemMessage: `You are an Elite YouTube Shorts Editor & Sound Designer.
-You have the Director's PROPOSED HOOK BANNER, detected screen web/browser UI telemetry, and the full timecoded transcript below.
+You have the Director's PROPOSED HOOK BANNER and the full timecoded transcript below.
 
-YOUR JOB — output ONLY raw JSON with these 6 fields:
+YOUR JOB — output ONLY raw JSON with these 4 fields:
 
 1. STORY HOOK (Top Banner, 3-5 punchy words in ALL CAPS)
-• PRIMARY DIRECTIVE: Keep the Director's PROPOSED HOOK BANNER as your story_hook UNLESS you can make it punchier while staying 100% FACTUAL to the spoken transcript.
-• CRITICAL ANTI-HALLUCINATION RULE: NEVER invent hackers, scams, or teams if they are not explicitly spoken in the transcript! No generic clickbait (e.g. NEVER output "THE HACKER EXPOSED" or "SAVING THE WHOLE TEAM" unless those exact events occurred).
-• Examples: "I CALLED TIME OUT", "THAT DOES NOT COUNT", "HE ACTUALLY FELL FOR IT", "MY WORST BLUNDER".
+• PRIMARY DIRECTIVE: Write a 100% factual 3-5 word hook in ALL CAPS describing the exact in-clip event, object, or threat spoken in the transcript (e.g., name the monster, item, chase, or specific blunder shown).
+• CRITICAL ANTI-HALLUCINATION & ANTI-TEMPLATE RULE: NEVER invent hackers, scams, or teams if they are not explicitly spoken in the transcript! NEVER output placeholder syntax (<...>), generic filler ("MUST WATCH MOMENT", "VIRAL MOMENT"), or copied prompt phrases. If the Director's PROPOSED HOOK BANNER is factual and specific to this clip's transcript, refine or keep it.
 
 2. CLIMAX QUOTE (Exact 3 to 5 words spoken at the peak moment)
-• Find the EXACT 3-5 words spoken at the highest-energy punchline, arrest, scream, jumpscare, or reaction in the transcript.
-• Example: "bro you arrested me" or "no way you pulled that" or "why did you do that".
+• Extract a verbatim 3-5 word substring from the timecoded transcript at the highest-energy punchline, scream, jumpscare, or reaction.
 • This anchors our visual punch-in zoom to the exact spoken climax audio.
 
 3. REACTION & AUDIO-ENERGY TRIGGERS
-• List of timestamps where the streamer screams, yells, or gets killed in-game (screams_or_reactions).
+• List of timestamps where the streamer screams, yells, or gets killed in-game (reaction_triggers).
 • These command FFmpeg to scale up the gameplay or webcam by 115% for an aggressive, punchy zoom.
 
 4. MEMES (0 TO 2 SOUNDS MAXIMUM)
@@ -1943,20 +1829,12 @@ YOUR JOB — output ONLY raw JSON with these 6 fields:
   - fartmeme.mp3 -> Slapstick fail, dying to a silly trap.
 • Volume: 0.35.
 
-5. STRICT ANTI-BROWSER & WEB UI REJECTION / TRIMMING
-• REJECT or TRIM any timestamp interval where the screen or spoken dialogue shows a web browser (Chrome, Edge), a Roblox group web page, Robux transaction/payout web page, Discord, or a YouTube Studio live chat popout.
-• Combine DETECTED WEB/BROWSER UI TELEMETRY with spoken clues (e.g., reading Roblox group wall, checking Robux payouts, browser tabs, opening live chat popout, typing usernames on Roblox website).
-• Set "reject_clip": true if browser/web UI dominates the clip OR if trimming browser intervals leaves < 24.0s of pure gameplay.
-• Set "browser_intervals": [[start_sec, end_sec]] for any timestamp intervals showing a web browser, Roblox group page, or YouTube Studio popout that must be trimmed out.
-
-Output ONLY valid raw JSON:
+Output ONLY valid raw JSON matching this schema (replace angle-bracket placeholders with real content from the clip above):
 {
-  "story_hook": "I CALLED TIME OUT",
-  "climax_quote": "bro you arrested me",
+  "story_hook": "<3_TO_5_WORD_FACTUAL_HOOK_FROM_TRANSCRIPT>",
+  "climax_quote": "<exact 3 to 5 spoken words from transcript>",
   "reaction_triggers": [14.2],
-  "memes": [],
-  "reject_clip": false,
-  "browser_intervals": []
+  "memes": []
 }`,
         },
     };
@@ -2150,16 +2028,16 @@ const rawText = whisperData.text || '';
 let whisperWords = whisperData.words || (whisperData.x_groq && whisperData.x_groq.words) || [];
 const durationMinutes = (whisperData.duration || (whisperWords.length ? whisperWords[whisperWords.length - 1].end : 1800)) / 60;
 
-// Load Unified Multimodal Timeline Index ONLY in Sandbox dry-run mode (never poison Production with cached disk transcripts)
+// Load freshly generated Unified Multimodal Timeline Index (stale index files are unlinked in Find Stream & Save Whisper Transcript)
 let indexDoc = null;
-if (isDryRun === true && fs.existsSync('/files/temp/unified_timeline_index.json')) {
+if (fs.existsSync('/files/temp/unified_timeline_index.json')) {
   try {
     indexDoc = JSON.parse(fs.readFileSync('/files/temp/unified_timeline_index.json', 'utf8'));
   } catch(e) {}
 }
 
-// Use pre-annotated cadence/telemetry sentences only in Sandbox dry-run mode; Production always uses live Whisper words
-let annotatedSentences = isDryRun === true ? (whisperData.annotated_sentences || (indexDoc && indexDoc.annotated_sentences) || []) : [];
+// Use annotated [dB_PEAK], [CHAT_BURST], [FACE_SPIKE], [WPM_SPIKE] sentences in BOTH Production & Sandbox modes
+let annotatedSentences = whisperData.annotated_sentences || (indexDoc && indexDoc.annotated_sentences) || [];
 
 // Filter Whisper prompt hallucinations (repeated intro music loops)
 const isHallucination = (txt) => {
@@ -2208,11 +2086,11 @@ if (viralAnchors.length === 0) {
     }
   } catch(e) {}
 }
-if (isDryRun === true && viralAnchors.length === 0 && indexDoc && indexDoc.anchors) {
+if (viralAnchors.length === 0 && indexDoc && indexDoc.anchors) {
   viralAnchors = indexDoc.anchors;
 }
 
-const macroTimeline = isDryRun === true ? (whisperData.macro_high_signal_timeline || (indexDoc && indexDoc.macro_high_signal_timeline) || '') : '';
+const macroTimeline = whisperData.macro_high_signal_timeline || (indexDoc && indexDoc.macro_high_signal_timeline) || '';
 
 let multimodalHeader = "";
 if (viralAnchors.length > 0) {
@@ -2260,9 +2138,10 @@ for (let i = 0; i < numChunks; i++) {
   const prompt =
     'SYSTEM: You are an elite YouTube Shorts Viral Content Scout. Read the multimodal transcript index and identify the top 4 most explosive, high-retention gaming moments.\n\n' +
     (multimodalHeader ? multimodalHeader + '\n' : '') +
-    '=== CRITICAL ANTI-ADMIN, ANTI-IDLE & ANTI-BROWSER FILTER ===\n' +
+    '=== CRITICAL ANTI-ADMIN, ANTI-IDLE, ANTI-BROWSER & ANTI-OUTRO FILTER ===\n' +
     'The streamer frequently Alt-Tabs out of Roblox into Chrome, Notepad, or OBS, or idles between matches. You MUST REJECT any segments containing:\n' +
-    '• Typing player usernames into search bars, accepting friend requests on the Roblox website, Discord DMs, or settings.\n' +
+    '• Typing player usernames into search bars, Chrome/browser tabs, YouTube Studio live chat popouts, Roblox website group/payout pages, Discord DMs, or settings.\n' +
+    '• Outro panhandling or stream wrap-up banter ("everybody subscribe", "hit the like button", "smash that like", "see you next stream").\n' +
     '• Reading long lists of $3 donations or subscriber names while idling in menus ([STRICT ANTI-CONVERSATIONAL BANTER & DONATION AFTERMATH]).\n' +
     '• [STRICT ANTI-IDLE & ANTI-STATIC]: REJECT segments where the character is standing still in a lobby waiting for a match, reading chat idly, or staring at a wall!\n' +
     '• [STRICT ANTI-LOADING SCREEN]: NEVER start a clip at [0.0s - 3.0s] or on intro music/loading screens.\n' +
@@ -2307,7 +2186,7 @@ return results;`,
         waitBetweenTries: 65000,
     })
     GeminiModelScout = {
-        modelName: 'models/gemini-3.5-flash-lite',
+        modelName: 'models/gemini-2.5-flash',
         options: {
             temperature: 0.4,
         },
@@ -2414,7 +2293,7 @@ if (anchorsList.length === 0) {
     if (lct && lct.anchors) anchorsList = lct.anchors;
   } catch(e) {}
 }
-if (isDryRun === true && anchorsList.length === 0 && fs.existsSync('/files/temp/unified_timeline_index.json')) {
+if (anchorsList.length === 0 && fs.existsSync('/files/temp/unified_timeline_index.json')) {
   try {
     const idx = JSON.parse(fs.readFileSync('/files/temp/unified_timeline_index.json', 'utf8'));
     if (idx && idx.anchors) anchorsList = idx.anchors;
@@ -2476,8 +2355,9 @@ const prompt =
   '• DISTINCT SCENES (>= 120s APART): Each clip MUST cover a completely different stream highlight at least 120s apart, rejecting superchat thank-yous and giveaway bot spam.\n' +
   '• RUTHLESS DEAD-AIR REMOVAL: Every segment in segments[] MUST advance tension, setup, or payoff. Total stitched duration across all segments MUST be between 24s and 45s.\n\n' +
 
-  '=== RULE 1: STRICT ANTI-ADMIN, ANTI-MENU & ANTI-BROWSER FILTER ===\n' +
-  '• NEVER include desktop/browser screens, notepad, OBS, or admin housekeeping in any clip!\n' +
+  '=== RULE 1: STRICT ANTI-ADMIN, ANTI-MENU, ANTI-OUTRO & ANTI-BROWSER FILTER ===\n' +
+  '• NEVER include desktop/browser screens, Chrome/Edge tabs, YouTube Studio, notepad, OBS, or admin housekeeping in any clip!\n' +
+  '• NEVER include outro panhandling ("everybody subscribe", "hit the like button", "smash the like", "don\'t forget to subscribe") or end-of-stream sign-offs!\n' +
   '• NEVER include slow UI menus, trade request dialogues, inventory browsing, or passive donation roll calls.\n\n' +
 
   '=== RULE 2: ZERO-SECOND RETENTION & HOOK RULES (First 0-3 Seconds) ===\n' +
@@ -2525,7 +2405,7 @@ return [{ pairedItem: { item: 0 }, json: { prompt, targetClips, dry_run: isDryRu
         waitBetweenTries: 65000,
     })
     GeminiModelDirector = {
-        modelName: 'models/gemini-3.5-flash-lite',
+        modelName: 'models/gemini-2.5-flash',
         options: {
             temperature: 0.1,
         },
@@ -2553,18 +2433,53 @@ return [{ pairedItem: { item: 0 }, json: { prompt, targetClips, dry_run: isDryRu
     })
     _5SplitClips = {
         jsCode: `const items = $input.all();
+const fs = require('fs');
 let allClips = [];
 
 let streamerName = "Streamer";
 try { streamerName = $('Config').item.json.streamer_name || "Streamer"; } catch(e) {}
 if (streamerName === "Streamer") {
-  try { streamerName = $('Load Cached Telemetry').first().json.streamer_name || "Streamer"; } catch(e) {}
+  try { streamerName = $('Load Cached Telemetry').last().json.streamer_name || "Streamer"; } catch(e) {}
 }
 
 let isDryRun = false;
-try { isDryRun = Boolean($('3. Prepare Director Prompt').first().json.dry_run); } catch(e) {}
+try { isDryRun = Boolean($('3. Prepare Director Prompt').last().json.dry_run); } catch(e) {}
 if (!isDryRun) {
-  try { isDryRun = Boolean($('Load Cached Telemetry').first().json.dry_run); } catch(e) {}
+  try { isDryRun = Boolean($('Load Cached Telemetry').last().json.dry_run); } catch(e) {}
+}
+
+// Load Whisper words for outro-panhandling & transcript verification
+let whisperWords = [];
+try {
+  if (fs.existsSync('/files/temp/transcript.json')) {
+    const tj = JSON.parse(fs.readFileSync('/files/temp/transcript.json', 'utf8'));
+    whisperWords = tj.words || (tj.x_groq && tj.x_groq.words) || [];
+  }
+} catch(e) {}
+if (whisperWords.length === 0) {
+  try {
+    const wj = $('3. Groq Whisper').last().json || {};
+    whisperWords = wj.words || (wj.x_groq && wj.x_groq.words) || [];
+  } catch(e) {}
+}
+if (whisperWords.length === 0) {
+  try {
+    const wj2 = $('3. Groq Whisper Fallback').last().json || {};
+    whisperWords = wj2.words || (wj2.x_groq && wj2.x_groq.words) || [];
+  } catch(e) {}
+}
+
+const OUTRO_PANHANDLING_RE = /\b(everybody\s+subscribe|hit\s+the\s+like\s+button|smash\s+(?:that\s+|the\s+)?like|don'?t\s+forget\s+to\s+subscribe|make\s+sure\s+to\s+subscribe|drop\s+a\s+like\s+and\s+subscribe|subscribe\s+to\s+the\s+channel|thanks\s+for\s+watching\s+(?:guys|everyone)|peace\s+out\s+everybody)\b/i;
+const BANNED_CAPTION_RE = /^(I CALLED TIME OUT|HE ACTUALLY FELL FOR IT|THAT DOES NOT COUNT|MY WORST BLUNDER|MUST WATCH MOMENT|VIRAL MOMENT)$/i;
+
+function getWindowTranscript(segs) {
+  if (!whisperWords.length || !Array.isArray(segs) || !segs.length) return "";
+  const parts = [];
+  for (const s of segs) {
+    const w = whisperWords.filter(x => x.end >= s.start && x.start <= s.end).map(x => x.word || "").join(" ");
+    if (w) parts.push(w);
+  }
+  return parts.join(" ");
 }
 
 let lastContent = "";
@@ -2687,7 +2602,10 @@ return allClips.map((clip, index) => {
 
   let sTime = parseFloat(clip.start_time) || (validSegs[0] ? validSegs[0].start : 3.0);
   let eTime = parseFloat(clip.end_time) || (validSegs.length ? validSegs[validSegs.length - 1].end : (sTime + 32.0));
-  let pTime = parseFloat(clip.payoff_time) || (eTime - 3.5);
+  const explicitPayoff = (clip.payoff_time !== undefined && clip.payoff_time !== null && !isNaN(parseFloat(clip.payoff_time)))
+    ? parseFloat(clip.payoff_time)
+    : 0;
+  let pTime = explicitPayoff > 0 ? explicitPayoff : (eTime - 3.5);
 
   // Only permit non-chronological HOOK_CLIMAX when explicitly provided by Director AND total clip duration >= 28s
   if (validSegs.length > 1 && validSegs[0].role === 'HOOK_CLIMAX') {
@@ -2697,59 +2615,74 @@ return allClips.map((clip, index) => {
     }
   }
 
-  if (validSegs.length <= 1) {
-    if (sTime < 3.0) {
-      sTime = 3.0;
-    }
-
-    // Preserve continuous gameplay context and enforce strictly [24.0s, 45.0s]
-    let dur = eTime - sTime;
-    if (dur < 24.0) {
-      const deficit = 26.0 - dur;
-      const preExpand = Math.min(deficit * 0.6, Math.max(0, sTime - 3.0));
-      sTime = Number((sTime - preExpand).toFixed(2));
-      eTime = Number((eTime + (deficit - preExpand)).toFixed(2));
-    } else if (dur > 45.0) {
-      if (pTime > sTime && pTime < eTime && (pTime - sTime) > 32.0) {
-        sTime = Number(Math.max(3.0, pTime - 32.0).toFixed(2));
-      }
-      eTime = Number(Math.min(eTime, sTime + 42.0).toFixed(2));
-    }
-
+  if (validSegs.length === 0) {
     validSegs = [{
-      start: sTime,
-      end: eTime,
-      role: (validSegs[0] && validSegs[0].role !== 'HOOK_CLIMAX') ? validSegs[0].role : 'STORY_BEAT'
+      start: Math.max(3.0, sTime),
+      end: Math.max(Math.max(3.0, sTime) + 1.0, eTime),
+      role: 'STORY_BEAT'
     }];
-  } else {
-    // Enforce total stitched duration strictly between 24.0s and 45.0s for multi-segment EDLs
-    let totalSegDur = validSegs.reduce((acc, s) => acc + (s.end - s.start), 0);
-    if (totalSegDur < 24.0) {
-      const deficit = 25.0 - totalSegDur;
-      const lastIdx = validSegs.length - 1;
-      validSegs[lastIdx].end = Number((validSegs[lastIdx].end + deficit).toFixed(2));
-    } else if (totalSegDur > 45.0) {
-      let excess = totalSegDur - 44.0;
-      for (let i = validSegs.length - 1; i >= 0 && excess > 0; i--) {
-        const segDur = validSegs[i].end - validSegs[i].start;
-        const minAllowed = validSegs[i].role === 'HOOK_CLIMAX' ? 1.8 : 4.0;
-        if (segDur > minAllowed) {
-          const cut = Math.min(excess, segDur - minAllowed);
-          validSegs[i].end = Number((validSegs[i].end - cut).toFixed(2));
-          excess -= cut;
-        }
+  }
+
+  const origLastEnd = validSegs[validSegs.length - 1].end;
+  // Strictly NEVER pad more than +2.5s past payoff_time or origLastEnd; clamp excess post-climax chatter
+  const maxTailEnd = Number(Math.min(
+    origLastEnd + 2.5,
+    (explicitPayoff > 0 && explicitPayoff <= origLastEnd + 2.5) ? (explicitPayoff + 2.5) : (origLastEnd + 2.5)
+  ).toFixed(2));
+  if (validSegs[validSegs.length - 1].end > maxTailEnd) {
+    const clamped = Math.max(validSegs[validSegs.length - 1].start + 1.0, maxTailEnd);
+    validSegs[validSegs.length - 1].end = Number(clamped.toFixed(2));
+  }
+
+  // Enforce duration strictly between 24.0s and 45.0s: expand backward up to -12s first, then <= +2.5s tail headroom
+  let totalSegDur = validSegs.reduce((acc, s) => acc + (s.end - s.start), 0);
+  if (totalSegDur < 24.0) {
+    let deficit = 24.5 - totalSegDur;
+    const bodyIdx = (validSegs[0].role === 'HOOK_CLIMAX' && validSegs.length > 1) ? 1 : 0;
+    const bodySeg = validSegs[bodyIdx];
+    const lastSeg = validSegs[validSegs.length - 1];
+    if (bodySeg.role !== 'HOOK_CLIMAX') {
+      const maxBack = Math.min(12.0, Math.max(0, bodySeg.start - 3.0));
+      const preExpand = Math.min(deficit, maxBack);
+      bodySeg.start = Number((bodySeg.start - preExpand).toFixed(2));
+      deficit -= preExpand;
+    }
+    if (deficit > 0) {
+      const postHeadroom = Math.max(0, maxTailEnd - lastSeg.end);
+      const postExpand = Math.min(deficit, postHeadroom);
+      if (postExpand > 0) {
+        lastSeg.end = Number((lastSeg.end + postExpand).toFixed(2));
       }
     }
-    sTime = validSegs[0].start;
-    eTime = validSegs[validSegs.length - 1].end;
+  } else if (totalSegDur > 45.0) {
+    let excess = totalSegDur - 44.0;
+    for (let i = validSegs.length - 1; i >= 0 && excess > 0; i--) {
+      const segDur = validSegs[i].end - validSegs[i].start;
+      const minAllowed = validSegs[i].role === 'HOOK_CLIMAX' ? 1.8 : 4.0;
+      if (segDur > minAllowed) {
+        const cut = Math.min(excess, segDur - minAllowed);
+        validSegs[i].end = Number((validSegs[i].end - cut).toFixed(2));
+        excess -= cut;
+      }
+    }
   }
+
+  const bodySegs = validSegs.filter(s => s.role !== 'HOOK_CLIMAX');
+  const primaryStart = bodySegs.length ? Math.min(...bodySegs.map(s => s.start)) : validSegs[0].start;
+  const primaryEnd = bodySegs.length ? Math.max(...bodySegs.map(s => s.end)) : validSegs[validSegs.length - 1].end;
+  sTime = validSegs[0].start;
+  eTime = validSegs[validSegs.length - 1].end;
 
   let hookCaption = (clip.hook_caption || "").trim().toUpperCase();
-  if (!hookCaption || hookCaption.length < 3) {
+  if (!hookCaption || hookCaption.length < 3 || BANNED_CAPTION_RE.test(hookCaption) || /<[^>]+>/.test(hookCaption)) {
     hookCaption = (clip.title || "").replace(/[^a-zA-Z0-9\s]/g, "").trim().toUpperCase();
-    const words = hookCaption.split(/\s+/).slice(0, 5);
+    const words = hookCaption.split(/\s+/).filter(Boolean).slice(0, 5);
     hookCaption = words.join(" ");
   }
+
+  const windowSpeech = getWindowTranscript(validSegs);
+  const fullSpeech = (clip.assembled_spoken_script || "") + " " + windowSpeech + " " + (clip.title || "");
+  const isOutro = OUTRO_PANHANDLING_RE.test(fullSpeech);
 
   return { json: {
     dry_run: isDryRun,
@@ -2757,11 +2690,15 @@ return allClips.map((clip, index) => {
     start_time: sTime,
     end_time: eTime,
     payoff_time: pTime,
+    _primary_start: primaryStart,
+    _primary_end: primaryEnd,
+    _total_dur: Number(validSegs.reduce((acc, s) => acc + (s.end - s.start), 0).toFixed(2)),
+    _is_outro: isOutro,
     segments: validSegs,
     narrative_archetype: clip.narrative_archetype || "HUBRIS_INSTANT_KARMA",
     title: clip.title || (streamerName + '_Clip_' + (index + 1)),
     hook_caption: hookCaption,
-    virality_score: clip.virality_score || 0,
+    virality_score: Number(clip.virality_score) || 0,
     theme: clip.theme || "Gaming",
     structure_type: clip.structure_type || clip.narrative_archetype || "Narrative Arc",
     assembled_spoken_script: clip.assembled_spoken_script || "",
@@ -2769,6 +2706,30 @@ return allClips.map((clip, index) => {
     cause_and_effect_setup: clip.cause_and_effect_setup || "",
     estimated_segment: clip.estimated_vod_segment || "Unknown"
   }};
+})
+.filter(item => !item.json._is_outro)
+.sort((a, b) => (b.json.virality_score - a.json.virality_score) || (b.json._total_dur - a.json._total_dur))
+.reduce((accepted, candidate) => {
+  const cSegs = candidate.json.segments;
+  const cS = candidate.json._primary_start;
+  const cE = candidate.json._primary_end;
+  const clashes = accepted.some(existing => {
+    const eS = existing.json._primary_start;
+    const eE = existing.json._primary_end;
+    const gap = Math.max(0, Math.max(cS - eE, eS - cE));
+    if (gap < 90.0) return true;
+    return cSegs.some(cs => existing.json.segments.some(es => Math.min(cs.end, es.end) > Math.max(cs.start, es.start)));
+  });
+  if (!clashes) accepted.push(candidate);
+  return accepted;
+}, [])
+.map((item, idx) => {
+  delete item.json._primary_start;
+  delete item.json._primary_end;
+  delete item.json._total_dur;
+  delete item.json._is_outro;
+  item.json.clip_number = idx + 1;
+  return item;
 });`,
     };
 
@@ -2780,7 +2741,7 @@ return allClips.map((clip, index) => {
         position: [-81420, 26840],
     })
     WriteSidecarJson = {
-        command: `={{ (function(){ let isRejected = false; try { isRejected = !!$('Create Subtitle Binary').first().json.rejected_browser; } catch(e) {} if (isRejected) { return 'echo "Skipped sidecar for rejected browser clip"'; } let loopItem = {}; try { loopItem = $('Loop Clips').item.json || {}; } catch(e) { try { loopItem = $('Loop Clips').first().json || {}; } catch(e2) {} } const title = (loopItem.title || 'clip').replace(/[\\/\\\\"'<>|&;:]/g, '_').trim(); const sidecarFile = '/files/outputs/' + title + '.json'; let summary = {}; try { summary = JSON.parse($('1. Global Summary AI').first().json.output || '{}'); } catch(e) {} let caption = title; try { let raw = ($('Context Merge Agent').first().json.output || '{}').replace(/\`\`\`json/gi,'').replace(/\`\`\`/g,'').trim(); caption = JSON.parse(raw).story_hook || title; } catch(e) {} const meta = { viral_caption: caption, game: summary.game || 'Gaming', global_summary: summary.global_summary || '', vibe: summary.vibe || '', theme: loopItem.theme || '', key_themes: summary.key_themes || [] }; const jsonStr = JSON.stringify(meta); return \`cat <<'SIDECAR_EOF' > "\${sidecarFile}"
+        command: `={{ (function(){ function getNode(name){ try{ const it=$(name).item; if(it&&it.json&&Object.keys(it.json).length) return it.json; }catch(e){} try{ const lt=$(name).last(); if(lt&&lt.json&&Object.keys(lt.json).length) return lt.json; }catch(e2){} return {}; } const loopItem = getNode('Loop Clips'); const title = (loopItem.title || 'clip').replace(/[\\/\\\\"'<>|&;:]/g, '_').trim(); const sidecarFile = '/files/outputs/' + title + '.json'; let summary = {}; try { const sNode = getNode('1. Global Summary AI'); summary = JSON.parse((sNode.output || '{}').replace(/\`\`\`json/gi,'').replace(/\`\`\`/g,'').trim()); } catch(e) {} const BANNED = /^(I CALLED TIME OUT|HE ACTUALLY FELL FOR IT|THAT DOES NOT COUNT|MY WORST BLUNDER|MUST WATCH MOMENT|VIRAL MOMENT)$/i; const fallbackCap = (loopItem.hook_caption && !BANNED.test(String(loopItem.hook_caption).trim()) && !/<[^>]+>/.test(String(loopItem.hook_caption))) ? String(loopItem.hook_caption).trim().toUpperCase() : title; let caption = fallbackCap; try { let raw = (getNode('Context Merge Agent').output || getNode('Context Merge Fallback').output || '{}').replace(/\`\`\`json/gi,'').replace(/\`\`\`/g,'').trim(); const parsed = JSON.parse(raw).story_hook || ''; if (parsed && !BANNED.test(parsed.trim()) && !/<[^>]+>/.test(parsed)) { caption = parsed.trim().toUpperCase(); } } catch(e) {} const meta = { viral_caption: caption, game: summary.game || 'Gaming', global_summary: summary.global_summary || '', vibe: summary.vibe || '', theme: loopItem.theme || '', key_themes: summary.key_themes || [] }; const jsonStr = JSON.stringify(meta); return \`cat <<'SIDECAR_EOF' > "\${sidecarFile}"
 \${jsonStr}
 SIDECAR_EOF\`; })() }}`,
     };
@@ -2845,7 +2806,7 @@ return [{ pairedItem: { item: 0 }, json: { url: randomUrl } }];`,
     })
     RunMultimodalFusion = {
         command:
-            '=python3 /files/multimodal_analyzer.py "/files/inputs/{{ $(\'Edit Fields\').first().json.stream_file }}" "/files/temp/audio.mp3" "/files/temp/cam_config.json" "/files/temp/viral_anchors.json"',
+            '=python3 /files/multimodal_analyzer.py "/files/inputs/{{ $(\'Edit Fields\').first().json.stream_file }}" "/files/temp/audio.mp3" "/files/temp/cam_config.json" "/files/temp/viral_anchors.json" && python3 /files/telemetry_fusion_indexer.py "/files/temp/transcript.json" >/dev/null || true',
     };
 
     WaitBeforeScout = {

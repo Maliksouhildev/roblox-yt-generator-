@@ -121,12 +121,14 @@ def analyze_humor_multimodal(
         f"DIALOGUE IN PRECEDING 14 SECONDS:\n\"{transcript_text}\"\n\n"
         "Attached are sequential visual frames showing what happened on screen leading up to this laughter.\n\n"
         "TASK:\n"
-        "1. Identify the EXACT comedic catalyst: Was it verbal dialogue, a visual gameplay fail, ragdoll physics, a game glitch, silent streamer face reaction, or instant karma?\n"
-        "2. In 1 clear, high-density sentence, explain WHY the audience laughed.\n"
-        "3. COLD VIEWER CONTEXT CHECK: Can a stranger scrolling TikTok who has NEVER seen this streamer understand why this is funny within 3 seconds? Answer TRUE or FALSE. (Reject if it requires 2 hours of inside lore, TTS donation meta-banter, or boring repetitive deaths).\n"
-        "4. SETUP TENSION HOOK: Give the best timestamp (e.g. 0.5s before the blunder or the bold declaration) for an in-media-res hook that builds tension WITHOUT spoiling the verbal punchline at 0:00.\n\n"
+        "1. Check the attached visual frames for ANY desktop/web-browser screen (Chrome/Edge tabs, YouTube Studio live chat popout, OBS/Notepad windows, Discord, or Roblox website group/payout pages). If ANY frame shows desktop/browser UI instead of active gameplay, set \"is_desktop_or_browser\": true and \"cold_viewer_approved\": false.\n"
+        "2. Identify the EXACT comedic catalyst: Was it verbal dialogue, a visual gameplay fail, ragdoll physics, a game glitch, silent streamer face reaction, or instant karma?\n"
+        "3. In 1 clear, high-density sentence, explain WHY the audience laughed.\n"
+        "4. COLD VIEWER CONTEXT CHECK: Can a stranger scrolling TikTok who has NEVER seen this streamer understand why this is funny within 3 seconds? Answer TRUE or FALSE. (Reject if it shows a browser/desktop window, requires 2 hours of inside lore, TTS donation meta-banter, outro panhandling like 'hit the like button'/'everybody subscribe', or boring repetitive deaths).\n"
+        "5. SETUP TENSION HOOK: Give the best timestamp (e.g. 0.5s before the blunder or the bold declaration) for an in-media-res hook that builds tension WITHOUT spoiling the verbal punchline at 0:00.\n\n"
         "OUTPUT FORMAT (STRICT JSON ONLY):\n"
         "{\n"
+        "  \"is_desktop_or_browser\": false,\n"
         "  \"comedy_mechanism\": \"Instant Karma / Physical Blunder / Verbal Punchline\",\n"
         "  \"why_chat_laughed\": \"...\",\n"
         "  \"cold_viewer_approved\": true,\n"
@@ -254,9 +256,9 @@ def process_comedic_beats(
             t_laugh
         )
 
-        # Skip if cold viewer check rejected (e.g. inside joke / meta-banter)
-        if not humor_analysis.get("cold_viewer_approved", True):
-            print(f"[Humor Reasoner] Skipping burst at {t_laugh}s: Failed Cold Viewer Check ({humor_analysis.get('rejection_reason')})")
+        # Skip if desktop/browser UI visible or cold viewer check rejected (e.g. inside joke / meta-banter)
+        if humor_analysis.get("is_desktop_or_browser", False) or not humor_analysis.get("cold_viewer_approved", True):
+            print(f"[Humor Reasoner] Skipping burst at {t_laugh}s: Failed Vision/Cold Viewer Check ({humor_analysis.get('rejection_reason')})")
             continue
 
         # 5. Formulate Recommended Short Framing
