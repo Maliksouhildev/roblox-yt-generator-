@@ -595,12 +595,22 @@ return [{ pairedItem: { item: 0 }, json: { vision_payload: {
     })
     _6ExtractViralSegments = {
         jsCode: `const clipData = $input.first().json;
-const start = clipData.start_time;
-const end = clipData.end_time;
-if (typeof start !== 'number' || typeof end !== 'number') return [{ pairedItem: { item: 0 }, json: { error: "No timestamps", clip_title: clipData.title } }];
-
 const BUFFER = 0.12; // Tight buffer for snappy Shorts pacing
 let finalSegs = [];
+
+// Support discrete multi-beat segments to jump-cut dead air between Beat 1 and Beat 2
+let rawIntervals = [];
+if (clipData.segments && Array.isArray(clipData.segments) && clipData.segments.length > 0) {
+  rawIntervals = clipData.segments.filter(s => typeof s.start === 'number' && typeof s.end === 'number' && s.end > s.start);
+}
+if (rawIntervals.length === 0) {
+  const start = clipData.start_time;
+  const end = clipData.end_time;
+  if (typeof start !== 'number' || typeof end !== 'number') {
+    return [{ pairedItem: { item: 0 }, json: { error: "No timestamps", clip_title: clipData.title } }];
+  }
+  rawIntervals = [{ start, end }];
+}
 
 // Try to get words from Whisper transcript to cut silences dynamically
 let words = [];
@@ -615,66 +625,78 @@ if (words.length === 0) {
   } catch(e) {}
 }
 
-if (words.length > 0) {
-  const clipWords = words.filter(w => w.end >= start && w.start <= end);
-  
-  if (clipWords.length > 0) {
-    // ZERO-SECOND RETENTION: Trim conversational hesitation filler ("speaking of", "um", "oh since", "like so")
-    let wordIdx = 0;
-    const fillerWords = new Set(["speaking", "of", "um", "uh", "oh", "since", "everyone", "like", "so"]);
-    while (wordIdx < Math.min(3, clipWords.length - 1)) {
-      const cleanWord = String(clipWords[wordIdx].word || "").toLowerCase().replace(/[^a-z]/g, '');
-      if (fillerWords.has(cleanWord)) {
-        wordIdx++;
-      } else {
-        break;
-      }
-    }
-    const initialWord = clipWords[wordIdx] || clipWords[0];
+const fillerWords = new Set(["speaking", "of", "um", "uh", "oh", "since", "everyone", "like", "so"]);
 
-    // Trim initial silence / loading screen: start tightly at first spoken word
-    let currentSegStart = Math.max(start, clipWords[0].start - 0.10);
-    if (wordIdx > 0 && initialWord.start > currentSegStart) {
-      currentSegStart = initialWord.start - 0.08;
-    }
-    let lastWordEnd = initialWord.end;
-    
-    for (let i = wordIdx + 1; i < clipWords.length; i++) {
-      const w = clipWords[i];
-      // If gap is more than 0.55s, jump cut the dead air!
-      if (w.start - lastWordEnd > 0.55) {
-        finalSegs.push({
-          name: 'MainClip_part',
-          start: currentSegStart,
-          end: lastWordEnd + BUFFER
-        });
-        currentSegStart = Math.max(lastWordEnd + BUFFER, w.start - BUFFER);
+rawIntervals.forEach((interval, intervalIdx) => {
+  const intStart = interval.start;
+  const intEnd = interval.end;
+
+  if (words.length > 0) {
+    const clipWords = words.filter(w => w.end >= intStart && w.start <= intEnd);
+
+    if (clipWords.length > 0) {
+      let wordIdx = 0;
+      if (intervalIdx === 0) {
+        // Trim conversational hesitation filler only at the very start of the Short
+        while (wordIdx < Math.min(3, clipWords.length - 1)) {
+          const cleanWord = String(clipWords[wordIdx].word || "").toLowerCase().replace(/[^a-z]/g, '');
+          if (fillerWords.has(cleanWord)) {
+            wordIdx++;
+          } else {
+            break;
+          }
+        }
       }
-      lastWordEnd = w.end;
+      const start = intStart;
+      const initialWord = clipWords[wordIdx] || clipWords[0];
+      let currentSegStart = Math.max(start, clipWords[0].start - 0.10);
+      if (wordIdx > 0 && initialWord.start > currentSegStart) {
+        currentSegStart = initialWord.start - 0.08;
+      }
+      let lastWordEnd = initialWord.end;
+
+      for (let i = wordIdx + 1; i < clipWords.length; i++) {
+        const w = clipWords[i];
+        // If gap is more than 0.55s, jump cut the dead air!
+        if (w.start - lastWordEnd > 0.55) {
+          finalSegs.push({
+            name: `Beat${intervalIdx+1}_part`,
+            start: currentSegStart,
+            end: lastWordEnd + BUFFER
+          });
+          currentSegStart = Math.max(lastWordEnd + BUFFER, w.start - BUFFER);
+        }
+        lastWordEnd = w.end;
+      }
+      finalSegs.push({
+        name: `Beat${intervalIdx+1}_part`,
+        start: currentSegStart,
+        end: Math.min(intEnd, lastWordEnd + BUFFER)
+      });
+    } else {
+      finalSegs.push({
+        name: `Beat${intervalIdx+1}`,
+        start: Math.max(0, intStart - BUFFER),
+        end: intEnd + BUFFER
+      });
     }
+  } else {
     finalSegs.push({
-      name: 'MainClip_part',
-      start: currentSegStart,
-      end: Math.min(end, lastWordEnd + BUFFER)
+      name: `Beat${intervalIdx+1}`,
+      start: Math.max(0, intStart - BUFFER),
+      end: intEnd + BUFFER
     });
   }
-}
-
-// Fallback if no words found
-if (finalSegs.length === 0) {
-  finalSegs = [{
-    name: 'MainClip',
-    start: Math.max(0, start - BUFFER),
-    end: end + BUFFER
-  }];
-}
+});
 
 // COLD OPEN RETENTION TRAP: Prepend 1.8s cold open payoff teaser at t=0
 if (typeof clipData.cold_open_start === 'number' && typeof clipData.cold_open_end === 'number') {
   const coStart = clipData.cold_open_start;
   const coEnd = Math.min(clipData.cold_open_end, coStart + 1.8);
-  if (coEnd - coStart >= 1.0 && coStart >= start && coEnd <= end) {
-    if (coStart - start > 4.0) {
+  const totalStart = rawIntervals[0].start;
+  const totalEnd = rawIntervals[rawIntervals.length - 1].end;
+  if (coEnd - coStart >= 1.0 && coStart >= totalStart && coEnd <= totalEnd) {
+    if (coStart - totalStart > 4.0) {
       finalSegs.unshift({
         name: 'ColdOpen_teaser',
         start: coStart,
@@ -684,16 +706,22 @@ if (typeof clipData.cold_open_start === 'number' && typeof clipData.cold_open_en
   }
 }
 
-return finalSegs.map((seg, i) => ({ json: {
-    segment_name: seg.name, segment_order: i + 1,
-    start: seg.start, end: seg.end, duration: seg.end - seg.start,
-    payoff_time: clipData.payoff_time || seg.end - 3.5,
-    cold_open_start: clipData.cold_open_start,
-    cold_open_end: clipData.cold_open_end,
-    clip_title: clipData.title, theme: clipData.theme || "None",
-    structure_type: clipData.structure_type || "Narrative Arc"
-}}));
-`,
+// Return clean segments
+return finalSegs.map((seg, idx) => ({
+  pairedItem: { item: 0 },
+  json: {
+    segment_order: idx,
+    segment_name: seg.name,
+    start: Number(seg.start.toFixed(3)),
+    end: Number(seg.end.toFixed(3)),
+    duration: Number((seg.end - seg.start).toFixed(3)),
+    clip_title: clipData.title,
+    theme: clipData.theme,
+    hook_caption: clipData.hook_caption,
+    cause_and_effect_setup: clipData.cause_and_effect_setup,
+    total_segments: finalSegs.length
+  }
+}));`,
     };
 
     @node({
@@ -2032,7 +2060,10 @@ let allSnippets = "";
 
 // Gather all the plain text snippets from the Scout pass
 items.forEach((item, index) => {
-  allSnippets += `\n\n=== SCOUTED MOMENTS CHUNK ${index + 1} ===\n`;
+  allSnippets += `
+
+=== SCOUTED MOMENTS CHUNK ${index + 1} ===
+`;
   allSnippets += item.json.text || item.json.output || "";
 });
 
@@ -2045,8 +2076,15 @@ try {
   if (fusionItem && fusionItem.json && fusionItem.json.stdout) {
     const parsed = JSON.parse(fusionItem.json.stdout);
     if (parsed && parsed.anchors && parsed.anchors.length > 0) {
-      viralContext = "\n=== PROVEN AUDIENCE & REACTION ANCHORS ===\n" +
-        parsed.anchors.map(a => `[ANCHOR #${a.anchor_id}] Peak at ${a.peak_time}s | Score: ${a.virality_score}/100 | ${a.comedy_mechanism || 'Comedy'}\n  - Why They Laughed: ${a.why_chat_laughed || a.chat_signal}\n  - Tension Hook: ${a.setup_tension_hook || '0.5s before catalyst'}\n  - Multi-Beat Callback: ${a.is_multi_beat ? 'Yes (Beat 2 at ' + a.beat_2?.peak_time + 's)' : 'No (Keep tight 12-18s single beat)'}`).join("\n") + "\n";
+      viralContext = "
+=== PROVEN AUDIENCE & REACTION ANCHORS ===
+" +
+        parsed.anchors.map(a => `[ANCHOR #${a.anchor_id}] Peak at ${a.peak_time}s | Score: ${a.virality_score}/100 | ${a.comedy_mechanism || 'Comedy'}
+  - Why They Laughed: ${a.why_chat_laughed || a.chat_signal}
+  - Tension Hook: ${a.setup_tension_hook || '0.5s before catalyst'}
+  - Multi-Beat Callback: ${a.is_multi_beat ? 'Yes (Beat 2 at ' + a.beat_2?.peak_time + 's)' : 'No (Keep tight 12-18s single beat)'}`).join("
+") + "
+";
     }
   }
 } catch(e) {}
@@ -2060,7 +2098,8 @@ try {
     summary.global_summary ? "STREAM SUMMARY: " + summary.global_summary : "",
     summary.vibe ? "VIBE: " + summary.vibe : "",
     (summary.key_themes && summary.key_themes.length) ? "KEY THEMES: " + summary.key_themes.join(", ") : ""
-  ].filter(Boolean).join("\n");
+  ].filter(Boolean).join("
+");
 } catch(e) {}
 
 // Target top clips
@@ -2069,52 +2108,113 @@ const targetClips = 6;
 const jsonSchema = '{"clips":[{"clip_number":1,"estimated_vod_segment":"X-Y minutes","title":"3-4 Word Curiosity Teaser 💀","hook_caption":"3-5 WORDS IN ALL CAPS","theme":"Core viral theme","structure_type":"Narrative Arc","start_time":105.2,"end_time":142.0,"payoff_time":138.5,"cold_open_start":138.0,"cold_open_end":140.0,"cause_and_effect_setup":"Clear comedic setup explaining why the moment is funny/intense"}]}';
 
 const prompt = 
-  'SYSTEM: You are the #1 Elite YouTube Shorts Creative Director & Narrative Architect. You are selecting and pacing the absolute best viral clips from a gaming stream.\n\n' +
+  'SYSTEM: You are the #1 Elite YouTube Shorts Creative Director & Narrative Architect. You are selecting and pacing the absolute best viral clips from a gaming stream.
 
-  (streamContext ? '=== STREAM CONTEXT ===\n' + streamContext + '\n\n' : '') +
+' +
 
-  '=== RULE 1: STRICT ANTI-ADMIN, ANTI-MENU & ANTI-BROWSER FILTER ===\n' +
-  '• NEVER include desktop/browser screens, notepad, OBS, or admin housekeeping in any clip!\n' +
-  '• NEVER include slow UI menus, trade request dialogues, inventory browsing, or reading system error boxes (e.g. 15 seconds of trade negotiation to read a Level 1 text box)!\n' +
-  '• NEVER include passive complaining about missing sound effects, audio settings, or game glitches that stall momentum.\n' +
-  '• If an in-game climax is followed by the streamer sitting reading donor lists or opening menus, SET end_time EXACTLY 2.0 TO 3.5 SECONDS AFTER THE IN-GAME REACTION/LAUGH! Cut BEFORE they switch windows or start reading donor roll calls.\n\n' +
+  (streamContext ? '=== STREAM CONTEXT ===
+' + streamContext + '
 
-  '=== RULE 2: ZERO-SECOND RETENTION & COLD OPEN RETENTION TRAP (First 0-3 Seconds) ===\n' +
-  '• ZERO DEAD TIME AT HOOK: The first 3 seconds are make-or-break for Shorts retention.\n' +
-  '• ZERO-SECOND RETENTION & STRICT ANTI-MID-THOUGHT PREAMBLE: REJECT clips that start mid-thought, mid-sentence, or with casual hesitation banter (e.g. "Speaking of, um...", "Oh, since everyone\'s here"). Start at the exact catalyst of the event!\n' +
-  '• COLD OPEN RETENTION TRAP & ZERO-SECOND HOOK: To maximize algorithmic velocity and FYP retention, identify the highest-energy payoff and designate a 1.5-2.0s cold open segment (cold_open_start, cold_open_end) from the climactic payoff to duplicate at the very beginning of the clip, OR synthesize a strong verbal title hook to stop the scroll.\n' +
-  '• NEVER start on a loading screen, black screen, spawn lobby, or static character staring into space.\n' +
-  '• NO IRRELEVANT PREAMBLE: Do NOT waste 5-10 seconds on off-topic stream banter before addressing the titular event (e.g. a dev joining or boss fight). Start at the exact catalyst of the event!\n' +
-  '• TIGHT SETUP BEFORE CLIMAX: The buildup (payoff_time - start_time) MUST strictly be between 8s and 16s (sweet spot 10-14s). Never force 20-30s of pre-match static hype or potato grinding!\n' +
-  '• The start_time MUST capture the exact second the action, debate, or spoken hook begins!\n\n' +
+' : '') +
 
-  '=== RULE 3: SINGLE PREMISE NARRATIVE COHESION & CAUSE-EFFECT EDL (ANTI-CHAOS) ===\n' +
-  '• SINGLE PREMISE NARRATIVE COHESION: Every Short must tell ONE single unified micro-story that fulfills the hook banner and title.\n' +
-  '• CAUSE-EFFECT EDL (ANTI-CHAOS): DISQUALIFY raw isolated volume spikes and contextless yelling (e.g. screaming "bunger", "launch"). The EDL must pair a clear comedic setup with a distinct payoff. Cold audiences on the FYP must understand the narrative through-line immediately.\n' +
-  '• REJECT clips that jump between disconnected topics (e.g. complaining about an avatar, then jumping to buying a store item).\n' +
-  '• REJECT raw unedited repetitive grinding, farming coins/potatoes, or monotonous clicking loops. For upgrades, start directly before purchase (max 6-8s before purchase).\n\n' +
+  '=== RULE 1: STRICT ANTI-ADMIN, ANTI-MENU & ANTI-BROWSER FILTER ===
+' +
+  '• NEVER include desktop/browser screens, notepad, OBS, or admin housekeeping in any clip!
+' +
+  '• NEVER include slow UI menus, trade request dialogues, inventory browsing, or reading system error boxes (e.g. 15 seconds of trade negotiation to read a Level 1 text box)!
+' +
+  '• NEVER include passive complaining about missing sound effects, audio settings, or game glitches that stall momentum.
+' +
+  '• If an in-game climax is followed by the streamer sitting reading donor lists or opening menus, SET end_time EXACTLY 2.0 TO 3.5 SECONDS AFTER THE IN-GAME REACTION/LAUGH! Cut BEFORE they switch windows or start reading donor roll calls.
 
-  '=== RULE 4: PAYOFF IMPACT & ANTI-CLIMAX FILTER ===\n' +
-  '• SATISFYING RESOLUTION REQUIRED: The climax/payoff MUST deliver real visual or comedic impact. DISQUALIFY weak or anticlimactic endings (e.g. an opponent glitching through a wall in the distance, or a developer lying dead and leaving without interacting).\n' +
-  '• CLIMAX IN FINAL 15-25%: The payoff_time (the arrest, scream, roast, rare drop, or punchline) MUST occur near the end of the clip.\n' +
-  '• PUNCHY AFTERMATH: Allow strictly 2.0 to 3.5 seconds of high-energy reaction/laugh after payoff_time, then CUT CLEANLY. Never leave 15-20 seconds of slow conversational stream chatter or relaxed donation thanking!\n' +
-  '• NATURAL CLIP DURATION: Target punchy high-retention windows between 18s and 38s (end_time - start_time between 18 and 38). Never force 40s+ of filler!\n' +
-  '• CLEAN RESOLUTION: Every clip must end on a complete thought, sentence, or natural laugh. NEVER cut off mid-word or mid-sentence!\n\n' +
+' +
 
-  '=== RULE 5: TITLES & HOOK CAPTIONS ===\n' +
-  '1. TITLE (CURIOSITY GAP — 3-4 WORDS + EMOJI):\n' +
-  '   • Tease the mystery or stakes without spoiling the ending: "He Actually Did It 💀", "My Worst Mistake 😭", "The Secret Trade 🤯".\n' +
-  '   • Under 25 characters. End with 💀, 😭, 😱, or 🤯.\n' +
-  '2. HOOK_CAPTION (TOP BANNER — 3-5 WORDS IN ALL CAPS):\n' +
-  '   • The top banner pinned at the start of the Short.\n' +
-  '   • STRICTLY 100% FACTUAL to what is happening on screen.\n' +
-  '   • FORBIDDEN: Generic clichés ("WAIT FOR THE END", "BRO REGRETS THIS") and hallucinated clickbait ("THE HACKER EXPOSED", "SAVING THE WHOLE TEAM").\n\n' +
+  '=== RULE 2: ZERO-SECOND RETENTION & COLD OPEN RETENTION TRAP (First 0-3 Seconds) ===
+' +
+  '• ZERO DEAD TIME AT HOOK: The first 3 seconds are make-or-break for Shorts retention.
+' +
+  '• ZERO-SECOND RETENTION & STRICT ANTI-MID-THOUGHT PREAMBLE: REJECT clips that start mid-thought, mid-sentence, or with casual hesitation banter (e.g. "Speaking of, um...", "Oh, since everyone\'s here"). Start at the exact catalyst of the event!
+' +
+  '• COLD OPEN RETENTION TRAP & ZERO-SECOND HOOK: To maximize algorithmic velocity and FYP retention, identify the highest-energy payoff and designate a 1.5-2.0s cold open segment (cold_open_start, cold_open_end) from the climactic payoff to duplicate at the very beginning of the clip, OR synthesize a strong verbal title hook to stop the scroll.
+' +
+  '• NEVER start on a loading screen, black screen, spawn lobby, or static character staring into space.
+' +
+  '• NO IRRELEVANT PREAMBLE: Do NOT waste 5-10 seconds on off-topic stream banter before addressing the titular event (e.g. a dev joining or boss fight). Start at the exact catalyst of the event!
+' +
+  '• TIGHT SETUP BEFORE CLIMAX: The buildup (payoff_time - start_time) MUST strictly be between 8s and 16s (sweet spot 10-14s). Never force 20-30s of pre-match static hype or potato grinding!
+' +
+  '• The start_time MUST capture the exact second the action, debate, or spoken hook begins!
 
-  '=== OUTPUT FORMAT ===\n' +
-  'Return strictly valid JSON only. No markdown formatting, no explanations.\n' +
-  'Output exactly ' + targetClips + ' clips:\n' +
-  jsonSchema + '\n\n' +
-  '--- SCOUTED SNIPPETS ---\n' +
+' +
+
+  '=== RULE 3: SINGLE PREMISE NARRATIVE COHESION & CAUSE-EFFECT EDL (ANTI-CHAOS) ===
+' +
+  '• SINGLE PREMISE NARRATIVE COHESION: Every Short must tell ONE single unified micro-story that fulfills the hook banner and title.
+' +
+  '• CAUSE-EFFECT EDL (ANTI-CHAOS): DISQUALIFY raw isolated volume spikes and contextless yelling (e.g. screaming "bunger", "launch"). The EDL must pair a clear comedic setup with a distinct payoff. Cold audiences on the FYP must understand the narrative through-line immediately.
+' +
+  '• REJECT clips that jump between disconnected topics (e.g. complaining about an avatar, then jumping to buying a store item).
+' +
+  '• REJECT raw unedited repetitive grinding, farming coins/potatoes, or monotonous clicking loops. For upgrades, start directly before purchase (max 6-8s before purchase).
+
+' +
+
+  '=== RULE 4: PAYOFF IMPACT & ANTI-CLIMAX FILTER ===
+' +
+  '• SATISFYING RESOLUTION REQUIRED: The climax/payoff MUST deliver real visual or comedic impact. DISQUALIFY weak or anticlimactic endings (e.g. an opponent glitching through a wall in the distance, or a developer lying dead and leaving without interacting).
+' +
+  '• CLIMAX IN FINAL 15-25%: The payoff_time (the arrest, scream, roast, rare drop, or punchline) MUST occur near the end of the clip.
+' +
+  '• PUNCHY AFTERMATH: Allow strictly 2.0 to 3.5 seconds of high-energy reaction/laugh after payoff_time, then CUT CLEANLY. Never leave 15-20 seconds of slow conversational stream chatter or relaxed donation thanking!
+' +
+  '• NATURAL CLIP DURATION: Target punchy high-retention windows between 18s and 38s (end_time - start_time between 18 and 38). Never force 40s+ of filler!
+' +
+  '• CLEAN RESOLUTION: Every clip must end on a complete thought, sentence, or natural laugh. NEVER cut off mid-word or mid-sentence!
+
+' +
+
+  '=== RULE 5: TITLES & HOOK CAPTIONS ===
+' +
+  '1. TITLE (CURIOSITY GAP — 3-4 WORDS + EMOJI):
+' +
+  '   • Tease the mystery or stakes without spoiling the ending: "He Actually Did It 💀", "My Worst Mistake 😭", "The Secret Trade 🤯".
+' +
+  '   • Under 25 characters. End with 💀, 😭, 😱, or 🤯.
+' +
+  '2. HOOK_CAPTION (TOP BANNER — 3-5 WORDS IN ALL CAPS):
+' +
+  '   • The top banner pinned at the start of the Short.
+' +
+  '   • STRICTLY 100% FACTUAL to what is happening on screen.
+' +
+  '   • FORBIDDEN: Generic clichés ("WAIT FOR THE END", "BRO REGRETS THIS") and hallucinated clickbait ("THE HACKER EXPOSED", "SAVING THE WHOLE TEAM").
+
+' +
+
+  '=== RULE 6: COMPOUND MULTI-BEAT EDL JUMP-CUTTING ===
+' +
+  '• When building a 2-Beat Escalation Short around a recurrence/callback anchor (where Beat 1 and Beat 2 are separated by > 8 seconds of idle gameplay):
+' +
+  '  - NEVER leave a continuous 20-30s dead air block between Beat 1 and Beat 2.
+' +
+  '  - You MUST include \"segments\": [ {\"start\": beat1_start, \"end\": beat1_end}, {\"start\": beat2_start, \"end\": beat2_end} ] in the clip JSON.
+' +
+  '  - Keep Beat 1 between 10s-15s (setup & initial laugh), cut cleanly, and jump directly into Beat 2 (8s-14s callback climax).
+' +
+  '  - The EDL Concat engine will seamlessly jump-cut the transition!
+
+' +
+  '=== OUTPUT FORMAT ===
+' +
+  'Return strictly valid JSON only. No markdown formatting, no explanations.
+' +
+  'Output exactly ' + targetClips + ' clips:
+' +
+  jsonSchema + '
+
+' +
+  '--- SCOUTED SNIPPETS ---
+' +
   allSnippets;
 
 return [{ pairedItem: { item: 0 }, json: { prompt, targetClips } }];

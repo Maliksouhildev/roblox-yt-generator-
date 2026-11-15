@@ -22,8 +22,11 @@ import urllib.request
 import urllib.error
 
 GEMINI_KEY_FILES = [
-    "/files/temp/n8n_gemini_key.txt",
+    "/files/temp/gemini_key.txt",
     "/files/gemini_key.txt",
+    "/files/temp/n8n_gemini_key.txt",
+    "C:/Users/mlkme/Desktop/AI_Clipper/temp/gemini_key.txt",
+    "C:/Users/mlkme/Desktop/AI_Clipper/temp/n8n_gemini_key.txt",
     "/files/temp/all_ai_creds.json"
 ]
 
@@ -66,9 +69,9 @@ def extract_frames(video_path: str, timestamps: list, output_prefix: str) -> lis
             "ffmpeg", "-loglevel", "error", "-y",
             "-ss", str(max(0.0, ts)),
             "-i", video_path,
-            "-vf", "scale=640:360",
+            "-vf", "scale=480:270",
             "-vframes", "1",
-            "-q:v", "3",
+            "-q:v", "4",
             out_jpg
         ]
         try:
@@ -116,7 +119,7 @@ def analyze_humor_multimodal(
         f"AUDIENCE LAUGHTER SPIKE at {format_timestamp(t_laugh)}:\n"
         f"Top Chat Messages: {json.dumps(top_chat)}\n\n"
         f"DIALOGUE IN PRECEDING 14 SECONDS:\n\"{transcript_text}\"\n\n"
-        "Attached are 3 sequential visual frames showing what happened on screen leading up to this laughter.\n\n"
+        "Attached are sequential visual frames showing what happened on screen leading up to this laughter.\n\n"
         "TASK:\n"
         "1. Identify the EXACT comedic catalyst: Was it verbal dialogue, a visual gameplay fail, ragdoll physics, a game glitch, silent streamer face reaction, or instant karma?\n"
         "2. In 1 clear, high-density sentence, explain WHY the audience laughed.\n"
@@ -137,21 +140,25 @@ def analyze_humor_multimodal(
     }]
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-    req = urllib.request.Request(
-        url,
-        data=json.dumps({"contents": contents}).encode("utf-8"),
-        headers={"Content-Type": "application/json"}
-    )
 
-    try:
-        with urllib.request.urlopen(req, timeout=12) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
-            match = re.search(r'\{[\s\S]*\}', raw_text)
-            if match:
-                return json.loads(match.group(0))
-    except Exception as e:
-        print(f"[Humor Reasoner Warning] Gemini Vision error: {e}", file=sys.stderr)
+    for attempt in range(2):
+        try:
+            req = urllib.request.Request(
+                url,
+                data=json.dumps({"contents": contents}).encode("utf-8"),
+                headers={"Content-Type": "application/json"}
+            )
+            with urllib.request.urlopen(req, timeout=35) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
+                match = re.search(r'\{[\s\S]*\}', raw_text)
+                if match:
+                    parsed = json.loads(match.group(0))
+                    print(f"[Humor Reasoner] Gemini Vision resolved comedic beat at {format_timestamp(t_laugh)}: {parsed.get('comedy_mechanism')}")
+                    return parsed
+        except Exception as e:
+            print(f"[Humor Reasoner Warning] Gemini Vision attempt {attempt+1} error: {e}", file=sys.stderr)
+            time.sleep(1.5)
 
     return {
         "comedy_mechanism": "Verbal / Gameplay Reaction",

@@ -8,5 +8,11 @@ __pycache__/
 n8nac-config.json
 .env
 *.onnx
+*.key
+*key*.txt
+*creds*
+*token*
+temp/
+tests/test_gemini_live.py
 
 !docs/images/*

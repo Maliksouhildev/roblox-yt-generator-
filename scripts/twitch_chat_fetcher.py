@@ -2,8 +2,9 @@
 """
 twitch_chat_fetcher.py
 ----------------------
-Zero-dependency Twitch VOD chat fetcher.
-Uses Twitch's public GraphQL endpoint (gql.twitch.tv) to download full chat logs for any VOD.
+Zero-dependency, bulletproof Twitch VOD chat fetcher.
+Uses Twitch's public GraphQL endpoint (gql.twitch.tv) with explicit typed GraphQL schema
+(bypassing rotated persisted query hashes).
 Outputs normalized JSON compatible with chat_analyzer.py.
 """
 
@@ -17,7 +18,36 @@ import urllib.error
 
 TWITCH_CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"
 GQL_URL = "https://gql.twitch.tv/gql"
-COMMENTS_HASH = "b70a3591ff0f4e0313d126c6a15c8d76ae77424fa823d447caa16006e015e85d"
+
+COMMENTS_GQL_QUERY = """
+query VideoCommentsByOffsetOrCursor($videoID: ID!, $cursor: Cursor, $contentOffsetSeconds: Int) {
+  video(id: $videoID) {
+    id
+    comments(after: $cursor, contentOffsetSeconds: $contentOffsetSeconds) {
+      edges {
+        cursor
+        node {
+          id
+          commenter {
+            displayName
+          }
+          contentOffsetSeconds
+          createdAt
+          message {
+            fragments {
+              text
+            }
+          }
+        }
+      }
+      pageInfo {
+        hasNextPage
+        hasPreviousPage
+      }
+    }
+  }
+}
+"""
 
 
 def extract_vod_id(url_or_id: str) -> str:
@@ -41,6 +71,7 @@ def fetch_twitch_vod_chat(vod_id: str, output_path: str = None, max_messages: in
     cursor = None
     has_next = True
     page = 0
+    retries = 0
 
     while has_next and len(comments) < max_messages:
         page += 1
@@ -54,13 +85,8 @@ def fetch_twitch_vod_chat(vod_id: str, output_path: str = None, max_messages: in
 
         payload = [{
             "operationName": "VideoCommentsByOffsetOrCursor",
-            "variables": variables,
-            "extensions": {
-                "persistedQuery": {
-                    "version": 1,
-                    "sha256Hash": COMMENTS_HASH
-                }
-            }
+            "query": COMMENTS_GQL_QUERY,
+            "variables": variables
         }]
 
         data = json.dumps(payload).encode("utf-8")
@@ -74,18 +100,36 @@ def fetch_twitch_vod_chat(vod_id: str, output_path: str = None, max_messages: in
             }
         )
 
+        res_json = None
         try:
             with urllib.request.urlopen(req, timeout=15) as resp:
                 res_json = json.loads(resp.read().decode("utf-8"))
+            retries = 0
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                wait_time = min(30, 2 ** (retries + 1))
+                print(f"[Twitch Chat Fetcher] Rate limited (429). Backing off for {wait_time}s...", file=sys.stderr)
+                time.sleep(wait_time)
+                retries += 1
+                if retries <= 3:
+                    continue
+            print(f"[Twitch Chat Fetcher] HTTP error on page {page}: {e}", file=sys.stderr)
+            break
         except Exception as e:
-            print(f"[Twitch Chat Fetcher] Request error on page {page}: {e}", file=sys.stderr)
+            print(f"[Twitch Chat Fetcher] Network error on page {page}: {e}", file=sys.stderr)
+            retries += 1
+            if retries <= 3:
+                time.sleep(2)
+                continue
             break
 
         if not res_json or not isinstance(res_json, list) or "data" not in res_json[0]:
+            print(f"[Twitch Chat Fetcher] Unexpected response on page {page}: {res_json}", file=sys.stderr)
             break
 
         video_data = res_json[0]["data"].get("video")
         if not video_data or "comments" not in video_data:
+            print(f"[Twitch Chat Fetcher] No video or comments data for VOD {vod_id} (may be sub-only or deleted).", file=sys.stderr)
             break
 
         comments_data = video_data["comments"]
@@ -97,7 +141,7 @@ def fetch_twitch_vod_chat(vod_id: str, output_path: str = None, max_messages: in
             node = edge.get("node")
             if not node:
                 continue
-            
+
             commenter = node.get("commenter") or {}
             msg_obj = node.get("message") or {}
             fragments = msg_obj.get("fragments") or []
@@ -105,17 +149,15 @@ def fetch_twitch_vod_chat(vod_id: str, output_path: str = None, max_messages: in
             if not msg_text:
                 msg_text = msg_obj.get("body", "")
 
-            bits = msg_obj.get("bits_spent") or 0
-
             comments.append({
-                "content_offset_seconds": node.get("contentOffsetSeconds", 0.0),
+                "content_offset_seconds": float(node.get("contentOffsetSeconds", 0.0)),
                 "created_at": node.get("createdAt", ""),
                 "commenter": {
                     "display_name": commenter.get("displayName", "anonymous")
                 },
                 "message": {
                     "body": msg_text,
-                    "bits_spent": bits
+                    "bits_spent": 0
                 }
             })
 
@@ -125,9 +167,9 @@ def fetch_twitch_vod_chat(vod_id: str, output_path: str = None, max_messages: in
             cursor = edges[-1].get("cursor")
 
         if page % 10 == 0:
-            print(f"[Twitch Chat Fetcher] Page {page}: Fetched {len(comments)} comments so far...")
+            print(f"[Twitch Chat Fetcher] Page {page}: Fetched {len(comments)} comments so far (Offset: {comments[-1]['content_offset_seconds']}s)...")
 
-        time.sleep(0.05)  # Respect rate limits
+        time.sleep(0.04)  # Politeness delay
 
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
     out_doc = {
@@ -140,7 +182,7 @@ def fetch_twitch_vod_chat(vod_id: str, output_path: str = None, max_messages: in
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(out_doc, f, indent=2)
 
-    print(f"[Twitch Chat Fetcher] Saved {len(comments)} comments to {output_path}")
+    print(f"[Twitch Chat Fetcher] Successfully saved {len(comments)} comments to {output_path}")
     return output_path
 
 

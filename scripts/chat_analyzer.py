@@ -275,14 +275,15 @@ def analyze_chat(file_path: str, window_sec: float = 10.0, step_sec: float = 2.5
 
         mu_laugh = float(sum(r_slice_laugh) / max(1, len(r_slice_laugh)))
         var_laugh = float(sum((x - mu_laugh) ** 2 for x in r_slice_laugh) / max(1, len(r_slice_laugh)))
-        sigma_laugh = math.sqrt(var_laugh)
+        # Trap 3 Fix: Enforce minimum standard deviation floor to prevent division-by-near-zero spikes in cold streams
+        sigma_laugh = max(0.70, math.sqrt(var_laugh))
 
         mu_total = float(sum(r_slice_total) / max(1, len(r_slice_total)))
         var_total = float(sum((x - mu_total) ** 2 for x in r_slice_total) / max(1, len(r_slice_total)))
-        sigma_total = math.sqrt(var_total)
+        sigma_total = max(1.0, math.sqrt(var_total))
 
-        z_laugh = (b["laugh_velocity"] - mu_laugh) / (sigma_laugh + 1e-4)
-        z_total = (b["velocity"] - mu_total) / (sigma_total + 1e-4)
+        z_laugh = (b["laugh_velocity"] - mu_laugh) / sigma_laugh
+        z_total = (b["velocity"] - mu_total) / sigma_total
 
         b["z_laugh"] = round(z_laugh, 2)
         b["z_total"] = round(z_total, 2)
@@ -292,10 +293,14 @@ def analyze_chat(file_path: str, window_sec: float = 10.0, step_sec: float = 2.5
         b["chat_score"] = round(comp_score, 1)
 
     # ── 4. Laughter Cluster & Causal Window Extraction ──────────────────────
-    # Peak Trigger: Z_laugh >= 2.5 AND laugh_ratio >= 0.30 AND laugh_count >= 2
+    # Peak Trigger (Trap 3 Hardened):
+    # Enforces minimum audience density (count >= 3, laugh_count >= 2) while protecting against cold-start spikes
     raw_peaks = []
     for b in buckets:
-        if (b["z_laugh"] >= 2.5 and b["laugh_ratio"] >= 0.30 and b["laugh_count"] >= 2) or (b["z_laugh"] >= 3.5 and b["laugh_count"] >= 3):
+        is_standard_burst = (b["z_laugh"] >= 2.2 and b["laugh_ratio"] >= 0.35 and b["laugh_count"] >= 2 and b["count"] >= 3)
+        is_high_volume_burst = (b["z_laugh"] >= 2.0 and b["laugh_count"] >= 3 and b["laugh_ratio"] >= 0.30)
+        is_extreme_spike = (b["z_laugh"] >= 3.5 and b["laugh_count"] >= 2)
+        if is_standard_burst or is_high_volume_burst or is_extreme_spike:
             raw_peaks.append(b)
 
     # Cluster adjacent peaks into cohesive laughter bursts
@@ -324,18 +329,19 @@ def analyze_chat(file_path: str, window_sec: float = 10.0, step_sec: float = 2.5
                 causal_start = max(0.0, c_peak_t - 15.0)
                 causal_end = max(0.0, c_peak_t - 1.0)
 
-                clusters.append({
-                    "cluster_id": len(clusters) + 1,
-                    "peak_time": c_peak_t,
-                    "burst_window": [c_start, c_end],
-                    "causal_window": [round(causal_start, 1), round(causal_end, 1)],
-                    "z_score": c_max_z,
-                    "laugh_count": c_tot_laugh,
-                    "total_messages": c_tot_msgs,
-                    "laugh_ratio": round(c_tot_laugh / max(1, c_tot_msgs), 3),
-                    "peak_velocity": c_peak_vel,
-                    "sample_messages": list(dict.fromkeys(all_snips))[:8]
-                })
+                if (c_tot_laugh >= 2 and c_tot_msgs >= 3) or c_max_z >= 3.0:
+                    clusters.append({
+                        "cluster_id": len(clusters) + 1,
+                        "peak_time": c_peak_t,
+                        "burst_window": [c_start, c_end],
+                        "causal_window": [round(causal_start, 1), round(causal_end, 1)],
+                        "z_score": c_max_z,
+                        "laugh_count": c_tot_laugh,
+                        "total_messages": c_tot_msgs,
+                        "laugh_ratio": round(c_tot_laugh / max(1, c_tot_msgs), 3),
+                        "peak_velocity": c_peak_vel,
+                        "sample_messages": list(dict.fromkeys(all_snips))[:8]
+                    })
                 curr_cluster = [p]
 
         if curr_cluster:
@@ -354,18 +360,19 @@ def analyze_chat(file_path: str, window_sec: float = 10.0, step_sec: float = 2.5
             causal_start = max(0.0, c_peak_t - 15.0)
             causal_end = max(0.0, c_peak_t - 1.0)
 
-            clusters.append({
-                "cluster_id": len(clusters) + 1,
-                "peak_time": c_peak_t,
-                "burst_window": [c_start, c_end],
-                "causal_window": [round(causal_start, 1), round(causal_end, 1)],
-                "z_score": c_max_z,
-                "laugh_count": c_tot_laugh,
-                "total_messages": c_tot_msgs,
-                "laugh_ratio": round(c_tot_laugh / max(1, c_tot_msgs), 3),
-                "peak_velocity": c_peak_vel,
-                "sample_messages": list(dict.fromkeys(all_snips))[:8]
-            })
+            if (c_tot_laugh >= 2 and c_tot_msgs >= 3) or c_max_z >= 3.0:
+                clusters.append({
+                    "cluster_id": len(clusters) + 1,
+                    "peak_time": c_peak_t,
+                    "burst_window": [c_start, c_end],
+                    "causal_window": [round(causal_start, 1), round(causal_end, 1)],
+                    "z_score": c_max_z,
+                    "laugh_count": c_tot_laugh,
+                    "total_messages": c_tot_msgs,
+                    "laugh_ratio": round(c_tot_laugh / max(1, c_tot_msgs), 3),
+                    "peak_velocity": c_peak_vel,
+                    "sample_messages": list(dict.fromkeys(all_snips))[:8]
+                })
 
     # Sort clusters by Z-Score descending
     clusters.sort(key=lambda c: c["z_score"], reverse=True)
