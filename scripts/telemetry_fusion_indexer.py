@@ -34,11 +34,15 @@ HALLUCINATION_PHRASES = [
 ]
 
 BOAST_PATTERNS = re.compile(
-    r"\b(watch this|easy|no way i lose|trust me|bet|i'm the best|i got this|cannot lose|never happens|guarantee|hold my|pro player)\b",
+    r"\b(watch this|easy|no way i lose|trust me|bet|i'm the best|i got this|cannot lose|never happens|guarantee|hold my|pro player|all of my games|admin abuse|i'm going to buy it|nobody can beat)\b",
     re.I,
 )
 MYSTERY_PATTERNS = re.compile(
-    r"\b(wait what|what is that|who is|why did|how did|secret|hidden|glitch|weird|bro what|no shot)\b",
+    r"\b(wait what|what is that|who is|why did|how did|secret|hidden|glitch|weird|bro what|no shot|what happened|are you telling me|tricked me|fake account|am i blind|how many)\b",
+    re.I,
+)
+HOUSEKEEPING_NOISE = re.compile(
+    r"(thank you for the super\s*chat|for the super chat|get your entries in|enter you into the giveaway|type [a-z0-9]+ into the chat|friend request|let me search him up|make a [0-9,]+ game\s*pass|every giveaway we do|draw a winner|stops the bots|spam the word)",
     re.I,
 )
 STOPWORDS = {
@@ -378,12 +382,14 @@ def build_unified_index(
     for s in annotated_lines:
         idx = min(num_bins - 1, max(0, int(s["start"] // bin_size)))
         grid[idx]["sents"].append(s)
+        if HOUSEKEEPING_NOISE.search(s["text"]):
+            grid[idx]["score"] -= 26.0
         if s["wpm"] >= 220 and s["word_count"] >= 5:
             grid[idx]["score"] += 15.0
         if BOAST_PATTERNS.search(s["text"]):
-            grid[idx]["score"] += 14.0
+            grid[idx]["score"] += 16.0
         if MYSTERY_PATTERNS.search(s["text"]):
-            grid[idx]["score"] += 10.0
+            grid[idx]["score"] += 16.0
 
     for c in chat_clusters:
         pt = float(c.get("peak_time", 0.0))
@@ -436,8 +442,8 @@ def build_unified_index(
         if any(abs(t_mid - ut) < 40.0 for ut in used_times):
             continue
 
-        # Gather surrounding context sentences [t_mid - 20s, t_mid + 12s]
-        win_sents = [s for s in annotated_lines if t_mid - 22.0 <= s["start"] <= t_mid + 14.0]
+        # Gather surrounding context sentences [t_mid - 22s, t_mid + 24s]
+        win_sents = [s for s in annotated_lines if t_mid - 22.0 <= s["start"] <= t_mid + 24.0]
         if not win_sents and sentences:
             continue
 
@@ -470,16 +476,17 @@ def build_unified_index(
                             break
 
         # Suggest best-fit Viral Archetype based on structural signals
-        if BOAST_PATTERNS.search(snippet_text):
-            rec_arch = "HUBRIS_INSTANT_KARMA"
-        elif (c_hit and c_hit.get("is_multi_beat")) or len(callbacks) >= 2:
+        arch_slot = len(anchors) % 5
+        if c_hit and c_hit.get("is_multi_beat"):
             rec_arch = "DOUBLE_DOWN_ESCALATION"
+        elif BOAST_PATTERNS.search(snippet_text):
+            rec_arch = "HUBRIS_INSTANT_KARMA"
         elif MYSTERY_PATTERNS.search(snippet_text):
             rec_arch = "MYSTERY_OPEN_LOOP"
         elif a_hit and float(a_hit.get("jump_db", 0.0)) >= 9.0:
-            rec_arch = "IN_MEDIA_RES_FLASHFORWARD"
+            rec_arch = "IN_MEDIA_RES_FLASHFORWARD" if arch_slot in (0, 2, 4) else "DOUBLE_DOWN_ESCALATION"
         else:
-            rec_arch = "REVERSE_PAYOFF_LOOP"
+            rec_arch = ["REVERSE_PAYOFF_LOOP", "MYSTERY_OPEN_LOOP", "DOUBLE_DOWN_ESCALATION", "HUBRIS_INSTANT_KARMA", "IN_MEDIA_RES_FLASHFORWARD"][arch_slot]
 
         norm_score = round(min(99.5, 45.0 + (sc / max_smoothed) * 52.0), 1)
 

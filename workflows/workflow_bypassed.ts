@@ -653,6 +653,31 @@ inputItems.forEach((clipData, clipIdx) => {
     rawIntervals = [{ start, end, role: 'STORY_BEAT' }];
   }
 
+  // De-overlap non-hook body intervals & cap opening HOOK_CLIMAX teaser at <= 2.6s
+  const dedupedIntervals = [];
+  const seenBody = [];
+  rawIntervals.forEach((iv, iIdx) => {
+    let st = Math.max(3.0, iv.start);
+    let en = iv.end;
+    const r = String(iv.role || 'STORY_BEAT').toUpperCase();
+    if (iIdx === 0 && r === 'HOOK_CLIMAX') {
+      dedupedIntervals.push({ start: st, end: Math.min(en, st + 2.6), role: r });
+      return;
+    }
+    for (const pb of seenBody) {
+      if (st < pb.end + 0.15 && en > pb.start - 0.15) {
+        if (en > pb.end + 1.2) st = pb.end + 0.15;
+        else if (st < pb.start - 1.2) en = pb.start - 0.15;
+        else st = en;
+      }
+    }
+    if (en - st >= 0.8) {
+      seenBody.push({ start: st, end: en });
+      dedupedIntervals.push({ start: st, end: en, role: r });
+    }
+  });
+  if (dedupedIntervals.length > 0) rawIntervals = dedupedIntervals;
+
   rawIntervals.forEach((interval, intervalIdx) => {
     const start = interval.start;
     const intEnd = interval.end;
@@ -2206,7 +2231,8 @@ if (anchorsList.length > 0) {
       (a.why_chat_laughed ? \`  - Why They Laughed: \${a.why_chat_laughed}\n\` : '') +
       (a.setup_tension_hook ? \`  - Tension Hook: \${a.setup_tension_hook}\n\` : '') +
       (a.callback_links && a.callback_links.length ? \`  - Callback Candidates: \${a.callback_links.map(cb => cb.time + 's ("' + cb.keyword + '"): ' + cb.text).join(' | ')}\n\` : '') +
-      (a.is_multi_beat && a.beat_2 ? \`  - Multi-Beat Callback: Beat 2 at \${a.beat_2.peak_time}s\n\` : '')
+      (a.is_multi_beat && a.beat_2 ? \`  - Multi-Beat Callback: Beat 2 at \${a.beat_2.peak_time}s\n\` : '') +
+      (a.annotated_context ? \`  - Exact Float-Second Context: \${String(a.annotated_context).substring(0, 600).replace(/\\n/g, ' | ')}\n\` : '')
     ).join("\n") + "\n";
 }
 
@@ -2247,8 +2273,10 @@ const prompt =
 
   '=== STRICT RETENTION & COLD-VIEWER SCRIPTING RULES ===\n' +
   '• ZERO-CONTEXT COLD VIEWER RULE: Assume the viewer knows NOTHING about this stream. If a 2-second SETUP line from 15 minutes earlier is needed to understand why the joke is funny, stitch that early SETUP segment first into segments[]!\n' +
-  '• NO SPOILERS AT 0:00: A hook must create an information gap (tension/curiosity/shock), NEVER spoil the final outcome at 0:00.\n' +
-  '• RUTHLESS DEAD-AIR REMOVAL: Every segment in segments[] MUST advance tension, setup, or payoff. Total stitched duration across all segments should be 15s to 40s.\n\n' +
+  '• NO SPOILERS AT 0:00: A hook must create an information gap (tension/curiosity/shock), NEVER spoil the final outcome at 0:00. For IN_MEDIA_RES_FLASHFORWARD & MYSTERY_OPEN_LOOP, segments[0] MUST have role "HOOK_CLIMAX" (1.8-2.4s non-spoilering teaser cut BEFORE the reveal).\n' +
+  '• ZERO OVERLAPPING TIMESTAMPS: SETUP, ESCALATION, and PAYOFF MUST have strictly non-overlapping timestamps (SETUP.end < ESCALATION.start < PAYOFF.start). Never repeat identical lines across segments!\n' +
+  '• DISTINCT SCENES (>= 120s APART): Each clip MUST cover a completely different stream highlight at least 120s apart, rejecting superchat thank-yous and giveaway bot spam.\n' +
+  '• RUTHLESS DEAD-AIR REMOVAL: Every segment in segments[] MUST advance tension, setup, or payoff. Total stitched duration across all segments should be 16s to 38s.\n\n' +
 
   '=== RULE 1: STRICT ANTI-ADMIN, ANTI-MENU & ANTI-BROWSER FILTER ===\n' +
   '• NEVER include desktop/browser screens, notepad, OBS, or admin housekeeping in any clip!\n' +

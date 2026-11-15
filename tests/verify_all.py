@@ -90,6 +90,9 @@ checks = [
     ("3. Prepare Director Prompt", "HUBRIS_INSTANT_KARMA", "Director Archetype C Instant Karma"),
     ("3. Prepare Director Prompt", "MYSTERY_OPEN_LOOP", "Director Archetype D Mystery Loop"),
     ("3. Prepare Director Prompt", "REVERSE_PAYOFF_LOOP", "Director Archetype E Infinite Loop"),
+    ("3. Prepare Director Prompt", "ZERO OVERLAPPING TIMESTAMPS", "Director non-overlapping EDL rule"),
+    ("3. Prepare Director Prompt", "DISTINCT SCENES (>= 120s APART)", "Director >=120s scene distinctness rule"),
+    ("6. Extract Viral Segments", "dedupedIntervals", "ExtractViral non-hook interval deduplication"),
 ]
 
 all_passed = True
