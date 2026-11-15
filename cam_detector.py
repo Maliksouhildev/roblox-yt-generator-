@@ -577,6 +577,56 @@ def build_piecewise_timeline(frames, loaded_imgs, dets_per_frame, primary_crop, 
     return timeline
 
 
+def is_static_png_overlay(images: list, face_box: dict, real_w: int = 1920, real_h: int = 1080) -> bool:
+    """
+    Compares pixel variance inside the candidate face bounding box across ref_1..ref_5.
+    Returns True if the candidate face is a static PNG/cartoon sticker (near-zero motion inside head/face).
+    """
+    valid_imgs = [im for im in (images or []) if im is not None]
+    if len(valid_imgs) < 2 or not face_box:
+        return False
+
+    cx = float(face_box.get("cx", 0))
+    cy = float(face_box.get("cy", 0))
+    fw = max(16.0, float(face_box.get("w", 0)))
+    fh = max(16.0, float(face_box.get("h", 0)))
+
+    rois = []
+    for im in valid_imgs:
+        ih, iw = im.shape[:2]
+        sx, sy = iw / float(real_w), ih / float(real_h)
+        # Inner 60% of candidate face box avoids surrounding gameplay/background bleed
+        x1 = max(0, int((cx - fw * 0.30) * sx))
+        y1 = max(0, int((cy - fh * 0.30) * sy))
+        x2 = min(iw, int((cx + fw * 0.30) * sx))
+        y2 = min(ih, int((cy + fh * 0.30) * sy))
+        if x2 - x1 < 8 or y2 - y1 < 8:
+            continue
+        gray = cv2.cvtColor(im[y1:y2, x1:x2], cv2.COLOR_BGR2GRAY).astype(np.float32)
+        rois.append(gray)
+
+    if len(rois) < 2:
+        return False
+
+    target_h, target_w = rois[0].shape[:2]
+    rois = [
+        cv2.resize(r, (target_w, target_h)) if r.shape[:2] != (target_h, target_w) else r
+        for r in rois
+    ]
+
+    pair_meds = [float(np.median(np.abs(rois[i] - rois[i + 1]))) for i in range(len(rois) - 1)]
+    unchanged_ratios = [float(np.mean(np.abs(rois[i] - rois[i + 1]) < 3.0)) for i in range(len(rois) - 1)]
+    mean_med_diff = float(np.mean(pair_meds))
+    mean_unchanged = float(np.mean(unchanged_ratios))
+    temporal_std = float(np.mean(np.std(np.stack(rois, axis=0), axis=0)))
+
+    log(f"Face ROI motion check: med_diff={mean_med_diff:.2f}, temporal_std={temporal_std:.2f}, unchanged_ratio={mean_unchanged:.2f}")
+    if mean_med_diff < 12.0 or temporal_std < 22.0 or mean_unchanged > 0.20:
+        log("REJECTED static PNG/cartoon overlay (near-zero pixel variance across reference frames).")
+        return True
+    return False
+
+
 def save_and_output(result: dict, out_config: str):
     if out_config and out_config != "/dev/null":
         try:
@@ -633,6 +683,7 @@ def run_pipeline(input_arg: str = "/files/temp/ref_*.jpg", out_config: str = DEF
         return fallback_res
 
     log(f"Loaded {len(frames)} reference frame(s): {[os.path.basename(f) for f in frames]}")
+    loaded_imgs = [im for im in (cv2.imread(f) for f in frames) if im is not None]
 
     # 2. Primary Cloud Engine: Gemini 2.5 Flash Vision Ground-Truth Detection
     api_key = get_gemini_api_key()
@@ -645,6 +696,22 @@ def run_pipeline(input_arg: str = "/files/temp/ref_*.jpg", out_config: str = DEF
                 log("Gemini Vision confirmed NO streamer facecam (pure gameplay).")
                 save_and_output(fallback_res, out_config)
                 return fallback_res
+
+            fb = vision_layout.get("face_box") or [0, 0, 0, 0]
+            wb = vision_layout.get("webcam_box") or [0, 0, 0, 0]
+            box_src = fb if (len(fb) == 4 and (fb[2] - fb[0]) > 5 and (fb[3] - fb[1]) > 5) else wb
+            if len(box_src) == 4 and (box_src[2] - box_src[0]) > 5 and (box_src[3] - box_src[1]) > 5:
+                vy1, vx1, vy2, vx2 = [float(v) for v in box_src]
+                v_face = {
+                    "cx": ((vx1 + vx2) / 2.0) * 1920.0 / 1000.0,
+                    "cy": ((vy1 + vy2) / 2.0) * 1080.0 / 1000.0,
+                    "w": max(16.0, (vx2 - vx1) * 1920.0 / 1000.0),
+                    "h": max(16.0, (vy2 - vy1) * 1080.0 / 1000.0),
+                }
+                if is_static_png_overlay(loaded_imgs, v_face):
+                    log("Gemini Vision candidate rejected: Static PNG overlay detected across reference frames.")
+                    save_and_output(fallback_res, out_config)
+                    return fallback_res
 
             clean_crop = compute_bulletproof_crop_from_vision(vision_layout)
             log(f"VERIFIED WEBCAM (Vision): {clean_crop['camera_type']} at x={clean_crop['cam_x']}, y={clean_crop['cam_y']}, {clean_crop['cam_w']}x{clean_crop['cam_h']}")
@@ -659,14 +726,10 @@ def run_pipeline(input_arg: str = "/files/temp/ref_*.jpg", out_config: str = DEF
         return fallback_res
 
     detector = cv2.FaceDetectorYN.create(YUNET_MODEL, "", (960, 540), score_threshold=0.45)
-    loaded_imgs = []
     dets_per_frame = []
-    for fpath in frames:
-        img = cv2.imread(fpath)
-        if img is not None:
-            loaded_imgs.append(img)
-            dets = detect_faces_yunet(img, detector)
-            dets_per_frame.append(dets)
+    for img in loaded_imgs:
+        dets = detect_faces_yunet(img, detector)
+        dets_per_frame.append(dets)
 
     best_cluster = cluster_faces_across_frames(dets_per_frame)
     if best_cluster is None:
@@ -675,6 +738,11 @@ def run_pipeline(input_arg: str = "/files/temp/ref_*.jpg", out_config: str = DEF
         return fallback_res
 
     log(f"Streamer cluster found: cx={best_cluster['cx']}, cy={best_cluster['cy']}, w={best_cluster['w']}, h={best_cluster['h']} (Persistence: {best_cluster['persistence']}/{len(loaded_imgs)})")
+
+    if is_static_png_overlay(loaded_imgs, best_cluster):
+        log("Local YuNet cluster rejected: Static PNG overlay detected across reference frames.")
+        save_and_output(fallback_res, out_config)
+        return fallback_res
 
     # Check for physical straight box borders
     has_box, box_coords = find_physical_box_borders(loaded_imgs, best_cluster)
