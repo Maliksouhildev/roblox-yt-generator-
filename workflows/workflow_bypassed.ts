@@ -756,9 +756,13 @@ let partIdx = 0;
 segments.forEach((seg) => {
     const relStart = Math.max(0, seg.start - seekStart);
     const relEnd = Math.max(relStart + 0.1, seg.end - seekStart);
-    filterComplex += \`[0:v]trim=start=\${relStart.toFixed(3)}:end=\${relEnd.toFixed(3)},setpts=PTS-STARTPTS[v\${partIdx}];\`;
-    filterComplex += \`[0:a]atrim=start=\${relStart.toFixed(3)}:end=\${relEnd.toFixed(3)},asetpts=PTS-STARTPTS[a\${partIdx}];\`;
-    concatInputs += \`[v\${partIdx}][a\${partIdx}]\`;
+    const segDur = Math.max(0.1, relEnd - relStart);
+    const fadeDur = Math.min(0.025, segDur / 4);
+    const outStart = Math.max(0, segDur - fadeDur);
+
+    filterComplex += `[0:v]trim=start=${relStart.toFixed(3)}:end=${relEnd.toFixed(3)},setpts=PTS-STARTPTS[v${partIdx}];`;
+    filterComplex += `[0:a]atrim=start=${relStart.toFixed(3)}:end=${relEnd.toFixed(3)},asetpts=PTS-STARTPTS,afade=t=in:ss=0:d=${fadeDur.toFixed(3)},afade=t=out:st=${outStart.toFixed(3)}:d=${fadeDur.toFixed(3)}[a${partIdx}];`;
+    concatInputs += `[v${partIdx}][a${partIdx}]`;
     partIdx++;
 });
 
