@@ -594,25 +594,11 @@ return [{ pairedItem: { item: 0 }, json: { vision_payload: {
         position: [-85180, 26240],
     })
     _6ExtractViralSegments = {
-        jsCode: `const clipData = $input.first().json;
+        jsCode: `const fs = require('fs');
+const inputItems = $input.all().map(i => i.json);
 const BUFFER = 0.12; // Tight buffer for snappy Shorts pacing
-let finalSegs = [];
 
-// Support discrete multi-beat segments to jump-cut dead air between Beat 1 and Beat 2
-let rawIntervals = [];
-if (clipData.segments && Array.isArray(clipData.segments) && clipData.segments.length > 0) {
-  rawIntervals = clipData.segments.filter(s => typeof s.start === 'number' && typeof s.end === 'number' && s.end > s.start);
-}
-if (rawIntervals.length === 0) {
-  const start = clipData.start_time;
-  const end = clipData.end_time;
-  if (typeof start !== 'number' || typeof end !== 'number') {
-    return [{ pairedItem: { item: 0 }, json: { error: "No timestamps", clip_title: clipData.title } }];
-  }
-  rawIntervals = [{ start, end }];
-}
-
-// Try to get words from Whisper transcript to cut silences dynamically
+// Load Whisper words (Production nodes first -> Sandbox cache / disk fallbacks)
 let words = [];
 try {
   const w1 = $('3. Groq Whisper').first().json;
@@ -624,104 +610,176 @@ if (words.length === 0) {
     words = w2.words || (w2.x_groq && w2.x_groq.words) || [];
   } catch(e) {}
 }
-
-const fillerWords = new Set(["speaking", "of", "um", "uh", "oh", "since", "everyone", "like", "so"]);
-
-rawIntervals.forEach((interval, intervalIdx) => {
-  const intStart = interval.start;
-  const intEnd = interval.end;
-
-  if (words.length > 0) {
-    const clipWords = words.filter(w => w.end >= intStart && w.start <= intEnd);
-
-    if (clipWords.length > 0) {
-      let wordIdx = 0;
-      if (intervalIdx === 0) {
-        // Trim conversational hesitation filler only at the very start of the Short
-        while (wordIdx < Math.min(3, clipWords.length - 1)) {
-          const cleanWord = String(clipWords[wordIdx].word || "").toLowerCase().replace(/[^a-z]/g, '');
-          if (fillerWords.has(cleanWord)) {
-            wordIdx++;
-          } else {
-            break;
-          }
-        }
-      }
-      const start = intStart;
-      const initialWord = clipWords[wordIdx] || clipWords[0];
-      let currentSegStart = Math.max(start, clipWords[0].start - 0.10);
-      if (wordIdx > 0 && initialWord.start > currentSegStart) {
-        currentSegStart = initialWord.start - 0.08;
-      }
-      let lastWordEnd = initialWord.end;
-
-      for (let i = wordIdx + 1; i < clipWords.length; i++) {
-        const w = clipWords[i];
-        // If gap is more than 0.55s, jump cut the dead air!
-        if (w.start - lastWordEnd > 0.55) {
-          finalSegs.push({
-            name: `Beat${intervalIdx+1}_part`,
-            start: currentSegStart,
-            end: lastWordEnd + BUFFER
-          });
-          currentSegStart = Math.max(lastWordEnd + BUFFER, w.start - BUFFER);
-        }
-        lastWordEnd = w.end;
-      }
-      finalSegs.push({
-        name: `Beat${intervalIdx+1}_part`,
-        start: currentSegStart,
-        end: Math.min(intEnd, lastWordEnd + BUFFER)
-      });
-    } else {
-      finalSegs.push({
-        name: `Beat${intervalIdx+1}`,
-        start: Math.max(0, intStart - BUFFER),
-        end: intEnd + BUFFER
-      });
-    }
-  } else {
-    finalSegs.push({
-      name: `Beat${intervalIdx+1}`,
-      start: Math.max(0, intStart - BUFFER),
-      end: intEnd + BUFFER
-    });
-  }
-});
-
-// COLD OPEN RETENTION TRAP: Prepend 1.8s cold open payoff teaser at t=0
-if (typeof clipData.cold_open_start === 'number' && typeof clipData.cold_open_end === 'number') {
-  const coStart = clipData.cold_open_start;
-  const coEnd = Math.min(clipData.cold_open_end, coStart + 1.8);
-  const totalStart = rawIntervals[0].start;
-  const totalEnd = rawIntervals[rawIntervals.length - 1].end;
-  if (coEnd - coStart >= 1.0 && coStart >= totalStart && coEnd <= totalEnd) {
-    if (coStart - totalStart > 4.0) {
-      finalSegs.unshift({
-        name: 'ColdOpen_teaser',
-        start: coStart,
-        end: coEnd
-      });
+if (words.length === 0) {
+  try {
+    const lct = $('Load Cached Telemetry').first().json;
+    words = lct.words || [];
+  } catch(e) {}
+}
+if (words.length === 0) {
+  const txFiles = ['/files/temp/transcript.json', '/files/outputs/whisper_28754.json', '/files/temp/whisper_raw.json'];
+  for (const fp of txFiles) {
+    if (fs.existsSync(fp)) {
+      try {
+        const d = JSON.parse(fs.readFileSync(fp, 'utf8'));
+        words = d.words || (d.x_groq && d.x_groq.words) || [];
+        if (words.length > 0) break;
+      } catch(e) {}
     }
   }
 }
 
-// Return clean segments
-return finalSegs.map((seg, idx) => ({
-  pairedItem: { item: 0 },
-  json: {
-    segment_order: idx,
-    segment_name: seg.name,
-    start: Number(seg.start.toFixed(3)),
-    end: Number(seg.end.toFixed(3)),
-    duration: Number((seg.end - seg.start).toFixed(3)),
-    clip_title: clipData.title,
-    theme: clipData.theme,
-    hook_caption: clipData.hook_caption,
-    cause_and_effect_setup: clipData.cause_and_effect_setup,
-    total_segments: finalSegs.length
+const fillerWords = new Set(["speaking", "of", "um", "uh", "oh", "since", "everyone", "like", "so"]);
+const allOut = [];
+
+inputItems.forEach((clipData, clipIdx) => {
+  const isDryRun = Boolean(clipData.dry_run);
+  let finalSegs = [];
+
+  let rawIntervals = [];
+  if (clipData.segments && Array.isArray(clipData.segments) && clipData.segments.length > 0) {
+    rawIntervals = clipData.segments
+      .filter(s => typeof s.start === 'number' && typeof s.end === 'number' && s.end > s.start)
+      .map(s => ({ start: s.start, end: s.end, role: s.role || 'STORY_BEAT' }));
   }
-}));`,
+
+  if (rawIntervals.length === 0) {
+    const start = clipData.start_time;
+    const end = clipData.end_time;
+    if (typeof start !== 'number' || typeof end !== 'number') {
+      allOut.push({ pairedItem: { item: 0 }, json: { error: "No timestamps", clip_title: clipData.title, dry_run: isDryRun } });
+      return;
+    }
+    rawIntervals = [{ start, end, role: 'STORY_BEAT' }];
+  }
+
+  rawIntervals.forEach((interval, intervalIdx) => {
+    const start = interval.start;
+    const intEnd = interval.end;
+    const role = interval.role || 'STORY_BEAT';
+
+    if (words.length > 0) {
+      const clipWords = words.filter(w => w.end >= start && w.start <= intEnd);
+
+      if (clipWords.length > 0) {
+        let wordIdx = 0;
+        if (intervalIdx === 0) {
+          // ZERO-SECOND RETENTION: Trim conversational hesitation filler at start
+          while (wordIdx < Math.min(3, clipWords.length - 1)) {
+            const cleanWord = String(clipWords[wordIdx].word || "").toLowerCase().replace(/[^a-z]/g, '');
+            if (fillerWords.has(cleanWord)) {
+              wordIdx++;
+            } else {
+              break;
+            }
+          }
+        }
+        const initialWord = clipWords[wordIdx] || clipWords[0];
+        let currentSegStart = Math.max(start, clipWords[0].start - 0.10);
+        if (wordIdx > 0 && initialWord.start > currentSegStart) {
+          currentSegStart = initialWord.start - 0.08;
+        }
+        let lastWordEnd = initialWord.end;
+
+        for (let i = wordIdx + 1; i < clipWords.length; i++) {
+          const w = clipWords[i];
+          // If gap is more than 0.55s, jump cut the dead air!
+          if (w.start - lastWordEnd > 0.55) {
+            finalSegs.push({
+              name: \`\${role}_part\`,
+              role,
+              start: currentSegStart,
+              end: lastWordEnd + BUFFER
+            });
+            currentSegStart = Math.max(lastWordEnd + BUFFER, w.start - BUFFER);
+          }
+          lastWordEnd = w.end;
+        }
+        finalSegs.push({
+          name: \`\${role}_part\`,
+          role,
+          start: currentSegStart,
+          end: Math.min(intEnd, lastWordEnd + BUFFER)
+        });
+      } else {
+        finalSegs.push({
+          name: role,
+          role,
+          start: Math.max(0, start - BUFFER),
+          end: intEnd + BUFFER
+        });
+      }
+    } else {
+      finalSegs.push({
+        name: role,
+        role,
+        start: Math.max(0, start - BUFFER),
+        end: intEnd + BUFFER
+      });
+    }
+  });
+
+  // COLD OPEN RETENTION TRAP: Prepend 1.8s cold open payoff teaser ONLY if segment 0 isn't already a HOOK_CLIMAX
+  const hasExplicitHook = rawIntervals[0] && rawIntervals[0].role === 'HOOK_CLIMAX';
+  if (!hasExplicitHook && rawIntervals.length === 1 && typeof clipData.cold_open_start === 'number' && typeof clipData.cold_open_end === 'number') {
+    const coStart = clipData.cold_open_start;
+    const coEnd = Math.min(clipData.cold_open_end, coStart + 1.8);
+    const totalStart = rawIntervals[0].start;
+    const totalEnd = rawIntervals[rawIntervals.length - 1].end;
+    if (coEnd - coStart >= 1.0 && coStart >= totalStart && coEnd <= totalEnd) {
+      if (coStart - totalStart > 4.0) {
+        finalSegs.unshift({
+          name: 'ColdOpen_teaser',
+          role: 'HOOK_CLIMAX',
+          start: coStart,
+          end: coEnd
+        });
+      }
+    }
+  }
+
+  // Attach spoken_text per cut segment and compute assembled script
+  const enrichedSegs = finalSegs.map((seg) => {
+    const segWords = words.length > 0
+      ? words.filter(w => w.end >= seg.start && w.start <= seg.end).map(w => String(w.word || '').trim()).join(' ')
+      : '';
+    return {
+      ...seg,
+      spoken_text: segWords
+    };
+  });
+
+  const computedScript = enrichedSegs
+    .map(s => \`[\${s.role} \${s.start.toFixed(1)}s-\${s.end.toFixed(1)}s] "\${s.spoken_text || '...'}"\`)
+    .join(' -> ');
+
+  enrichedSegs.forEach((seg, idx) => {
+    allOut.push({
+      pairedItem: { item: 0 },
+      json: {
+        dry_run: isDryRun,
+        clip_number: clipData.clip_number || (clipIdx + 1),
+        segment_order: idx,
+        segment_name: seg.name,
+        role: seg.role,
+        start: Number(seg.start.toFixed(3)),
+        end: Number(seg.end.toFixed(3)),
+        duration: Number((seg.end - seg.start).toFixed(3)),
+        spoken_text: seg.spoken_text,
+        clip_title: clipData.title,
+        narrative_archetype: clipData.narrative_archetype || 'HUBRIS_INSTANT_KARMA',
+        theme: clipData.theme,
+        hook_caption: clipData.hook_caption,
+        cause_and_effect_setup: clipData.cause_and_effect_setup,
+        assembled_spoken_script: clipData.assembled_spoken_script || computedScript,
+        signal_justification: clipData.signal_justification || {},
+        total_segments: enrichedSegs.length
+      }
+    });
+  });
+});
+
+return allOut;`,
     };
 
     @node({
@@ -1831,15 +1889,22 @@ Output ONLY valid raw JSON:
         position: [-88480, 26120],
     })
     _1PrepareScoutPrompt = {
-        jsCode: `let whisperData = null;
+        jsCode: `const fs = require('fs');
+let whisperData = null;
 
 try {
   const items = $input.all();
-  if (items && items[0] && items[0].json && items[0].json.text) {
+  if (items && items[0] && items[0].json && (items[0].json.text || (items[0].json.annotated_sentences && items[0].json.annotated_sentences.length))) {
     whisperData = items[0].json;
   }
 } catch(e) {}
 
+if (!whisperData) {
+  try {
+    const lct = $('Load Cached Telemetry').first().json;
+    if (lct && (lct.text || (lct.words && lct.words.length))) whisperData = lct;
+  } catch(e) {}
+}
 if (!whisperData) {
   try {
     const w = $('3. Groq Whisper').first().json;
@@ -1853,136 +1918,158 @@ if (!whisperData) {
   } catch(e) {}
 }
 
-if (!whisperData || !whisperData.text) {
-    throw new Error('CRITICAL ERROR: Transcript text is missing. Run Whisper node first.');
+if (!whisperData || (!whisperData.text && !(whisperData.annotated_sentences && whisperData.annotated_sentences.length))) {
+    throw new Error('CRITICAL ERROR: Transcript text is missing. Run Whisper node or Load Cached Telemetry first.');
 }
 
-const rawText = whisperData.text;
+const isDryRun = Boolean(whisperData.dry_run);
+const rawText = whisperData.text || '';
 const durationMinutes = (whisperData.duration || 1800) / 60;
 
-// Break into sentences and add Line Numbers and Timestamps
+// Load Unified Multimodal Timeline Index (disk fallback for both Production and Sandbox)
+let indexDoc = null;
+if (fs.existsSync('/files/temp/unified_timeline_index.json')) {
+  try {
+    indexDoc = JSON.parse(fs.readFileSync('/files/temp/unified_timeline_index.json', 'utf8'));
+  } catch(e) {}
+}
+
+// Use pre-annotated cadence/telemetry sentences when available, otherwise build from Whisper words
+let annotatedSentences = whisperData.annotated_sentences || (indexDoc && indexDoc.annotated_sentences) || [];
 let whisperWords = whisperData.words || (whisperData.x_groq && whisperData.x_groq.words) || [];
+
+// Filter Whisper prompt hallucinations (repeated intro music loops)
+const isHallucination = (txt) => {
+  const low = String(txt || '').toLowerCase();
+  const keys = ['roblox gaming', 'lucky blocks', 'divine mutation', '10x luck', 'streamer reacting', 'gaming chaos'];
+  const hits = keys.filter(k => low.includes(k)).length;
+  return hits >= 2;
+};
+
 let sentences = [];
-let currSentence = "";
-let currStart = -1;
-let currEnd = -1;
-for (let w of whisperWords) {
-  if (currStart === -1) currStart = w.start;
-  currSentence += w.word;
-  currEnd = w.end;
-  if (/[.!?]$/.test(w.word.trim())) {
-    sentences.push(`[${currStart.toFixed(1)}s - ${currEnd.toFixed(1)}s] ${currSentence.trim()}`);
-    currSentence = "";
-    currStart = -1;
+if (annotatedSentences.length > 0) {
+  sentences = annotatedSentences.map(s => \`[\${Number(s.start).toFixed(1)}s - \${Number(s.end).toFixed(1)}s]\${(s.tags && s.tags.length) ? ' ' + s.tags.join(' ') : ''} \${s.text}\`);
+} else {
+  let currSentence = "";
+  let currStart = -1;
+  let currEnd = -1;
+  for (let w of whisperWords) {
+    if (currStart === -1) currStart = w.start;
+    currSentence += w.word;
+    currEnd = w.end;
+    if (/[.!?]$/.test(w.word.trim())) {
+      if (!isHallucination(currSentence)) {
+        sentences.push(\`[\${currStart.toFixed(1)}s - \${currEnd.toFixed(1)}s] \${currSentence.trim()}\`);
+      }
+      currSentence = "";
+      currStart = -1;
+    }
+  }
+  if (currSentence && !isHallucination(currSentence)) {
+    sentences.push(\`[\${currStart.toFixed(1)}s - \${currEnd.toFixed(1)}s] \${currSentence.trim()}\`);
   }
 }
-if (currSentence) sentences.push(`[${currStart.toFixed(1)}s - ${currEnd.toFixed(1)}s] ${currSentence.trim()}`);
 
 const numberedLines = sentences.length > 0 ? sentences : (rawText.match(/[^.!?]+[.!?]+/g) || [rawText]).map((s, i) => '[L' + (i+1) + '] ' + s.trim());
 
-// Calculate chunks — cap at 4 to limit parallel Groq calls
-let numChunks = Math.max(1, Math.round(durationMinutes / 7.5));
-numChunks = Math.min(numChunks, 4);
-
-const linesPerChunk = Math.ceil(numberedLines.length / numChunks);
-const overlap = 10;
-
-const MAX_CHUNK_CHARS = 10000;
-
-// ── Multimodal Viral Anchors Extraction ──────────────────────
-let viralAnchors = [];
-try {
-  const fusionItem = $('Run Multimodal Fusion').first();
-  if (fusionItem && fusionItem.json && fusionItem.json.stdout) {
-    const parsed = JSON.parse(fusionItem.json.stdout);
-    if (parsed && parsed.anchors && parsed.anchors.length > 0) {
-      viralAnchors = parsed.anchors;
+// Multimodal Viral Anchors Extraction
+let viralAnchors = whisperData.anchors || [];
+if (viralAnchors.length === 0) {
+  try {
+    const fusionItem = $('Run Multimodal Fusion').first();
+    if (fusionItem && fusionItem.json && fusionItem.json.stdout) {
+      const parsed = JSON.parse(fusionItem.json.stdout);
+      if (parsed && parsed.anchors && parsed.anchors.length > 0) {
+        viralAnchors = parsed.anchors;
+      }
     }
-  }
-} catch(e) {}
+  } catch(e) {}
+}
+if (viralAnchors.length === 0 && indexDoc && indexDoc.anchors) {
+  viralAnchors = indexDoc.anchors;
+}
+
+const macroTimeline = whisperData.macro_high_signal_timeline || (indexDoc && indexDoc.macro_high_signal_timeline) || '';
 
 let multimodalHeader = "";
 if (viralAnchors.length > 0) {
   multimodalHeader = "\n=== [PROVEN MULTIMODAL VIRAL PEAKS (AUDIENCE CHAT, FACECAM & VOCAL ENERGY)] ===\n" +
-    "The following moments have been empirically pre-verified by live chat velocity bursts (LMAO, 💀, WTF), streamer face reactions (laughter/shock), and vocal scream spikes.\n" +
-    "YOU MUST PRIORITIZE SELECTING YOUR 3 MOMENTS FROM OR DIRECTLY AROUND THESE PROVEN PEAKS:\n\n";
+    "The following moments across the full 1+ hour VOD have been empirically pre-verified by live chat velocity bursts (LMAO, 💀, WTF), streamer face reactions (laughter/shock), vocal dB spikes, and WPM bursts.\n" +
+    "YOU MUST PRIORITIZE SELECTING MOMENTS AROUND THESE PROVEN PEAKS AND LINKING LONG-RANGE CALLBACKS ACROSS THE STREAM:\n\n";
 
-  for (let a of viralAnchors) {
-    multimodalHeader += `• [ANCHOR #${a.anchor_id}] [${a.start}s - ${a.end}s] (Peak at ${a.peak_time}s | Score: ${a.virality_score}/100)\n` +
-      `  - Audience Chat: ${a.chat_signal}\n` +
-      `  - Streamer Facecam: ${a.face_signal}\n` +
-      `  - Audio Energy: ${a.audio_signal}\n` +
-      (a.why_chat_laughed ? `  - Why Chat Laughed: ${a.why_chat_laughed}\n` : '') +
-      (a.comedy_mechanism ? `  - Comedic Catalyst: ${a.comedy_mechanism}\n` : '') +
-      (a.setup_tension_hook ? `  - Setup Tension Hook (In-Media-Res): Start hook at ${a.setup_tension_hook}\n` : '') +
-      (a.is_multi_beat && a.beat_2 ? `  - Compound Multi-Beat Callback: Beat 2 at ${a.beat_2.peak_time}s ("it happened again")\n` : '') +
-      (a.recommended_structure ? `  - Recommended Arc: ${a.recommended_structure}\n` : '') +
-      `\n`;
+  for (let a of viralAnchors.slice(0, 18)) {
+    multimodalHeader += \`• [ANCHOR #\${a.anchor_id}] [\${a.start}s - \${a.end}s] (Peak at \${a.peak_time}s | Score: \${a.virality_score}/100 | Fit: \${a.recommended_archetype || 'NARRATIVE'})\n\` +
+      \`  - Audience Chat: \${a.chat_signal}\n\` +
+      \`  - Streamer Facecam: \${a.face_signal}\n\` +
+      \`  - Audio Energy: \${a.audio_signal}\n\` +
+      (a.why_chat_laughed ? \`  - Why Chat Laughed: \${a.why_chat_laughed}\n\` : '') +
+      (a.comedy_mechanism ? \`  - Comedic Catalyst: \${a.comedy_mechanism}\n\` : '') +
+      (a.setup_tension_hook ? \`  - Setup Tension Hook (In-Media-Res): \${a.setup_tension_hook}\n\` : '') +
+      (a.callback_links && a.callback_links.length ? \`  - Cross-Stream Callback Links: \${a.callback_links.map(cb => cb.tc + ' ("' + cb.keyword + '"): ' + cb.text).join(' | ')}\n\` : '') +
+      (a.is_multi_beat && a.beat_2 ? \`  - Compound Multi-Beat Callback: Beat 2 at \${a.beat_2.peak_time}s ("it happened again")\n\` : '') +
+      (a.recommended_structure ? \`  - Recommended Arc: \${a.recommended_structure}\n\` : '') +
+      (a.transcript_snippet ? \`  - Transcript Preview: "\${a.transcript_snippet.substring(0, 180)}"\n\` : '') +
+      \`\n\`;
   }
 }
+
+// In Sandbox mode, run a single fast macro pass so <10s iteration completes cleanly without 2-minute waits
+let numChunks = isDryRun ? 1 : Math.min(4, Math.max(1, Math.round(durationMinutes / 7.5)));
+const linesPerChunk = Math.ceil(numberedLines.length / numChunks);
+const overlap = 10;
+const MAX_CHUNK_CHARS = isDryRun ? 16000 : 10000;
 
 const results = [];
 for (let i = 0; i < numChunks; i++) {
-  const start = Math.max(0, i * linesPerChunk - overlap);
-  const end = Math.min(numberedLines.length, (i + 1) * linesPerChunk + overlap);
-  
-  let chunkText = numberedLines.slice(start, end).join('\n');
-  if (chunkText.length > MAX_CHUNK_CHARS) {
-    chunkText = chunkText.substring(0, MAX_CHUNK_CHARS) + '\n[... chunk trimmed to fit token limit ...]';
+  let chunkText = '';
+  if (isDryRun && macroTimeline) {
+    chunkText = "=== HIGH-SIGNAL ANNOTATED TIMELINE ACROSS FULL VOD ===\n" + macroTimeline.substring(0, 10000) +
+      "\n\n=== SAMPLED RAW SENTENCE CONTEXT ===\n" + numberedLines.slice(0, 180).join('\n').substring(0, 6000);
+  } else {
+    const start = Math.max(0, i * linesPerChunk - overlap);
+    const end = Math.min(numberedLines.length, (i + 1) * linesPerChunk + overlap);
+    chunkText = numberedLines.slice(start, end).join('\n');
+    if (chunkText.length > MAX_CHUNK_CHARS) {
+      chunkText = chunkText.substring(0, MAX_CHUNK_CHARS) + '\n[... chunk trimmed to fit token limit ...]';
+    }
   }
 
-  const prompt = 
-    'SYSTEM: You are an elite YouTube Shorts Viral Content Scout. Read the numbered transcript chunk and identify the top 3 most explosive, high-retention gaming moments.\n\n' + (multimodalHeader ? multimodalHeader + '\n' : '') +
+  const prompt =
+    'SYSTEM: You are an elite YouTube Shorts Viral Content Scout. Read the multimodal transcript index and identify the top 4 most explosive, high-retention gaming moments.\n\n' +
+    (multimodalHeader ? multimodalHeader + '\n' : '') +
     '=== CRITICAL ANTI-ADMIN, ANTI-IDLE & ANTI-BROWSER FILTER ===\n' +
     'The streamer frequently Alt-Tabs out of Roblox into Chrome, Notepad, or OBS, or idles between matches. You MUST REJECT any segments containing:\n' +
     '• Typing player usernames into search bars, accepting friend requests on the Roblox website, Discord DMs, or settings.\n' +
-    '• Reading long lists of $3 donations or subscriber names while idling in prison cells or menus.\n' +
-    '• [STRICT ANTI-IDLE & ANTI-STATIC]: Staring at a static character, idle spawn lobbies, pre-round waiting screens, or repetitive hype without in-game action. The moment MUST start at the exact second active movement, conflict, or high-stakes dialogue begins!\n' +
-    '• [STRICT ANTI-LOADING SCREEN]: Literal loading screens, black screens, teleport transitions, or respawn screens. Start must never be during 00:00 to 00:03 stream start!\n' +
-    '• [STRICT ANTI-SLOW-UI & TRADE MENUS]: Agonizingly slow 10-15s menu processes, trade requests, inventory browsing, or reading basic level/system error messages (e.g. "player is Level 1"). Reject slow UI clicking!\n' +
-    '• [STRICT ANTI-CONVERSATIONAL BANTER & DONATION AFTERMATH]: Low-energy stream banter, casual conversational chat answering, or relaxed donation thank-yous. For donations, the climax is the instant of the donation alert/reaction; cut 2.0-3.5s after the shout!\n' +
-    '• [STRICT ANTI-GRIND & ANTI-FARMING]: Raw unedited grinding, coin/potato shooting, repetitive minion farming, or monotonous loops without rapid progression. For upgrades, clip must start immediately before the purchase decision (max 6-8s before purchase)!\n' +
-    '• If a great in-game moment precedes browser/admin talk or idle chat, STOP THE MOMENT 2.0 to 3.5 seconds after the in-game reaction/laugh! NEVER include the desktop/browser transition.\n\n' +
-    '=== ZERO-SECOND RETENTION & STRICT ANTI-MID-THOUGHT PREAMBLE ===\n' +
-    '• [ZERO-SECOND RETENTION & STRICT ANTI-MID-THOUGHT PREAMBLE]: Clips MUST NOT start mid-thought, mid-sentence, or with casual hesitation words (e.g. REJECT clips starting with "Speaking of, um...", "Oh, since everyone\'s here", "Wait, so...", "Um, actually...").\n' +
-    '• The clip MUST open on a high-energy verbal hook, bold declaration, high-stakes question, or immediate conflict that stops the scroll instantly.\n' +
-    '• [COLD OPEN PAYOFF HOOK]: Identify the highest-energy 1.5-2.0s payoff quote (the scream, hilarious punchline, or shocking climax). This will be used as a cold open retention hook at 0:00 before the setup!\n\n' +
-    '=== CAUSE-EFFECT NARRATIVE THROUGH-LINE (ANTI-CHAOS) ===\n' +
-    '• [CAUSE-EFFECT NARRATIVE THROUGH-LINE & ANTI-CHAOS]: Gameplay clips featuring raw yelling (e.g. screaming "launch, launch" or "bunger") WITHOUT context are alienating to cold audiences on the For You Page.\n' +
-    '• Prioritize Edit Decision Lists (EDLs) that pair a clear comedic setup with a distinct payoff, rather than just extracting raw volume spikes.\n' +
-    '• Every scouted moment must follow a complete 3-part micro-narrative:\n' +
-    '  1. Clear Setup: The rule, the bet, the crazy plan, or the monster warning (explaining WHY this is happening).\n' +
-    '  2. Escalation: The attempt, tension building.\n' +
-    '  3. Distinct Payoff: The hilarious failure, jumpscare, scream, or punchline.\n' +
-    '• COLD AUDIENCE TEST: If a stranger scrolling TikTok has never played the game, will they understand the joke within 3 seconds? If no, REJECT.\n\n' +
-    '=== WHAT TO SCOUT FOR (VIRAL ARCHETYPES) ===\n' +
-    '- [VIRAL STORY/LORE]: Streamer sharing a personal story, childhood embarrassment ("Cringe Era"), or confession.\n' +
-    '- [BET / CHALLENGE]: High-stakes dare (e.g. "if I get caught I do X") with immediate active consequence.\n' +
-    '- [BETRAYAL / ARREST]: Dramatic in-game arrest, backstab, heist gone wrong, sudden ambush.\n' +
-    '- [HILARIOUS FAIL / JUMPSCARE]: Instant karma, accidental blunder, sudden chaotic jumpscare/scream.\n\n' +
-    '=== SINGLE-PREMISE COHESION & PAYOFF INTEGRITY ===\n' +
-    '• The moment must have a SINGLE COHESIVE PREMISE. REJECT clips that jump between unrelated topics (e.g. complaining about an avatar, then jumping to buying store items).\n' +
-    '• NO PASSIVE COMPLAINING: Reject segments stalled by passive complaining about missing sound effects, audio settings, or game glitches.\n' +
-    '• ZERO IRRELEVANT PREAMBLE: Start directly at the catalyst or setup (no 5-10s of unrelated stream talk before the titular event, e.g. dev joining).\n' +
-    '• [SATISFYING CLIMAX ONLY]: The payoff MUST have clear visual/emotional impact. REJECT weak or anticlimactic endings (e.g. opponent glitches through a wall far away with no confrontation; or a developer/guest arrives, dies on the floor, and immediately leaves without interacting).\n' +
-    '• Climax must occur at peak of the moment, followed by strictly 2.0-3.5s of aftermath.\n' +
-    '• Must end on a complete thought, sentence, or laughter. NEVER cut off mid-word or mid-sentence!\n\n' +
-    'OUTPUT: Plain text only. For each of the 3 moments, write:\n' +
-    '- Tag: [TAG NAME] (e.g. [BETRAYAL / ARREST], [CRINGE LORE], [HILARIOUS FAIL])\n' +
-    '- Exact Climax Quote: "..."\n' +
-    '- Cold Open Teaser Quote: "..." (1.5-2.0s payoff snippet)\n' +
-    '- Cause-and-Effect Setup: "1 clear sentence explaining why the moment is funny/intense"\n' +
-    '- Start & End Timestamps: [X.Xs - Y.Ys]\n' +
-    '- 4 lines of context before climax [Lx]\n' +
-    '- 2-3 lines of reaction after climax [Lx]\n\n' +
+    '• Reading long lists of $3 donations or subscriber names while idling in menus ([STRICT ANTI-CONVERSATIONAL BANTER & DONATION AFTERMATH]).\n' +
+    '• [STRICT ANTI-IDLE & ANTI-STATIC]: REJECT segments where the character is standing still in a lobby waiting for a match, reading chat idly, or staring at a wall!\n' +
+    '• [STRICT ANTI-LOADING SCREEN]: NEVER start a clip at [0.0s - 3.0s] or on intro music/loading screens.\n' +
+    '• [STRICT ANTI-SLOW-UI & TRADE MENUS]: REJECT segments where the streamer spends 10+ seconds clicking buttons inside inventory/trade UI panels.\n' +
+    '• [STRICT ANTI-GRIND & ANTI-FARMING]: REJECT repetitive grinding, farming coins/potatoes, or boring waiting.\n\n' +
+    '=== VIRAL NARRATIVE ARCHITECTURES & RETENTION RULES ===\n' +
+    'Evaluate candidates against these 5 Viral Shorts Models:\n' +
+    '1. IN_MEDIA_RES_FLASHFORWARD (Peak shock/scream cut 0.3s before punchline -> rewind to confident setup -> full payoff)\n' +
+    '2. DOUBLE_DOWN_ESCALATION (Boast/Fail 1 -> jump cut past dead air (+10s or minutes later) -> Double Down -> Bigger Fail 2)\n' +
+    '3. HUBRIS_INSTANT_KARMA (Arrogant boast -> 0.5s beat -> instant collapse + stunned reaction)\n' +
+    '4. MYSTERY_OPEN_LOOP (Weird anomaly/question -> tight chronological clues -> twist reveal)\n' +
+    '5. REVERSE_PAYOFF_LOOP (Final sentence flows seamlessly back into 0:00 opening line)\n\n' +
+    '• [ZERO-SECOND RETENTION & STRICT ANTI-MID-THOUGHT PREAMBLE]: REJECT clips that start mid-thought or with casual filler ("Speaking of...", "Um...").\n' +
+    '• [CAUSE-EFFECT NARRATIVE THROUGH-LINE & ANTI-CHAOS]: Every candidate MUST pair a clear setup/boast/context (even if 15m earlier) with its comedic/intense payoff.\n' +
+    '• ZERO IRRELEVANT PREAMBLE: Start directly at the catalyst or setup.\n' +
+    '• [SATISFYING CLIMAX ONLY]: Climax must deliver clear visual/emotional impact followed by strictly 2.0-3.5s of aftermath. NEVER cut mid-word!\n\n' +
+    'OUTPUT: Plain text only. For each of the moments, provide:\n' +
+    '- Tag & Recommended Archetype: [TAG NAME] | Archetype: [ONE OF THE 5 MODELS]\n' +
+    '- Hook/Climax Tease Timestamp: [X.Xs - Y.Ys] (cut 0.3s before final punchline for flashforward)\n' +
+    '- Causal Setup Timestamp(s): [X.Xs - Y.Ys] (can be earlier in the VOD for cold-viewer context)\n' +
+    '- Payoff / Escalation Timestamp(s): [X.Xs - Y.Ys]\n' +
+    '- Multimodal Signal Drivers: (Chat Z-score, dB spike, Emotion, WPM)\n' +
+    '- Exact Quotes for Hook, Setup & Payoff\n\n' +
     '--- CHUNK ' + (i+1) + '/' + numChunks + ' ---\n' +
     chunkText;
 
-  results.push({ json: { prompt, chunk_index: i+1 } });
+  results.push({ json: { prompt, chunk_index: i+1, dry_run: isDryRun } });
 }
 
-return results;
-`,
+return results;`,
     };
 
     @node({
@@ -2048,7 +2135,22 @@ return results;
         position: [-86660, 26120],
     })
     ScoutAccumulate = {
-        jsCode: 'return $items("2. Basic LLM Chain (Scout)");',
+        jsCode: `const allItems = [];
+let runIdx = 0;
+while (true) {
+  try {
+    const items = $items("2. Basic LLM Chain (Scout)", 0, runIdx);
+    if (!items || items.length === 0) break;
+    allItems.push(...items);
+    runIdx++;
+  } catch (e) {
+    break;
+  }
+}
+const out = allItems.length > 0 ? allItems : $items("2. Basic LLM Chain (Scout)");
+let isDryRun = false;
+try { isDryRun = Boolean($('1. Prepare Scout Prompt').first().json.dry_run); } catch(e) {}
+return out.map(it => ({ json: { ...it.json, dry_run: isDryRun } }));`,
     };
 
     @node({
@@ -2059,170 +2161,130 @@ return results;
         position: [-86500, 26120],
     })
     _3PrepareDirectorPrompt = {
-        jsCode: `const items = $input.all();
+        jsCode: `const fs = require('fs');
+const items = $input.all();
 let allSnippets = "";
 
-// Gather all the plain text snippets from the Scout pass
 items.forEach((item, index) => {
-  allSnippets += `
-
-=== SCOUTED MOMENTS CHUNK ${index + 1} ===
-`;
+  allSnippets += \`\n\n=== SCOUTED MOMENTS CHUNK \${index + 1} ===\n\`;
   allSnippets += item.json.text || item.json.output || "";
 });
 
-// Pull the Global Summary for title context
+let isDryRun = items.some(it => Boolean(it.json && it.json.dry_run));
+if (!isDryRun) {
+  try { isDryRun = Boolean($('1. Prepare Scout Prompt').first().json.dry_run); } catch(e) {}
+}
 
-// Pull Proven Multimodal Anchors
-let viralContext = "";
+// Pull Proven Multimodal Anchors (with disk fallback for <10s Sandbox runs)
+let anchorsList = [];
 try {
   const fusionItem = $('Run Multimodal Fusion').first();
   if (fusionItem && fusionItem.json && fusionItem.json.stdout) {
     const parsed = JSON.parse(fusionItem.json.stdout);
-    if (parsed && parsed.anchors && parsed.anchors.length > 0) {
-      viralContext = "
-=== PROVEN AUDIENCE & REACTION ANCHORS ===
-" +
-        parsed.anchors.map(a => `[ANCHOR #${a.anchor_id}] Peak at ${a.peak_time}s | Score: ${a.virality_score}/100 | ${a.comedy_mechanism || 'Comedy'}
-  - Why They Laughed: ${a.why_chat_laughed || a.chat_signal}
-  - Tension Hook: ${a.setup_tension_hook || '0.5s before catalyst'}
-  - Multi-Beat Callback: ${a.is_multi_beat ? 'Yes (Beat 2 at ' + a.beat_2?.peak_time + 's)' : 'No (Keep tight 12-18s single beat)'}`).join("
-") + "
-";
-    }
+    if (parsed && parsed.anchors) anchorsList = parsed.anchors;
   }
 } catch(e) {}
+
+if (anchorsList.length === 0) {
+  try {
+    const lct = $('Load Cached Telemetry').first().json;
+    if (lct && lct.anchors) anchorsList = lct.anchors;
+  } catch(e) {}
+}
+if (anchorsList.length === 0 && fs.existsSync('/files/temp/unified_timeline_index.json')) {
+  try {
+    const idx = JSON.parse(fs.readFileSync('/files/temp/unified_timeline_index.json', 'utf8'));
+    if (idx && idx.anchors) anchorsList = idx.anchors;
+  } catch(e) {}
+}
+
+let viralContext = "";
+if (anchorsList.length > 0) {
+  viralContext = "\n=== PROVEN AUDIENCE & REACTION ANCHORS ===\n" +
+    anchorsList.slice(0, 18).map(a => \`[ANCHOR #\${a.anchor_id}] Peak at \${a.peak_time}s (\${a.peak_tc || ''}) | Score: \${a.virality_score}/100 | Model Fit: \${a.recommended_archetype || a.comedy_mechanism || 'Comedy'}\n\` +
+      \`  - Audio: \${a.audio_signal || ''} | Chat: \${a.chat_signal || ''} | Face: \${a.face_signal || ''}\n\` +
+      (a.why_chat_laughed ? \`  - Why They Laughed: \${a.why_chat_laughed}\n\` : '') +
+      (a.setup_tension_hook ? \`  - Tension Hook: \${a.setup_tension_hook}\n\` : '') +
+      (a.callback_links && a.callback_links.length ? \`  - Callback Candidates: \${a.callback_links.map(cb => cb.time + 's ("' + cb.keyword + '"): ' + cb.text).join(' | ')}\n\` : '') +
+      (a.is_multi_beat && a.beat_2 ? \`  - Multi-Beat Callback: Beat 2 at \${a.beat_2.peak_time}s\n\` : '')
+    ).join("\n") + "\n";
+}
 
 let streamContext = "";
 try {
   const summaryRaw = $('1. Global Summary AI').first().json.output || $('1. Global Summary Fallback').first().json.output || "{}";
-  const summary = JSON.parse(summaryRaw.replace(/```json/gi,'').replace(/```/g,'').trim());
+  const summary = JSON.parse(summaryRaw.replace(/\`\`\`json/gi,'').replace(/\`\`\`/g,'').trim());
   streamContext = [
     summary.game ? "GAME: " + summary.game : "",
     summary.global_summary ? "STREAM SUMMARY: " + summary.global_summary : "",
     summary.vibe ? "VIBE: " + summary.vibe : "",
     (summary.key_themes && summary.key_themes.length) ? "KEY THEMES: " + summary.key_themes.join(", ") : ""
-  ].filter(Boolean).join("
-");
+  ].filter(Boolean).join("\n");
 } catch(e) {}
 
-// Target top clips
-const targetClips = 6; 
+const targetClips = 5;
 
-const jsonSchema = '{"clips":[{"clip_number":1,"estimated_vod_segment":"X-Y minutes","title":"3-4 Word Curiosity Teaser 💀","hook_caption":"3-5 WORDS IN ALL CAPS","theme":"Core viral theme","structure_type":"Narrative Arc","start_time":105.2,"end_time":142.0,"payoff_time":138.5,"cold_open_start":138.0,"cold_open_end":140.0,"cause_and_effect_setup":"Clear comedic setup explaining why the moment is funny/intense"}]}';
+const jsonSchema = '{"clips":[{"clip_number":1,"narrative_archetype":"IN_MEDIA_RES_FLASHFORWARD","estimated_vod_segment":"X-Y minutes","title":"3-4 Word Curiosity Teaser 💀","hook_caption":"3-5 WORDS IN ALL CAPS","theme":"Core viral theme","structure_type":"Flash-Forward","start_time":105.2,"end_time":142.0,"payoff_time":138.5,"cold_open_start":137.0,"cold_open_end":138.6,"segments":[{"start":137.0,"end":138.6,"role":"HOOK_CLIMAX"},{"start":105.2,"end":116.5,"role":"SETUP"},{"start":133.0,"end":141.5,"role":"PAYOFF"}],"assembled_spoken_script":"Full stitched spoken lines in exact EDL playback order...","signal_justification":{"chat_burst":"Z=3.4 sigma / top laugh quote","db_spike":"+11.2dB scream at X:XX","face_emotion":"Surprise/Joy X%"},"cause_and_effect_setup":"Clear setup explaining cold-viewer narrative arc"}]}';
 
-const prompt = 
-  'SYSTEM: You are the #1 Elite YouTube Shorts Creative Director & Narrative Architect. You are selecting and pacing the absolute best viral clips from a gaming stream.
+const prompt =
+  'SYSTEM: You are the #1 Elite YouTube Shorts Creative Director & Narrative Architect. You are editing non-linear, ultra-high-retention YouTube Shorts from a 1+ hour gaming livestream.\n\n' +
+  (streamContext ? '=== STREAM CONTEXT ===\n' + streamContext + '\n\n' : '') +
+  (viralContext ? viralContext + '\n' : '') +
 
-' +
+  '=== 5 VIRAL YOUTUBE SHORTS NARRATIVE FRAMEWORKS (SELECT BEST MODEL PER CLIP) ===\n' +
+  'Evaluate each candidate moment against ALL 5 proven frameworks and diversify archetypes across your selected clips:\n' +
+  '1. IN_MEDIA_RES_FLASHFORWARD (CLIMAX_TEASE -> REWIND_SETUP -> FULL_PAYOFF):\n' +
+  '   - Start at 0:00-0:02.5 with a HOOK_CLIMAX segment cut strictly 0.3s BEFORE the final reveal/punchline so nothing is spoiled!\n' +
+  '   - Hard-cut to SETUP (can rewind earlier in the VOD), then play ESCALATION/PAYOFF through the full climax & reaction.\n' +
+  '2. DOUBLE_DOWN_ESCALATION (SETUP -> FAIL_1 -> JUMP_CUT -> DOUBLE_DOWN -> FAIL_2):\n' +
+  '   - Stitch initial claim/failure (SETUP) + immediate laugh -> jump-cut past dead air (+10s to +35s OR minutes later in VOD) -> ESCALATION double-down -> bigger PAYOFF.\n' +
+  '3. HUBRIS_INSTANT_KARMA (BOAST -> 0.5s_BEAT -> INSTANT_PUNISHMENT):\n' +
+  '   - Zero fluff! Open at 0:00 directly on streamer\'s boldest/most arrogant claim (SETUP), smash-cut straight to frame of collapse (PAYOFF), hold 2.5s stunned reaction.\n' +
+  '4. MYSTERY_OPEN_LOOP (QUESTION/ANOMALY -> ESCALATING_CLUES -> TWIST_REVEAL):\n' +
+  '   - Open with an intriguing question, weird glitch, or strange encounter (HOOK_CLIMAX/SETUP), stitch 3-4 tight clues trimming all silence, end on sharp PAYOFF twist.\n' +
+  '5. REVERSE_PAYOFF_LOOP (ENDING_SETUP_LINE -> STORY -> CUT_RIGHT_BEFORE_ENDING_LINE):\n' +
+  '   - Pick start/end words so the final truncated clause at the end of PAYOFF flows grammatically & rhythmically straight into the 0:00 opening words (>100% AVD infinite loop).\n\n' +
 
-  (streamContext ? '=== STREAM CONTEXT ===
-' + streamContext + '
+  '=== STRICT RETENTION & COLD-VIEWER SCRIPTING RULES ===\n' +
+  '• ZERO-CONTEXT COLD VIEWER RULE: Assume the viewer knows NOTHING about this stream. If a 2-second SETUP line from 15 minutes earlier is needed to understand why the joke is funny, stitch that early SETUP segment first into segments[]!\n' +
+  '• NO SPOILERS AT 0:00: A hook must create an information gap (tension/curiosity/shock), NEVER spoil the final outcome at 0:00.\n' +
+  '• RUTHLESS DEAD-AIR REMOVAL: Every segment in segments[] MUST advance tension, setup, or payoff. Total stitched duration across all segments should be 15s to 40s.\n\n' +
 
-' : '') +
+  '=== RULE 1: STRICT ANTI-ADMIN, ANTI-MENU & ANTI-BROWSER FILTER ===\n' +
+  '• NEVER include desktop/browser screens, notepad, OBS, or admin housekeeping in any clip!\n' +
+  '• NEVER include slow UI menus, trade request dialogues, inventory browsing, or passive donation roll calls.\n\n' +
 
-  '=== RULE 1: STRICT ANTI-ADMIN, ANTI-MENU & ANTI-BROWSER FILTER ===
-' +
-  '• NEVER include desktop/browser screens, notepad, OBS, or admin housekeeping in any clip!
-' +
-  '• NEVER include slow UI menus, trade request dialogues, inventory browsing, or reading system error boxes (e.g. 15 seconds of trade negotiation to read a Level 1 text box)!
-' +
-  '• NEVER include passive complaining about missing sound effects, audio settings, or game glitches that stall momentum.
-' +
-  '• If an in-game climax is followed by the streamer sitting reading donor lists or opening menus, SET end_time EXACTLY 2.0 TO 3.5 SECONDS AFTER THE IN-GAME REACTION/LAUGH! Cut BEFORE they switch windows or start reading donor roll calls.
+  '=== RULE 2: ZERO-SECOND RETENTION & COLD OPEN RETENTION TRAP (First 0-3 Seconds) ===\n' +
+  '• ZERO DEAD TIME AT HOOK: The first 3 seconds are make-or-break for Shorts retention.\n' +
+  '• ZERO-SECOND RETENTION & STRICT ANTI-MID-THOUGHT PREAMBLE: REJECT clips that start mid-thought or with casual hesitation banter.\n' +
+  '• COLD OPEN RETENTION TRAP & ZERO-SECOND HOOK: For linear clips use cold_open_start/cold_open_end; for Flash-Forward/Loop clips put the exact HOOK_CLIMAX segment first in segments[]!\n' +
+  '• TIGHT SETUP BEFORE CLIMAX: Individual linear buildup should be tight (8s-16s before payoff); multi-beat jumps must use separate entries in segments[].\n\n' +
 
-' +
+  '=== RULE 3: SINGLE PREMISE NARRATIVE COHESION & CAUSE-EFFECT EDL (ANTI-CHAOS) ===\n' +
+  '• SINGLE PREMISE NARRATIVE COHESION: Every Short must tell ONE unified micro-story fulfilling the hook banner and title.\n' +
+  '• CAUSE-EFFECT EDL (ANTI-CHAOS): DISQUALIFY raw isolated screams without context. Pair every reaction with its setup.\n\n' +
 
-  '=== RULE 2: ZERO-SECOND RETENTION & COLD OPEN RETENTION TRAP (First 0-3 Seconds) ===
-' +
-  '• ZERO DEAD TIME AT HOOK: The first 3 seconds are make-or-break for Shorts retention.
-' +
-  '• ZERO-SECOND RETENTION & STRICT ANTI-MID-THOUGHT PREAMBLE: REJECT clips that start mid-thought, mid-sentence, or with casual hesitation banter (e.g. "Speaking of, um...", "Oh, since everyone\'s here"). Start at the exact catalyst of the event!
-' +
-  '• COLD OPEN RETENTION TRAP & ZERO-SECOND HOOK: To maximize algorithmic velocity and FYP retention, identify the highest-energy payoff and designate a 1.5-2.0s cold open segment (cold_open_start, cold_open_end) from the climactic payoff to duplicate at the very beginning of the clip, OR synthesize a strong verbal title hook to stop the scroll.
-' +
-  '• NEVER start on a loading screen, black screen, spawn lobby, or static character staring into space.
-' +
-  '• NO IRRELEVANT PREAMBLE: Do NOT waste 5-10 seconds on off-topic stream banter before addressing the titular event (e.g. a dev joining or boss fight). Start at the exact catalyst of the event!
-' +
-  '• TIGHT SETUP BEFORE CLIMAX: The buildup (payoff_time - start_time) MUST strictly be between 8s and 16s (sweet spot 10-14s). Never force 20-30s of pre-match static hype or potato grinding!
-' +
-  '• The start_time MUST capture the exact second the action, debate, or spoken hook begins!
+  '=== RULE 4: PAYOFF IMPACT & ANTI-CLIMAX FILTER ===\n' +
+  '• PAYOFF IMPACT & ANTI-CLIMAX FILTER: Climax MUST deliver real comedic/dramatic impact. Allow strictly 2.0-3.5s reaction aftermath, never 20s of chatter.\n' +
+  '• NATURAL CLIP DURATION: Target punchy high-retention windows between 18s and 38s across your stitched EDL.\n' +
+  '• CLEAN RESOLUTION: Every cut must respect spoken thoughts/laughs.\n\n' +
 
-' +
+  '=== RULE 5: TITLES & HOOK CAPTIONS ===\n' +
+  '1. TITLE: Curiosity Gap 3-4 words + emoji (💀, 😭, 😱, 🤯), <=25 chars.\n' +
+  '2. HOOK_CAPTION: 3-5 WORDS IN ALL CAPS, 100% factual to screen.\n\n' +
 
-  '=== RULE 3: SINGLE PREMISE NARRATIVE COHESION & CAUSE-EFFECT EDL (ANTI-CHAOS) ===
-' +
-  '• SINGLE PREMISE NARRATIVE COHESION: Every Short must tell ONE single unified micro-story that fulfills the hook banner and title.
-' +
-  '• CAUSE-EFFECT EDL (ANTI-CHAOS): DISQUALIFY raw isolated volume spikes and contextless yelling (e.g. screaming "bunger", "launch"). The EDL must pair a clear comedic setup with a distinct payoff. Cold audiences on the FYP must understand the narrative through-line immediately.
-' +
-  '• REJECT clips that jump between disconnected topics (e.g. complaining about an avatar, then jumping to buying a store item).
-' +
-  '• REJECT raw unedited repetitive grinding, farming coins/potatoes, or monotonous clicking loops. For upgrades, start directly before purchase (max 6-8s before purchase).
+  '=== RULE 6: COMPOUND MULTI-BEAT & NON-SEQUENTIAL EDL SEGMENTS ===\n' +
+  '• Always populate "segments": [{"start": float, "end": float, "role": "HOOK_CLIMAX"|"SETUP"|"ESCALATION"|"PAYOFF"}] with exact VOD seconds from the transcript.\n' +
+  '• You MAY order segments non-chronologically (e.g., HOOK_CLIMAX from 420s -> SETUP from 120s -> PAYOFF from 418s->425s).\n\n' +
 
-' +
-
-  '=== RULE 4: PAYOFF IMPACT & ANTI-CLIMAX FILTER ===
-' +
-  '• SATISFYING RESOLUTION REQUIRED: The climax/payoff MUST deliver real visual or comedic impact. DISQUALIFY weak or anticlimactic endings (e.g. an opponent glitching through a wall in the distance, or a developer lying dead and leaving without interacting).
-' +
-  '• CLIMAX IN FINAL 15-25%: The payoff_time (the arrest, scream, roast, rare drop, or punchline) MUST occur near the end of the clip.
-' +
-  '• PUNCHY AFTERMATH: Allow strictly 2.0 to 3.5 seconds of high-energy reaction/laugh after payoff_time, then CUT CLEANLY. Never leave 15-20 seconds of slow conversational stream chatter or relaxed donation thanking!
-' +
-  '• NATURAL CLIP DURATION: Target punchy high-retention windows between 18s and 38s (end_time - start_time between 18 and 38). Never force 40s+ of filler!
-' +
-  '• CLEAN RESOLUTION: Every clip must end on a complete thought, sentence, or natural laugh. NEVER cut off mid-word or mid-sentence!
-
-' +
-
-  '=== RULE 5: TITLES & HOOK CAPTIONS ===
-' +
-  '1. TITLE (CURIOSITY GAP — 3-4 WORDS + EMOJI):
-' +
-  '   • Tease the mystery or stakes without spoiling the ending: "He Actually Did It 💀", "My Worst Mistake 😭", "The Secret Trade 🤯".
-' +
-  '   • Under 25 characters. End with 💀, 😭, 😱, or 🤯.
-' +
-  '2. HOOK_CAPTION (TOP BANNER — 3-5 WORDS IN ALL CAPS):
-' +
-  '   • The top banner pinned at the start of the Short.
-' +
-  '   • STRICTLY 100% FACTUAL to what is happening on screen.
-' +
-  '   • FORBIDDEN: Generic clichés ("WAIT FOR THE END", "BRO REGRETS THIS") and hallucinated clickbait ("THE HACKER EXPOSED", "SAVING THE WHOLE TEAM").
-
-' +
-
-  '=== RULE 6: COMPOUND MULTI-BEAT EDL JUMP-CUTTING ===
-' +
-  '• When building a 2-Beat Escalation Short around a recurrence/callback anchor (where Beat 1 and Beat 2 are separated by > 8 seconds of idle gameplay):
-' +
-  '  - NEVER leave a continuous 20-30s dead air block between Beat 1 and Beat 2.
-' +
-  '  - You MUST include \"segments\": [ {\"start\": beat1_start, \"end\": beat1_end}, {\"start\": beat2_start, \"end\": beat2_end} ] in the clip JSON.
-' +
-  '  - Keep Beat 1 between 10s-15s (setup & initial laugh), cut cleanly, and jump directly into Beat 2 (8s-14s callback climax).
-' +
-  '  - The EDL Concat engine will seamlessly jump-cut the transition!
-
-' +
-  '=== OUTPUT FORMAT ===
-' +
-  'Return strictly valid JSON only. No markdown formatting, no explanations.
-' +
-  'Output exactly ' + targetClips + ' clips:
-' +
-  jsonSchema + '
-
-' +
-  '--- SCOUTED SNIPPETS ---
-' +
+  '=== OUTPUT FORMAT ===\n' +
+  'Return strictly valid JSON only. No markdown formatting, no explanations.\n' +
+  'Output exactly ' + targetClips + ' diverse clips across different narrative_archetype values:\n' +
+  jsonSchema + '\n\n' +
+  '--- SCOUTED SNIPPETS ---\n' +
   allSnippets;
 
-return [{ pairedItem: { item: 0 }, json: { prompt, targetClips } }];
-`,
+return [{ pairedItem: { item: 0 }, json: { prompt, targetClips, dry_run: isDryRun } }];`,
     };
 
     @node({
@@ -2268,186 +2330,230 @@ return [{ pairedItem: { item: 0 }, json: { prompt, targetClips } }];
 let allClips = [];
 
 let streamerName = "Streamer";
-try {
-  streamerName = $('Config').item.json.streamer_name || "Streamer";
-} catch(e) {}
+try { streamerName = $('Config').item.json.streamer_name || "Streamer"; } catch(e) {}
+if (streamerName === "Streamer") {
+  try { streamerName = $('Load Cached Telemetry').first().json.streamer_name || "Streamer"; } catch(e) {}
+}
+
+let isDryRun = false;
+try { isDryRun = Boolean($('3. Prepare Director Prompt').first().json.dry_run); } catch(e) {}
+if (!isDryRun) {
+  try { isDryRun = Boolean($('Load Cached Telemetry').first().json.dry_run); } catch(e) {}
+}
 
 let lastContent = "";
 for (const item of items) {
   let content = item.json.output || item.json.text || '{}';
   lastContent = content;
-  
+
   // 1. Clean markdown formatting
   const b3 = String.fromCharCode(96).repeat(3);
   content = content.split(b3 + 'json').join('').split(b3).join('').trim();
-  
+
   // 2. Auto-Fix common AI JSON typos
-  content = content.replace(/\\}\\}\\}\\,/g, '}},');
-  content = content.replace(/\\}\\}\\]\\}/g, '}}]}');
-  content = content.replace(/\\]\\]/g, ']'); 
-  content = content.replace(/\\}\\,\\]/g, '}]'); 
-  
-  try { 
-    // 3. Try parsing the repaired JSON
-    const aiData = JSON.parse(content); 
+  content = content.replace(/\}\}\}\,\,/g, '}},');
+  content = content.replace(/\}\}\]\}/g, '}}]}');
+  content = content.replace(/\]\]/g, ']');
+  content = content.replace(/\}\,\]/g, '}]');
+
+  try {
+    const aiData = JSON.parse(content);
     if (aiData.clips && Array.isArray(aiData.clips)) {
       allClips = allClips.concat(aiData.clips);
     } else if (Array.isArray(aiData)) {
       allClips = allClips.concat(aiData);
     }
-    continue; 
+    continue;
   } catch (e) {
-    // 4. BULLETPROOF FALLBACK: If JSON is STILL broken, forcefully extract using Regex
-    const clipBlocks = content.split(/"clip_number"\\s*:/i);
-    
-    if (clipBlocks.length > 1) {
-        for (let i = 1; i < clipBlocks.length; i++) {
-            const block = clipBlocks[i];
-            
-            const titleMatch = block.match(/"title"\\s*:\\s*"([^"]+)"/i);
-            const hookMatch = block.match(/"hook_caption"\\s*:\\s*"([^"]+)"/i);
-            const startMatch = block.match(/"start_time"\\s*:\\s*([\\d.]+)/i);
-            const endMatch = block.match(/"end_time"\\s*:\\s*([\\d.]+)/i);
-            const payoffMatch = block.match(/"payoff_time"\\s*:\\s*([\\d.]+)/i);
-            const coStartMatch = block.match(/"cold_open_start"\\s*:\\s*([\\d.]+)/i);
-            const coEndMatch = block.match(/"cold_open_end"\\s*:\\s*([\\d.]+)/i);
-            
-            if (startMatch && endMatch) {
-                const s = parseFloat(startMatch[1]);
-                const e = parseFloat(endMatch[1]);
-                const p = payoffMatch ? parseFloat(payoffMatch[1]) : e - 3.5;
-                allClips.push({
-                    title: titleMatch ? titleMatch[1] : (streamerName + '_Clip_' + i),
-                    hook_caption: hookMatch ? hookMatch[1] : "",
-                    start_time: s,
-                    end_time: e,
-                    payoff_time: p,
-                    cold_open_start: coStartMatch ? parseFloat(coStartMatch[1]) : p,
-                    cold_open_end: coEndMatch ? parseFloat(coEndMatch[1]) : Math.min(e, p + 1.8)
-                });
-            }
+    // Try extracting embedded JSON object
+    const jsonMatch = content.match(/\{[\s\S]*"clips"\s*:\s*\[[\s\S]*\]\s*\}/);
+    if (jsonMatch) {
+      try {
+        const recovered = JSON.parse(jsonMatch[0]);
+        if (recovered.clips && Array.isArray(recovered.clips)) {
+          allClips = allClips.concat(recovered.clips);
+          continue;
         }
-    } else {
-        // 5. TEXT FALLBACK: Super aggressive timestamp extraction
-        const allTimeMatches = [...content.matchAll(/\[([\d\.]+)[sS]?\s*-\s*([\d\.]+)[sS]?\]/g)];
-        if (allTimeMatches.length > 0) {
-            let currentClipStart = parseFloat(allTimeMatches[0][1]);
-            let currentClipEnd = parseFloat(allTimeMatches[0][2]);
-            let clipCount = 1;
+      } catch(e2) {}
+    }
 
-            for (let i = 1; i < allTimeMatches.length; i++) {
-                let start = parseFloat(allTimeMatches[i][1]);
-                let end = parseFloat(allTimeMatches[i][2]);
-                
-                if (start - currentClipEnd <= 8 && start >= currentClipStart) {
-                    currentClipEnd = Math.max(currentClipEnd, end);
-                } else {
-                    if (currentClipEnd - currentClipStart > 2) {
-                        allClips.push({
-                            title: 'Extracted_Clip_' + (clipCount++),
-                            hook_caption: "VIRAL MOMENT",
-                            start_time: currentClipStart,
-                            end_time: currentClipEnd,
-                            payoff_time: Math.max(0, currentClipEnd - 3.5),
-                            cold_open_start: Math.max(0, currentClipEnd - 3.5),
-                            cold_open_end: Math.max(0, currentClipEnd - 1.7)
-                        });
-                    }
-                    currentClipStart = start;
-                    currentClipEnd = end;
-                }
-            }
-            if (currentClipEnd - currentClipStart > 2) {
-                allClips.push({
-                    title: 'Extracted_Clip_' + (clipCount++),
-                    hook_caption: "VIRAL MOMENT",
-                    start_time: currentClipStart,
-                    end_time: currentClipEnd,
-                    payoff_time: Math.max(0, currentClipEnd - 3.5),
-                    cold_open_start: Math.max(0, currentClipEnd - 3.5),
-                    cold_open_end: Math.max(0, currentClipEnd - 1.7)
-                });
-            }
+    const clipBlocks = content.split(/"clip_number"\s*:/i);
+    if (clipBlocks.length > 1) {
+      for (let i = 1; i < clipBlocks.length; i++) {
+        const block = clipBlocks[i];
+        const titleMatch = block.match(/"title"\s*:\s*"([^"]+)"/i);
+        const hookMatch = block.match(/"hook_caption"\s*:\s*"([^"]+)"/i);
+        const archMatch = block.match(/"narrative_archetype"\s*:\s*"([^"]+)"/i);
+        const startMatch = block.match(/"start_time"\s*:\s*([\d.]+)/i);
+        const endMatch = block.match(/"end_time"\s*:\s*([\d.]+)/i);
+        const payoffMatch = block.match(/"payoff_time"\s*:\s*([\d.]+)/i);
+        const coStartMatch = block.match(/"cold_open_start"\s*:\s*([\d.]+)/i);
+        const coEndMatch = block.match(/"cold_open_end"\s*:\s*([\d.]+)/i);
+
+        if (startMatch && endMatch) {
+          const s = parseFloat(startMatch[1]);
+          const e = parseFloat(endMatch[1]);
+          const p = payoffMatch ? parseFloat(payoffMatch[1]) : e - 3.5;
+          allClips.push({
+            title: titleMatch ? titleMatch[1] : (streamerName + '_Clip_' + i),
+            hook_caption: hookMatch ? hookMatch[1] : "",
+            narrative_archetype: archMatch ? archMatch[1] : "HUBRIS_INSTANT_KARMA",
+            start_time: s,
+            end_time: e,
+            payoff_time: p,
+            cold_open_start: coStartMatch ? parseFloat(coStartMatch[1]) : p,
+            cold_open_end: coEndMatch ? parseFloat(coEndMatch[1]) : Math.min(e, p + 1.8)
+          });
         }
+      }
+    } else {
+      const allTimeMatches = [...content.matchAll(/\[([\d\.]+)[sS]?\s*-\s*([\d\.]+)[sS]?\]/g)];
+      if (allTimeMatches.length > 0) {
+        let currentClipStart = parseFloat(allTimeMatches[0][1]);
+        let currentClipEnd = parseFloat(allTimeMatches[0][2]);
+        let clipCount = 1;
+
+        for (let i = 1; i < allTimeMatches.length; i++) {
+          let start = parseFloat(allTimeMatches[i][1]);
+          let end = parseFloat(allTimeMatches[i][2]);
+          if (start - currentClipEnd <= 8 && start >= currentClipStart) {
+            currentClipEnd = Math.max(currentClipEnd, end);
+          } else {
+            if (currentClipEnd - currentClipStart > 2) {
+              allClips.push({
+                title: 'Extracted_Clip_' + (clipCount++),
+                hook_caption: "VIRAL MOMENT",
+                start_time: currentClipStart,
+                end_time: currentClipEnd,
+                payoff_time: Math.max(0, currentClipEnd - 3.5),
+                cold_open_start: Math.max(0, currentClipEnd - 3.5),
+                cold_open_end: Math.max(0, currentClipEnd - 1.7)
+              });
+            }
+            currentClipStart = start;
+            currentClipEnd = end;
+          }
+        }
+        if (currentClipEnd - currentClipStart > 2) {
+          allClips.push({
+            title: 'Extracted_Clip_' + (clipCount++),
+            hook_caption: "VIRAL MOMENT",
+            start_time: currentClipStart,
+            end_time: currentClipEnd,
+            payoff_time: Math.max(0, currentClipEnd - 3.5),
+            cold_open_start: Math.max(0, currentClipEnd - 3.5),
+            cold_open_end: Math.max(0, currentClipEnd - 1.7)
+          });
+        }
+      }
     }
   }
 }
 
-// 5. If everything completely fails, use the backup
 if (allClips.length === 0) {
-    return [{ pairedItem: { item: 0 }, json: { start_time: 2.5, end_time: 36, payoff_time: 32.5, cold_open_start: 32.5, cold_open_end: 34.3, title: streamerName + "_Backup_Clip", hook_caption: "INSANE MOMENT", virality_score: 0, structure_type: "Standard", DEBUG_RAW_AI: lastContent } }];
+  return [{ pairedItem: { item: 0 }, json: { dry_run: isDryRun, start_time: 2.5, end_time: 36, payoff_time: 32.5, cold_open_start: 32.5, cold_open_end: 34.3, title: streamerName + "_Backup_Clip", hook_caption: "INSANE MOMENT", narrative_archetype: "HUBRIS_INSTANT_KARMA", virality_score: 0, structure_type: "Standard", DEBUG_RAW_AI: lastContent } }];
 }
 
-// 6. Format and enforce strict pacing, aftermath trimming, and retention protection rules
 return allClips.map((clip, index) => {
-    let sTime = parseFloat(clip.start_time) || 0;
-    let eTime = parseFloat(clip.end_time) || (sTime + 36);
-    let pTime = parseFloat(clip.payoff_time) || (eTime - 3.5);
+  // Validate discrete multi-beat / non-sequential segments if supplied
+  let validSegs = [];
+  if (clip.segments && Array.isArray(clip.segments)) {
+    validSegs = clip.segments
+      .map(s => ({
+        start: Math.max(3.0, Number(parseFloat(s.start).toFixed(2)) || 0),
+        end: Math.max(3.5, Number(parseFloat(s.end).toFixed(2)) || 0),
+        role: String(s.role || 'STORY_BEAT').toUpperCase()
+      }))
+      .filter(s => s.end > s.start && (s.end - s.start) >= 0.8);
+  }
 
+  let sTime = parseFloat(clip.start_time) || (validSegs[0] ? validSegs[0].start : 0);
+  let eTime = parseFloat(clip.end_time) || (validSegs.length ? validSegs[validSegs.length - 1].end : (sTime + 36));
+  let pTime = parseFloat(clip.payoff_time) || (eTime - 3.5);
+
+  if (validSegs.length <= 1) {
     // ANTI-LOADING SCREEN RULE:
-    // If clip starts at the very beginning of the stream (0.0s to 3.0s), advance past loading screens!
     if (sTime < 3.0) {
         sTime = 3.0;
     }
 
     // TIGHT HOOK & SETUP: Modern Shorts require fast setup (8s to 16s before climax).
-    // NEVER allow 20-30 seconds of repetitive static hype, off-topic stream banter, slow trade menus, or raw potato grinding!
     if (pTime > sTime && (pTime - sTime) > 18.0) {
         sTime = Math.round((pTime - 15.0) * 10) / 10;
         if (sTime < 3.0) sTime = 3.0;
     }
 
-    // PUNCHY AFTERMATH: Climax must be followed by strictly 2.0 to 3.5 seconds of aftermath.
-    // Cut immediately after the laugh/reaction! Never leave 15-20 seconds of slow conversational stream chatter or donor roll calls!
+    // PUNCHY AFTERMATH:
     if (pTime > sTime && (eTime - pTime) > 3.5) {
         eTime = Math.round((pTime + 3.0) * 10) / 10;
     }
 
-    // PACING DURATION: Modern Shorts retention sweet spot is 18s to 38s.
-    // NEVER expand start backwards into static character staring, pre-game lobbies, or loading screens!
+    // PACING DURATION:
     let dur = eTime - sTime;
     if (dur < 16) {
         if (sTime > 4.0) {
             sTime = Math.max(3.0, Math.round((eTime - 18.0) * 10) / 10);
         }
     } else if (dur > 40) {
-        // Trim earlier start forward towards payoff to cut out slow preamble, potato grinding, and wandering chatter
         if (pTime > sTime && (pTime - sTime) > 20) {
             sTime = Math.round((pTime - 18.0) * 10) / 10;
         }
         eTime = Math.min(eTime, sTime + 38.0);
     }
 
-    // Cold open calculation (1.5-2.0s teaser hook)
-    let coStart = typeof clip.cold_open_start === 'number' ? clip.cold_open_start : pTime;
-    let coEnd = typeof clip.cold_open_end === 'number' ? clip.cold_open_end : Math.min(eTime, coStart + 1.8);
+    if (validSegs.length === 1) {
+      validSegs[0].start = sTime;
+      validSegs[0].end = eTime;
+    }
+  } else {
+    // Cap total stitched duration of multi-segment non-linear EDLs to <= 44s cleanly
+    let totalSegDur = validSegs.reduce((acc, s) => acc + (s.end - s.start), 0);
+    if (totalSegDur > 44.0) {
+      const ratio = 42.0 / totalSegDur;
+      validSegs = validSegs.map(s => ({
+        ...s,
+        end: Number((s.start + Math.max(1.2, (s.end - s.start) * ratio)).toFixed(2))
+      }));
+    }
+    sTime = validSegs[0].start;
+    eTime = validSegs[validSegs.length - 1].end;
+  }
+
+  let coStart = typeof clip.cold_open_start === 'number' ? clip.cold_open_start : pTime;
+  let coEnd = typeof clip.cold_open_end === 'number' ? clip.cold_open_end : Math.min(eTime, coStart + 1.8);
+  if (validSegs.length <= 1) {
     if (coStart < sTime || coStart >= eTime) coStart = Math.max(sTime, pTime);
     if (coEnd <= coStart || coEnd > eTime) coEnd = Math.min(eTime, coStart + 1.8);
+  }
 
-    // Clean hook_caption fallback
-    let hookCaption = (clip.hook_caption || "").trim().toUpperCase();
-    if (!hookCaption || hookCaption.length < 3) {
-        hookCaption = (clip.title || "").replace(/[^a-zA-Z0-9\\s]/g, "").trim().toUpperCase();
-        const words = hookCaption.split(/\\s+/).slice(0, 5);
-        hookCaption = words.join(" ");
-    }
+  let hookCaption = (clip.hook_caption || "").trim().toUpperCase();
+  if (!hookCaption || hookCaption.length < 3) {
+    hookCaption = (clip.title || "").replace(/[^a-zA-Z0-9\s]/g, "").trim().toUpperCase();
+    const words = hookCaption.split(/\s+/).slice(0, 5);
+    hookCaption = words.join(" ");
+  }
 
-    return { json: {
-        start_time: sTime,
-        end_time: eTime,
-        payoff_time: pTime,
-        cold_open_start: Math.round(coStart * 10) / 10,
-        cold_open_end: Math.round(coEnd * 10) / 10,
-        title: clip.title || (streamerName + '_Clip_' + (index + 1)),
-        hook_caption: hookCaption,
-        virality_score: clip.virality_score || 0,
-        theme: clip.theme || "Gaming",
-        structure_type: clip.structure_type || "Narrative Arc",
-        cause_and_effect_setup: clip.cause_and_effect_setup || "",
-        estimated_segment: clip.estimated_vod_segment || "Unknown"
-    }};
-});
-`,
+  return { json: {
+    dry_run: isDryRun,
+    clip_number: clip.clip_number || (index + 1),
+    start_time: sTime,
+    end_time: eTime,
+    payoff_time: pTime,
+    cold_open_start: Math.round(coStart * 10) / 10,
+    cold_open_end: Math.round(coEnd * 10) / 10,
+    segments: validSegs,
+    narrative_archetype: clip.narrative_archetype || "HUBRIS_INSTANT_KARMA",
+    title: clip.title || (streamerName + '_Clip_' + (index + 1)),
+    hook_caption: hookCaption,
+    virality_score: clip.virality_score || 0,
+    theme: clip.theme || "Gaming",
+    structure_type: clip.structure_type || clip.narrative_archetype || "Narrative Arc",
+    assembled_spoken_script: clip.assembled_spoken_script || "",
+    signal_justification: clip.signal_justification || {},
+    cause_and_effect_setup: clip.cause_and_effect_setup || "",
+    estimated_segment: clip.estimated_vod_segment || "Unknown"
+  }};
+});`,
     };
 
     @node({
@@ -2662,7 +2768,7 @@ return [{ pairedItem: { item: 0 }, json: { url: randomUrl } }];`,
                 {
                     id: 'prompt_restore',
                     name: 'prompt',
-                    value: "={{ $('Scout Wait').item.json.prompt }}",
+                    value: "={{ $('Scout Loop').item.json.prompt }}",
                     type: 'string',
                 },
             ],
@@ -3092,6 +3198,227 @@ return [{ pairedItem: { item: 0 }, json: { url: randomUrl } }];`,
     // ROUTAGE ET CONNEXIONS
     // =====================================================================
 
+    @node({
+        id: 'sandbox-trigger-script-edl',
+        name: 'Sandbox: Test Script & EDL',
+        type: 'n8n-nodes-base.manualTrigger',
+        version: 1,
+        position: [-89280, 26300],
+    })
+    SandboxTestScriptEdl = {};
+
+    @node({
+        id: 'load-cached-telemetry-id',
+        name: 'Load Cached Telemetry',
+        type: 'n8n-nodes-base.code',
+        version: 2,
+        position: [-88880, 26300],
+    })
+    LoadCachedTelemetry = {
+        jsCode: `const fs = require('fs');
+
+const pinned = ($input.first() && $input.first().json) || {};
+let indexDoc = null;
+let whisperDoc = null;
+
+// Prefer pinned data if user pinned a full cached payload in n8n UI
+if (pinned.words && Array.isArray(pinned.words) && pinned.words.length > 0) {
+  whisperDoc = pinned;
+}
+
+if (!indexDoc && fs.existsSync('/files/temp/unified_timeline_index.json')) {
+  try {
+    indexDoc = JSON.parse(fs.readFileSync('/files/temp/unified_timeline_index.json', 'utf8'));
+  } catch (e) {}
+}
+
+// Discover best cached Whisper transcript
+const txCandidates = [
+  '/files/temp/transcript.json',
+  '/files/outputs/whisper_28754.json',
+  '/files/temp/whisper_raw.json',
+  '/files/outputs/whisper_28696.json',
+];
+if (!whisperDoc) {
+  for (const p of txCandidates) {
+    if (fs.existsSync(p)) {
+      try {
+        const d = JSON.parse(fs.readFileSync(p, 'utf8'));
+        const words = d.words || (d.x_groq && d.x_groq.words) || [];
+        if (words.length > 0 || (d.text && d.text.length > 50)) {
+          whisperDoc = d;
+          break;
+        }
+      } catch (e) {}
+    }
+  }
+}
+
+if (!whisperDoc && !indexDoc) {
+  throw new Error('SANDBOX ERROR: No cached telemetry found in /files/temp/. Run telemetry_fusion_indexer.py or pin telemetry JSON.');
+}
+
+// Optional secondary caches if unified_timeline_index wasn't built yet
+let audioEnergy = null;
+let chatClusters = null;
+let comedicBeats = null;
+let faceEmotions = null;
+
+try { if (fs.existsSync('/files/temp/audio_energy.json')) audioEnergy = JSON.parse(fs.readFileSync('/files/temp/audio_energy.json', 'utf8')); } catch (e) {}
+try { if (fs.existsSync('/files/temp/chat_laughter_clusters.json')) chatClusters = JSON.parse(fs.readFileSync('/files/temp/chat_laughter_clusters.json', 'utf8')); } catch (e) {}
+try { if (fs.existsSync('/files/temp/comedic_beats.json')) comedicBeats = JSON.parse(fs.readFileSync('/files/temp/comedic_beats.json', 'utf8')); } catch (e) {}
+try { if (fs.existsSync('/files/temp/face_emotions.json')) faceEmotions = JSON.parse(fs.readFileSync('/files/temp/face_emotions.json', 'utf8')); } catch (e) {}
+
+const words = (whisperDoc && (whisperDoc.words || (whisperDoc.x_groq && whisperDoc.x_groq.words))) || [];
+const duration = (whisperDoc && whisperDoc.duration) || (indexDoc && indexDoc.stream_duration_sec) || (words.length ? words[words.length - 1].end : 3600);
+
+return [{
+  pairedItem: { item: 0 },
+  json: {
+    dry_run: pinned.dry_run !== undefined ? Boolean(pinned.dry_run) : true,
+    streamer_name: pinned.streamer_name || 'KreekCraft',
+    stream_file: pinned.stream_file || 'sandbox_cached_stream.mp4',
+    duration,
+    text: (whisperDoc && whisperDoc.text) || '',
+    words,
+    anchors: (indexDoc && indexDoc.anchors) || pinned.anchors || [],
+    macro_high_signal_timeline: (indexDoc && indexDoc.macro_high_signal_timeline) || '',
+    annotated_sentences: (indexDoc && indexDoc.annotated_sentences) || [],
+    audio_energy: audioEnergy,
+    chat_laughter_clusters: chatClusters,
+    comedic_beats: comedicBeats,
+    face_emotions: faceEmotions,
+  }
+}];`,
+    };
+
+    @node({
+        id: 'if-sandbox-skip-wait-id',
+        name: 'If Sandbox Skip Wait',
+        type: 'n8n-nodes-base.if',
+        version: 2.2,
+        position: [-87920, 26300],
+    })
+    IfSandboxSkipWait = {
+        conditions: {
+            options: { caseSensitive: true, typeValidation: 'strict' },
+            conditions: [{
+                leftValue: '={{ Boolean($json.dry_run) === true }}',
+                rightValue: true,
+                operator: { type: 'boolean', operation: 'true' },
+            }],
+            combinator: 'and',
+        },
+        options: {},
+    };
+
+    @node({
+        id: 'if-bypass-loop-sandbox-id',
+        name: 'If Bypass Loop Sandbox',
+        type: 'n8n-nodes-base.if',
+        version: 2.2,
+        position: [-85540, 26140],
+    })
+    IfBypassLoopSandbox = {
+        conditions: {
+            options: { caseSensitive: true, typeValidation: 'strict' },
+            conditions: [{
+                leftValue: '={{ Boolean($json.dry_run) === true }}',
+                rightValue: true,
+                operator: { type: 'boolean', operation: 'true' },
+            }],
+            combinator: 'and',
+        },
+        options: {},
+    };
+
+    @node({
+        id: 'is-dry-run-script-sandbox-id',
+        name: 'Is Dry Run / Script Sandbox?',
+        type: 'n8n-nodes-base.if',
+        version: 2.2,
+        position: [-85080, 26240],
+    })
+    IsDryRunScriptSandbox = {
+        conditions: {
+            options: { caseSensitive: true, typeValidation: 'strict' },
+            conditions: [{
+                leftValue: '={{ Boolean($json.dry_run) === true }}',
+                rightValue: true,
+                operator: { type: 'boolean', operation: 'true' },
+            }],
+            combinator: 'and',
+        },
+        options: {},
+    };
+
+    @node({
+        id: 'dry-run-script-only-id',
+        name: 'DRY_RUN_SCRIPT_ONLY',
+        type: 'n8n-nodes-base.code',
+        version: 2,
+        position: [-84860, 26440],
+    })
+    DryRunScriptOnly = {
+        jsCode: `const fs = require('fs');
+const items = $input.all().map(i => i.json);
+
+const fmtTC = (sec) => {
+  const sTot = Math.max(0, Number(sec) || 0);
+  const m = Math.floor(sTot / 60);
+  const s = (sTot % 60).toFixed(2).padStart(5, '0');
+  return \`\${String(m).padStart(2, '0')}:\${s}\`;
+};
+
+const grouped = new Map();
+for (const it of items) {
+  const key = \`\${it.clip_number || 1}::\${it.clip_title || 'Clip'}\`;
+  if (!grouped.has(key)) {
+    grouped.set(key, {
+      dry_run: true,
+      clip_number: it.clip_number || 1,
+      narrative_archetype: it.narrative_archetype || 'HUBRIS_INSTANT_KARMA',
+      title: it.clip_title,
+      hook_caption: it.hook_caption,
+      theme: it.theme,
+      cause_and_effect_setup: it.cause_and_effect_setup,
+      signal_justification: it.signal_justification || {},
+      assembled_spoken_script: it.assembled_spoken_script || '',
+      total_duration_sec: 0,
+      edl_segments: []
+    });
+  }
+  const entry = grouped.get(key);
+  entry.edl_segments.push({
+    segment_order: it.segment_order,
+    start: it.start,
+    end: it.end,
+    start_tc: fmtTC(it.start),
+    end_tc: fmtTC(it.end),
+    duration: it.duration,
+    role: it.role || 'STORY_BEAT',
+    spoken_text: it.spoken_text || ''
+  });
+  entry.total_duration_sec = Number((entry.total_duration_sec + (Number(it.duration) || 0)).toFixed(2));
+}
+
+const previews = Array.from(grouped.values()).map(p => {
+  p.edl_segments.sort((a, b) => a.segment_order - b.segment_order);
+  if (!p.assembled_spoken_script) {
+    p.assembled_spoken_script = p.edl_segments
+      .map(s => \`[\${s.role} \${s.start_tc}-\${s.end_tc}] "\${s.spoken_text}"\`)
+      .join(' -> ');
+  }
+  return p;
+});
+
+try {
+  fs.writeFileSync('/files/temp/n8n_sandbox_edl_preview.json', JSON.stringify(previews, null, 2));
+} catch(e) {}
+
+return previews.map(p => ({ json: p }));`,
+    };
+
     @links()
     defineRouting() {
         this.ScheduleTrigger.out(0).to(this.FindStream.in(0));
@@ -3114,7 +3441,9 @@ return [{ pairedItem: { item: 0 }, json: { url: randomUrl } }];`,
         this.LoopClips.out(0).to(this.DeleteSourceVod.in(0));
         this.LoopClips.out(1).to(this.WaitInsideLoop.in(0));
         this.WaitInsideLoop.out(0).to(this._6ExtractViralSegments.in(0));
-        this._6ExtractViralSegments.out(0).to(this.CutConcatAllSegments.in(0));
+        this._6ExtractViralSegments.out(0).to(this.IsDryRunScriptSandbox.in(0));
+        this.IsDryRunScriptSandbox.out(0).to(this.DryRunScriptOnly.in(0));
+        this.IsDryRunScriptSandbox.out(1).to(this.CutConcatAllSegments.in(0));
         this.CutConcatAllSegments.out(0).to(this.ExecuteCutConcat.in(0));
         this.ExecuteCutConcat.out(0).to(this._7bExtractClipAudio.in(0));
         this._7bExtractClipAudio.out(0).to(this._7cReadAudio.in(0));
@@ -3154,7 +3483,9 @@ return [{ pairedItem: { item: 0 }, json: { url: randomUrl } }];`,
         this.ReadAudioForFallback.out(0).to(this._3GroqWhisperFallback.in(0));
         this._1PrepareScoutPrompt.out(0).to(this.ScoutLoop.in(0));
         this.ScoutLoop.out(0).to(this.ScoutAccumulate.in(0));
-        this.ScoutLoop.out(1).to(this.ScoutWait.in(0));
+        this.ScoutLoop.out(1).to(this.IfSandboxSkipWait.in(0));
+        this.IfSandboxSkipWait.out(0).to(this._2BasicLlmChainScout.in(0));
+        this.IfSandboxSkipWait.out(1).to(this.ScoutWait.in(0));
         this.ScoutWait.out(0).to(this._2BasicLlmChainScout.in(0));
         this._2BasicLlmChainScout.out(0).to(this.ScoutLoop.in(0));
         this._2BasicLlmChainScout.out(1).to(this.IfScout429.in(0));
@@ -3166,7 +3497,11 @@ return [{ pairedItem: { item: 0 }, json: { url: randomUrl } }];`,
         this._4BasicLlmChainDirector.out(1).to(this.IfDirector429.in(0));
         this.IfDirector429.out(0).to(this.WaitDirectorError.in(0));
         this.IfDirector429.out(1).to(this._5SplitClips.in(0));
-        this._5SplitClips.out(0).to(this.LoopClips.in(0));
+        this.SandboxTestScriptEdl.out(0).to(this.LoadCachedTelemetry.in(0));
+        this.LoadCachedTelemetry.out(0).to(this._1PrepareScoutPrompt.in(0));
+        this._5SplitClips.out(0).to(this.IfBypassLoopSandbox.in(0));
+        this.IfBypassLoopSandbox.out(0).to(this._6ExtractViralSegments.in(0));
+        this.IfBypassLoopSandbox.out(1).to(this.LoopClips.in(0));
         this.WriteSidecarJson.out(0).to(this.LoopClips.in(0));
         this.PickRandomStreamer.out(0).to(this.FallbackDownload.in(0));
         this.FallbackDownload.out(0).to(this.FindStream.in(0));

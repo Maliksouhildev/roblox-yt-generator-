@@ -246,7 +246,7 @@ def run_fusion(
     audio_path: str,
     cam_config_path: str,
     output_path: str,
-    top_k: int = 6
+    top_k: int = 18
 ):
     print(f"[Multimodal Pipeline] Starting analysis for: {video_path}", file=sys.stderr)
 
@@ -436,6 +436,31 @@ def run_fusion(
         used_intervals.append((anchor_start, anchor_end))
         if len(anchors) >= top_k:
             break
+
+    # Persist standardized telemetry cache files for <10s Script Sandbox iterations
+    try:
+        os.makedirs("/files/temp", exist_ok=True)
+        ae_peaks = [{"start": round(float(sw[0]), 2), "end": round(float(sw[1]), 2), "mid": round((float(sw[0]) + float(sw[1])) / 2.0, 2), "jump_db": 10.0, "label": "dB_PEAK"} for sw in audio_spikes]
+        with open("/files/temp/audio_energy.json", "w", encoding="utf-8") as f:
+            json.dump({"peaks": ae_peaks, "count": len(ae_peaks)}, f, indent=2)
+        if chat_res is not None:
+            with open("/files/temp/chat_laughter_clusters.json", "w", encoding="utf-8") as f:
+                json.dump({"clusters": chat_res.get("top_clusters", []), "count": len(chat_res.get("top_clusters", []))}, f, indent=2)
+        if face_res is not None:
+            f_ev = [{"start": s["time"], "end": s["time"] + 1.5, "dominant": ("joy" if s.get("joy", 0) >= s.get("surprise", 0) else "surprise"), "intensity": s["intensity"]} for s in face_res.get("samples", []) if s.get("intensity", 0) >= 65.0]
+            with open("/files/temp/face_emotions.json", "w", encoding="utf-8") as f:
+                json.dump({"top_events": f_ev, "samples": face_res.get("samples", [])[:1500]}, f, indent=2)
+        from telemetry_fusion_indexer import build_unified_index
+        build_unified_index(
+            audio_energy_path="/files/temp/audio_energy.json",
+            chat_path="/files/temp/chat_laughter_clusters.json" if chat_res else None,
+            face_path="/files/temp/face_emotions.json" if face_res else None,
+            output_dir="/files/temp",
+            top_k=top_k,
+            save_cache=True,
+        )
+    except Exception as e_idx:
+        print(f"[Multimodal Warning] Sandbox cache build skipped: {e_idx}", file=sys.stderr)
 
     result = {
         "status": "success",

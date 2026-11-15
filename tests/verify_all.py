@@ -80,6 +80,16 @@ checks = [
     ("Run Multimodal Fusion", "multimodal_analyzer.py", "RunMultimodalFusion analyzer script execution"),
     ("1. Prepare Scout Prompt", "PROVEN MULTIMODAL VIRAL PEAKS", "Scout multimodal viral anchors extraction"),
     ("3. Prepare Director Prompt", "PROVEN AUDIENCE & REACTION ANCHORS", "Director multimodal anchors alignment"),
+
+    # 12. Script Sandbox & 5 Viral Narrative Archetypes checks
+    ("Load Cached Telemetry", "unified_timeline_index.json", "LoadCachedTelemetry cached multimodal loader"),
+    ("Is Dry Run / Script Sandbox?", "dry_run", "HardRenderGate dry_run check"),
+    ("DRY_RUN_SCRIPT_ONLY", "edl_segments", "DryRunPreview script & EDL output"),
+    ("3. Prepare Director Prompt", "IN_MEDIA_RES_FLASHFORWARD", "Director Archetype A Flash-Forward"),
+    ("3. Prepare Director Prompt", "DOUBLE_DOWN_ESCALATION", "Director Archetype B Escalation"),
+    ("3. Prepare Director Prompt", "HUBRIS_INSTANT_KARMA", "Director Archetype C Instant Karma"),
+    ("3. Prepare Director Prompt", "MYSTERY_OPEN_LOOP", "Director Archetype D Mystery Loop"),
+    ("3. Prepare Director Prompt", "REVERSE_PAYOFF_LOOP", "Director Archetype E Infinite Loop"),
 ]
 
 all_passed = True
