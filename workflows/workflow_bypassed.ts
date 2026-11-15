@@ -2613,8 +2613,6 @@ for (const item of items) {
         const startMatch = block.match(/"start_time"\s*:\s*([\d.]+)/i);
         const endMatch = block.match(/"end_time"\s*:\s*([\d.]+)/i);
         const payoffMatch = block.match(/"payoff_time"\s*:\s*([\d.]+)/i);
-        const coStartMatch = block.match(/"cold_open_start"\s*:\s*([\d.]+)/i);
-        const coEndMatch = block.match(/"cold_open_end"\s*:\s*([\d.]+)/i);
 
         if (startMatch && endMatch) {
           const s = parseFloat(startMatch[1]);
@@ -2626,9 +2624,7 @@ for (const item of items) {
             narrative_archetype: archMatch ? archMatch[1] : "HUBRIS_INSTANT_KARMA",
             start_time: s,
             end_time: e,
-            payoff_time: p,
-            cold_open_start: coStartMatch ? parseFloat(coStartMatch[1]) : p,
-            cold_open_end: coEndMatch ? parseFloat(coEndMatch[1]) : Math.min(e, p + 1.8)
+            payoff_time: p
           });
         }
       }
@@ -2651,9 +2647,7 @@ for (const item of items) {
                 hook_caption: "VIRAL MOMENT",
                 start_time: currentClipStart,
                 end_time: currentClipEnd,
-                payoff_time: Math.max(0, currentClipEnd - 3.5),
-                cold_open_start: Math.max(0, currentClipEnd - 3.5),
-                cold_open_end: Math.max(0, currentClipEnd - 1.7)
+                payoff_time: Math.max(0, currentClipEnd - 3.5)
               });
             }
             currentClipStart = start;
@@ -2666,9 +2660,7 @@ for (const item of items) {
             hook_caption: "VIRAL MOMENT",
             start_time: currentClipStart,
             end_time: currentClipEnd,
-            payoff_time: Math.max(0, currentClipEnd - 3.5),
-            cold_open_start: Math.max(0, currentClipEnd - 3.5),
-            cold_open_end: Math.max(0, currentClipEnd - 1.7)
+            payoff_time: Math.max(0, currentClipEnd - 3.5)
           });
         }
       }
