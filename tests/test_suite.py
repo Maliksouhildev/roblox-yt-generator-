@@ -46,8 +46,8 @@ class TestPipelineComprehensive(unittest.TestCase):
         self.assertFalse(is_corner_hud, "Corner facecam must not be flagged as top HUD")
 
     def test_cam_detector_sanitize_crop_bounds_and_ratio(self):
-        """Webcam crop must use 720:460 target ratio (~1.565) and stay inside box/frame boundaries."""
-        # Box coords: x=1400, y=50, w=450, h=300
+        """Webcam crop must preserve narrow physical boxes (<1.55) and match 720:380 on wide boxes."""
+        # Narrow physical box: x=1400, y=50, w=450, h=300 (aspect 1.50 < 1.55 -> exact physical box)
         box = (1400, 50, 450, 300)
         crop = cam_detector.sanitize_crop(
             cx=1600, cy=200, fw=100, fh=120,
@@ -59,13 +59,20 @@ class TestPipelineComprehensive(unittest.TestCase):
         self.assertLessEqual(crop["cam_x"] + crop["cam_w"], 1400 + 450)
         self.assertGreaterEqual(crop["cam_y"], 50)
         self.assertLessEqual(crop["cam_y"] + crop["cam_h"], 50 + 300)
-        # Even coordinates for FFmpeg
         self.assertEqual(crop["cam_w"] % 2, 0)
         self.assertEqual(crop["cam_h"] % 2, 0)
-        # Aspect ratio matches 720:380 (~1.895)
-        self.assertAlmostEqual(crop["cam_w"] / crop["cam_h"], 720.0 / 380.0, delta=0.08)
-        # Verify chin clearance: cam_y ensures eyes at ~33% leaving >= 60% below eyes
-        self.assertLessEqual(crop["cam_y"], 200 - int(crop["cam_h"] * 0.30))
+        self.assertAlmostEqual(crop["cam_w"] / crop["cam_h"], 450.0 / 300.0, delta=0.05)
+
+        # Wide physical box: x=1200, y=50, w=680, h=360 (aspect 1.889 >= 1.55 -> 720:380 target ratio)
+        wide_box = (1200, 50, 680, 360)
+        wide_crop = cam_detector.sanitize_crop(
+            cx=1540, cy=200, fw=100, fh=120,
+            camera_type="box", box_coords=wide_box
+        )
+        self.assertEqual(wide_crop["cam_w"] % 2, 0)
+        self.assertEqual(wide_crop["cam_h"] % 2, 0)
+        self.assertAlmostEqual(wide_crop["cam_w"] / wide_crop["cam_h"], 720.0 / 380.0, delta=0.08)
+        self.assertLessEqual(wide_crop["cam_y"], 200 - int(wide_crop["cam_h"] * 0.30))
 
     def test_split_clips_all_seven_user_failure_cases(self):
         """Simulate Split Clips logic on all 7 failure cases from the user's issue list."""
@@ -234,9 +241,9 @@ class TestPipelineComprehensive(unittest.TestCase):
         self.assertEqual(params.get("batchSize"), 1, "Loop Clips batchSize must be 1, preventing single-clip loop exit")
 
     def test_three_zone_vertical_layout_collision_prevention(self):
-        """Review Point 3: Top banner at y=75, untouched game action at y=380-820, subtitles at y=880."""
+        """Review Point 3: Top banner at y=75, untouched game action at y=380-820, subtitles at y=920."""
         cs_code = self.nodes["Create Subtitle Binary"]["parameters"]["jsCode"]
-        self.assertIn("const subY = 880;", cs_code, "Subtitles must be at lower third y=880, preventing collision with Roblox text at y=500")
+        self.assertIn("const subY = 920;", cs_code, "Subtitles must be at lower third y=920, preventing collision with Roblox text at y=500")
         self.assertIn("const captionY = 75;", cs_code, "Top banner must be at y=75, away from gameplay")
 
     def test_subtitle_styling_color_highlight_and_no_single_word_lines(self):
@@ -252,10 +259,153 @@ class TestPipelineComprehensive(unittest.TestCase):
         self.assertIn("DANGER_WORDS", cs_code, "Must detect danger words for dynamic color and emoji injection")
 
     def test_cold_open_splicing_and_filler_trimming(self):
-        """Virality Update: 1.8s cold open retention trap and conversational filler word trimming."""
+        """Virality Update: HOOK_CLIMAX cold open retention trap and conversational filler word trimming."""
         ev_code = self.nodes["6. Extract Viral Segments"]["parameters"]["jsCode"]
-        self.assertIn("ColdOpen_teaser", ev_code, "Extract Viral Segments must support ColdOpen_teaser splicing")
+        self.assertIn("HOOK_CLIMAX", ev_code, "Extract Viral Segments must support HOOK_CLIMAX splicing")
         self.assertIn("fillerWords", ev_code, "Must trim conversational hesitation filler words")
+
+    def test_split_clips_multi_segment_narrative_arching_runtime(self):
+        """Execute real 5. Split Clips JS in Node.js to verify 3-act segments and non-overlapping multi-arc retention."""
+        split_js = self.nodes["5. Split Clips"]["parameters"]["jsCode"]
+        mock_payload = {
+            "clips": [
+                {
+                    "clip_number": 1,
+                    "narrative_archetype": "HUBRIS_INSTANT_KARMA",
+                    "title": "1v1 For The Scythe?! 💀",
+                    "hook_caption": "1V1 FOR THE SCYTHE?!",
+                    "virality_score": 92,
+                    "start_time": 10.0,
+                    "end_time": 343.0,
+                    "payoff_time": 340.0,
+                    "segments": [
+                        {"start": 10.0, "end": 22.0, "role": "SETUP"},
+                        {"start": 144.0, "end": 157.0, "role": "ESCALATION"},
+                        {"start": 326.0, "end": 340.0, "role": "PAYOFF"}
+                    ]
+                },
+                {
+                    "clip_number": 2,
+                    "narrative_archetype": "REVERSE_PAYOFF_LOOP",
+                    "title": "Scam For $20,000?! 😱",
+                    "hook_caption": "SCAM FOR $20,000?!",
+                    "virality_score": 95,
+                    "start_time": 53.0,
+                    "end_time": 454.0,
+                    "payoff_time": 450.0,
+                    "segments": [
+                        {"start": 53.0, "end": 65.0, "role": "SETUP"},
+                        {"start": 252.0, "end": 268.0, "role": "ESCALATION"},
+                        {"start": 438.0, "end": 453.0, "role": "PAYOFF"}
+                    ]
+                },
+                {
+                    "clip_number": 3,
+                    "narrative_archetype": "DOUBLE_DOWN_ESCALATION",
+                    "title": "Single Span Fallback 😭",
+                    "hook_caption": "BRO ACTUALLY LOST",
+                    "virality_score": 88,
+                    "start_time": 520.0,
+                    "end_time": 554.0,
+                    "payoff_time": 551.0
+                }
+            ]
+        }
+        harness = (
+            "const $input = { all: () => [{ json: { output: " + json.dumps(json.dumps(mock_payload)) + " } }] };\n"
+            "const $ = (name) => ({ item: { json: {} }, last: () => ({ json: { dry_run: true, streamer_name: 'Kreek' } }), first: () => ({ json: {} }) });\n"
+            "function runNode() {\n" + split_js + "\n}\n"
+            "console.log(JSON.stringify(runNode()));\n"
+        )
+        with tempfile.NamedTemporaryFile('w', suffix='.js', delete=False, encoding='utf-8') as tf:
+            tf.write(harness)
+            tpath = tf.name
+        try:
+            res = subprocess.run(['node', tpath], capture_output=True, text=True)
+            self.assertEqual(res.returncode, 0, f"5. Split Clips runtime failed: {res.stderr}")
+            out = json.loads(res.stdout.strip())
+            self.assertEqual(len(out), 3, f"Expected all 3 distinct multi-segment clips preserved, got {len(out)}")
+            for item in out:
+                segs = item['json']['segments']
+                roles = [s['role'] for s in segs]
+                self.assertIn('SETUP', roles)
+                self.assertIn('ESCALATION', roles)
+                self.assertIn('PAYOFF', roles)
+                tot = sum(s['end'] - s['start'] for s in segs)
+                self.assertGreaterEqual(tot, 29.0)
+                self.assertLessEqual(tot, 45.5)
+        finally:
+            if os.path.exists(tpath):
+                os.remove(tpath)
+
+    def test_sandbox_edl_multi_segment_audit(self):
+        """Verify test_script_sandbox.splice_clip_edl and audit_sandbox_edl enforce 3-act 30-45s arcs and zero mid-sentence cuts."""
+        sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'scripts')))
+        import test_script_sandbox as tss
+
+        # Build synthetic Whisper words with clean sentence boundaries
+        words = []
+        t = 10.0
+        sentences = [
+            "If I win, I get the Nicholas Scythe.",
+            "Bring it on, you Teletubby.",
+            "I need to lock in right now.",
+        ]
+        for s in sentences:
+            for tok in s.split():
+                words.append({"word": tok, "start": round(t, 2), "end": round(t + 0.65, 2)})
+                t += 0.72
+            t += 0.15
+        t = 140.0
+        for s in ["I can't hit him!", "Why can't I not hit him?", "Bro is glitching through the walls!"]:
+            for tok in s.split():
+                words.append({"word": tok, "start": round(t, 2), "end": round(t + 0.65, 2)})
+                t += 0.72
+            t += 0.15
+        t = 320.0
+        for s in ["I cheated through the walls!", "Scam him!", "How much can I sell it for on eBay?"]:
+            for tok in s.split():
+                words.append({"word": tok, "start": round(t, 2), "end": round(t + 0.65, 2)})
+                t += 0.72
+            t += 0.15
+
+        clips_in = [
+            {
+                "clip_number": i + 1,
+                "narrative_archetype": arch,
+                "title": f"Arc {i+1} 💀",
+                "hook_caption": f"ARC {i+1}",
+                "segments": [
+                    {"start": 10.0, "end": 22.0, "role": "SETUP"},
+                    {"start": 140.0, "end": 152.0, "role": "ESCALATION"},
+                    {"start": 320.0 + i * 100, "end": 332.0 + i * 100, "role": "PAYOFF"},
+                ] if i == 0 else [
+                    {"start": 10.0, "end": 22.0, "role": "SETUP"},
+                    {"start": 140.0, "end": 152.0, "role": "ESCALATION"},
+                    {"start": 320.0, "end": 332.0, "role": "PAYOFF"},
+                ]
+            }
+            for i, arch in enumerate(["HUBRIS_INSTANT_KARMA", "DOUBLE_DOWN_ESCALATION", "MYSTERY_OPEN_LOOP", "REVERSE_PAYOFF_LOOP"])
+        ]
+        # Make payoffs distinct for clips 1..4
+        for idx_c, c in enumerate(clips_in):
+            off = idx_c * 100.0
+            c["segments"][2]["start"] = 320.0 + off
+            c["segments"][2]["end"] = 332.0 + off
+            if idx_c > 0:
+                base = 320.0 + off
+                wt = base
+                for tok in ["He", "actually", "did", "it.", "Oh", "my", "god,", "no", "way!", "Twenty", "thousand", "dollars!"]:
+                    words.append({"word": tok, "start": round(wt, 2), "end": round(wt + 0.85, 2)})
+                    wt += 0.90
+
+        previews = [tss.splice_clip_edl(c, words) for c in clips_in]
+        idx_doc = {
+            "stream_duration_sec": 700.0,
+            "anchors": [{"peak_time": 325.0 + i * 100.0, "start": 320.0 + i * 100.0} for i in range(4)],
+        }
+        audit = tss.audit_sandbox_edl({"previews": previews}, idx_doc, words=words)
+        self.assertTrue(audit["all_passed"], f"Sandbox audit failed: {audit}")
 
     def test_dead_space_avatar_row_filter(self):
         """Virality Update: cam_detector.py detects static row of non-animated VTuber avatars in top third."""

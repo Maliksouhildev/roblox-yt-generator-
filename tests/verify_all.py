@@ -19,28 +19,40 @@ checks = [
     ("1. Prepare Scout Prompt", "STRICT ANTI-CONVERSATIONAL BANTER & DONATION AFTERMATH", "Scout anti-conversational banter rule"),
     ("1. Prepare Scout Prompt", "STRICT ANTI-GRIND & ANTI-FARMING", "Scout anti-grind rule"),
     ("1. Prepare Scout Prompt", "SATISFYING CLIMAX ONLY", "Scout satisfying climax rule"),
+    ("1. Prepare Scout Prompt", "MULTI-SEGMENT NARRATIVE ARCHING", "Scout multi-segment narrative arching enforcement"),
+    ("1. Prepare Scout Prompt", "[SETUP / STAKES]", "Scout Act 1 SETUP/STAKES requirement"),
+    ("1. Prepare Scout Prompt", "[ESCALATION / STRUGGLE]", "Scout Act 2 ESCALATION/STRUGGLE requirement"),
+    ("1. Prepare Scout Prompt", "[PAYOFF / REACTION]", "Scout Act 3 PAYOFF/REACTION requirement"),
+    ("1. Prepare Scout Prompt", "30-45s", "Scout 30-45s unified story arc target"),
 
     # 2. Director prompt checks
     ("3. Prepare Director Prompt", "ZERO DEAD TIME AT HOOK", "Director zero dead time rule"),
-    ("3. Prepare Director Prompt", "TIGHT SETUP BEFORE CLIMAX", "Director tight setup buildup rule"),
+    ("3. Prepare Director Prompt", "MULTI-SEGMENT NARRATIVE ARCHING", "Director multi-segment narrative arching enforcement"),
+    ("3. Prepare Director Prompt", "[SETUP / STAKES]", "Director Act 1 SETUP/STAKES requirement"),
+    ("3. Prepare Director Prompt", "[ESCALATION / STRUGGLE]", "Director Act 2 ESCALATION/STRUGGLE requirement"),
+    ("3. Prepare Director Prompt", "[PAYOFF / REACTION]", "Director Act 3 PAYOFF/REACTION requirement"),
     ("3. Prepare Director Prompt", "SINGLE PREMISE NARRATIVE COHESION", "Director single premise cohesion rule"),
     ("3. Prepare Director Prompt", "PAYOFF IMPACT & ANTI-CLIMAX FILTER", "Director payoff impact rule"),
-    ("3. Prepare Director Prompt", "18s and 38s", "Director 18s-38s duration sweet spot"),
+    ("3. Prepare Director Prompt", "30s and 45s", "Director 30s-45s unified Shorts duration window"),
+    ("3. Prepare Director Prompt", "ZERO RANDOM MID-SENTENCE CUTS", "Director zero mid-sentence cuts rule"),
+    ("3. Prepare Director Prompt", "MANDATORY 3-ACT MULTI-SEGMENT SCHEMA", "Director mandatory 3-act segments schema"),
 
     # 3. Context Merge checks
     ("Context Merge Agent", "CLIMAX QUOTE (Exact 3 to 5 words", "ContextMerge climax quote rule"),
     ("Context Merge Fallback", "CLIMAX QUOTE (Exact 3 to 5 words", "ContextMergeFallback climax quote rule"),
 
     # 4. Split Clips checks
-    ("5. Split Clips", "if (sTime < 3.0)", "SplitClips anti-loading screen rule"),
-    ("5. Split Clips", "if (pTime > sTime && (pTime - sTime) > 18.0)", "SplitClips tight setup buildup limit"),
-    ("5. Split Clips", "if (pTime > sTime && (eTime - pTime) > 3.5)", "SplitClips punchy aftermath rule"),
-    ("5. Split Clips", "dur < 16", "SplitClips min duration without artificial dilation"),
+    ("5. Split Clips", "normalizeRole", "SplitClips role normalization helper"),
+    ("5. Split Clips", "snapSegmentBounds", "SplitClips Whisper sentence-boundary snapping"),
+    ("5. Split Clips", "splitIntervalToThreeActs", "SplitClips 3-act fallback arc splitter"),
+    ("5. Split Clips", "totalSegDur < 30.0", "SplitClips 30s minimum narrative arc duration"),
+    ("5. Split Clips", "totalSegDur > 45.0", "SplitClips 45s maximum Shorts duration cap"),
+    ("5. Split Clips", "minPayoffGap", "SplitClips payoff-centered multi-arc distinctness check"),
 
     # 5. Extract Viral Segments checks
     ("6. Extract Viral Segments", "BUFFER = 0.12", "ExtractViral tight 0.12 buffer"),
-    ("6. Extract Viral Segments", "w.start - lastWordEnd > 0.55", "ExtractViral 0.55s gap jump cut"),
-    ("6. Extract Viral Segments", "Math.max(start, clipWords[0].start - 0.10)", "ExtractViral loading screen trim"),
+    ("6. Extract Viral Segments", "deadTrimmedIntervals", "ExtractViral >5s dead-air trimming"),
+    ("6. Extract Viral Segments", "totalClipDur < 30.0", "ExtractViral 30s-45s duration enforcement"),
 
     # 6. Cut Concat checks
     ("Cut & Concat All Segments", "filter(s => (s.end - s.start) >= 0.15)", "CutConcat 0.15s minimum segment filter"),
@@ -57,18 +69,18 @@ checks = [
     ("Create Subtitle Binary", "equalizer=f=3500", "CreateSubtitle voice chat de-harshing EQ"),
     ("Loop Clips", 'batchSize', "LoopClips batchSize 1 for multi-clip iteration"),
     ("Create Subtitle Binary", "sanitizeCaption", "CreateSubtitle sanitizeCaption anti-placeholder leak"),
-    ("Create Subtitle Binary", "subY = 880", "CreateSubtitle 3-zone lower-third subtitle y=880"),
+    ("Create Subtitle Binary", "subY = 920", "CreateSubtitle 3-zone lower-third subtitle y=920"),
     ("Create Subtitle Binary", "captionY = 75", "CreateSubtitle 3-zone top hook caption y=75"),
 
     # 8. Hook & Zero-Second Retention checks
     ("1. Prepare Scout Prompt", "ZERO-SECOND RETENTION & STRICT ANTI-MID-THOUGHT PREAMBLE", "Scout zero-second retention & anti-mid-thought preamble rule"),
     ("1. Prepare Scout Prompt", "CAUSE-EFFECT NARRATIVE THROUGH-LINE & ANTI-CHAOS", "Scout cause-effect narrative through-line rule"),
     ("3. Prepare Director Prompt", "ZERO-SECOND RETENTION & STRICT ANTI-MID-THOUGHT PREAMBLE", "Director zero-second retention rule"),
-    ("3. Prepare Director Prompt", "COLD OPEN RETENTION TRAP & ZERO-SECOND HOOK", "Director cold open retention trap rule"),
+    ("3. Prepare Director Prompt", "NON-CHRONOLOGICAL HOOKS", "Director non-chronological hook duration guard"),
     ("3. Prepare Director Prompt", "CAUSE-EFFECT EDL (ANTI-CHAOS)", "Director cause-effect EDL rule"),
 
     # 9. Cold Open & Segment checks
-    ("6. Extract Viral Segments", "ColdOpen_teaser", "ExtractViral cold open teaser splicing"),
+    ("6. Extract Viral Segments", "HOOK_CLIMAX", "ExtractViral HOOK_CLIMAX cold open teaser splicing"),
     ("6. Extract Viral Segments", "fillerWords", "ExtractViral conversational hesitation filler trimming"),
 
     # 10. Subtitles & Layout Dynamic checks
