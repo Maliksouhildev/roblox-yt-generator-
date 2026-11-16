@@ -1652,8 +1652,8 @@ Output ONLY valid raw JSON matching this schema (replace angle-bracket placehold
         position: [-83900, 26440],
         credentials: { googlePalmApi: { id: '9NtnnUmLQ5Ydiu6q', name: 'Google Gemini(PaLM) Api account 2' } },
         retryOnFail: true,
-        maxTries: 5,
-        waitBetweenTries: 65000,
+        maxTries: 2,
+        waitBetweenTries: 35000,
     })
     GeminiModel2 = {
         modelName: 'models/gemini-2.5-flash',
@@ -1847,8 +1847,8 @@ Output ONLY valid raw JSON matching this schema (replace angle-bracket placehold
         position: [-82920, 26500],
         credentials: { googlePalmApi: { id: '9NtnnUmLQ5Ydiu6q', name: 'Google Gemini(PaLM) Api account 2' } },
         retryOnFail: true,
-        maxTries: 5,
-        waitBetweenTries: 65000,
+        maxTries: 2,
+        waitBetweenTries: 35000,
     })
     GeminiBackupModel3 = {
         modelName: 'models/gemini-3.5-flash-lite',
@@ -2182,8 +2182,8 @@ return results;`,
         position: [-87680, 26580],
         credentials: { googlePalmApi: { id: '9NtnnUmLQ5Ydiu6q', name: 'Google Gemini(PaLM) Api account 2' } },
         retryOnFail: true,
-        maxTries: 5,
-        waitBetweenTries: 65000,
+        maxTries: 2,
+        waitBetweenTries: 35000,
     })
     GeminiModelScout = {
         modelName: 'models/gemini-2.5-flash',
@@ -2401,8 +2401,8 @@ return [{ pairedItem: { item: 0 }, json: { prompt, targetClips, dry_run: isDryRu
         position: [-86220, 26320],
         credentials: { googlePalmApi: { id: '9NtnnUmLQ5Ydiu6q', name: 'Google Gemini(PaLM) Api account 2' } },
         retryOnFail: true,
-        maxTries: 5,
-        waitBetweenTries: 65000,
+        maxTries: 2,
+        waitBetweenTries: 35000,
     })
     GeminiModelDirector = {
         modelName: 'models/gemini-2.5-flash',
@@ -2795,7 +2795,10 @@ return [{ pairedItem: { item: 0 }, json: { url: randomUrl } }];`,
         version: 1.1,
         position: [-89280, 26000],
     })
-    
+    WaitBeforeScout = {
+        amount: 30,
+    };
+
     @node({
         id: 'run-multimodal-fusion-id',
         name: 'Run Multimodal Fusion',
@@ -2809,10 +2812,6 @@ return [{ pairedItem: { item: 0 }, json: { url: randomUrl } }];`,
             '=python3 /files/multimodal_analyzer.py "/files/inputs/{{ $(\'Edit Fields\').first().json.stream_file }}" "/files/temp/audio.mp3" "/files/temp/cam_config.json" "/files/temp/viral_anchors.json" && python3 /files/telemetry_fusion_indexer.py "/files/temp/transcript.json" >/dev/null || true',
     };
 
-    WaitBeforeScout = {
-        amount: 1,
-    };
-
     @node({
         id: 'wait-inside-loop-node-id',
         webhookId: '12d23354-fac1-487e-ad89-9e8906365270',
@@ -2822,7 +2821,125 @@ return [{ pairedItem: { item: 0 }, json: { url: randomUrl } }];`,
         position: [-85340, 26240],
     })
     WaitInsideLoop = {
-        amount: 1,
+        amount: 30,
+    };
+
+    @node({
+        id: 'b8c4e1a2-7f90-4a12-9b34-112233445566',
+        webhookId: 'f4c2a1b0-7e88-4c11-9d22-334455667788',
+        name: 'Wait Before Director',
+        type: 'n8n-nodes-base.wait',
+        version: 1.1,
+        position: [-86440, 26140],
+    })
+    WaitBeforeDirector = {
+        amount: 60,
+    };
+
+    @node({
+        id: 'c9d5f2b3-8a01-4b23-8c45-223344556677',
+        webhookId: 'a1b2c3d4-e5f6-4789-9abc-def012345678',
+        name: 'Wait Before Merge',
+        type: 'n8n-nodes-base.wait',
+        version: 1.1,
+        position: [-84160, 26140],
+    })
+    WaitBeforeMerge = {
+        amount: 45,
+    };
+
+    @node({
+        id: 'd1e6a3c4-9b12-4c34-9d56-334455667788',
+        name: 'Guard Merge Retries',
+        type: 'n8n-nodes-base.code',
+        version: 2,
+        position: [-83500, 26260],
+    })
+    GuardMergeRetries = {
+        jsCode: `const items = $input.all();
+const sd = $getWorkflowStaticData('global');
+sd._mergeRetries = sd._mergeRetries || {};
+let clipKey = '0';
+try { clipKey = String($('Loop Clips').item.json.clip_number || $('Loop Clips').item.json.title || '0'); } catch(e) {
+  try { clipKey = String($('Loop Clips').last().json.clip_number || '0'); } catch(e2) {}
+}
+const execId = String((typeof $execution !== 'undefined' && $execution.id) ? $execution.id : 'manual');
+const key = execId + '::' + clipKey;
+const count = (sd._mergeRetries[key] || 0) + 1;
+sd._mergeRetries[key] = count;
+const keys = Object.keys(sd._mergeRetries);
+if (keys.length > 50) delete sd._mergeRetries[keys[0]];
+return items.map((it, idx) => ({
+  pairedItem: it.pairedItem || { item: idx },
+  json: { ...it.json, _merge_retry_count: count, _allow_retry: count <= 2 }
+}));`,
+    };
+
+    @node({
+        id: 'e2f7b4d5-0c23-4d45-8e67-445566778899',
+        name: 'If Merge Retry Allowed?',
+        type: 'n8n-nodes-base.if',
+        version: 2.2,
+        position: [-83460, 26320],
+    })
+    IfMergeRetryAllowed = {
+        conditions: {
+            options: { caseSensitive: true, typeValidation: 'strict' },
+            conditions: [{
+                leftValue: '={{ Boolean($json._allow_retry) }}',
+                rightValue: true,
+                operator: { type: 'boolean', operation: 'true' },
+            }],
+            combinator: 'and',
+        },
+        options: {},
+    };
+
+    @node({
+        id: 'f3a8c5e6-1d34-4e56-9f78-556677889900',
+        name: 'Guard Merge Fallback Retries',
+        type: 'n8n-nodes-base.code',
+        version: 2,
+        position: [-82420, 26380],
+    })
+    GuardMergeFallbackRetries = {
+        jsCode: `const items = $input.all();
+const sd = $getWorkflowStaticData('global');
+sd._mergeFbRetries = sd._mergeFbRetries || {};
+let clipKey = '0';
+try { clipKey = String($('Loop Clips').item.json.clip_number || $('Loop Clips').item.json.title || '0'); } catch(e) {
+  try { clipKey = String($('Loop Clips').last().json.clip_number || '0'); } catch(e2) {}
+}
+const execId = String((typeof $execution !== 'undefined' && $execution.id) ? $execution.id : 'manual');
+const key = execId + '::' + clipKey;
+const count = (sd._mergeFbRetries[key] || 0) + 1;
+sd._mergeFbRetries[key] = count;
+const keys = Object.keys(sd._mergeFbRetries);
+if (keys.length > 50) delete sd._mergeFbRetries[keys[0]];
+return items.map((it, idx) => ({
+  pairedItem: it.pairedItem || { item: idx },
+  json: { ...it.json, _merge_fb_retry_count: count, _allow_retry: count <= 1 }
+}));`,
+    };
+
+    @node({
+        id: 'a4b9d6f7-2e45-4f67-8a89-667788990011',
+        name: 'If Merge Fallback Retry Allowed?',
+        type: 'n8n-nodes-base.if',
+        version: 2.2,
+        position: [-82380, 26420],
+    })
+    IfMergeFallbackRetryAllowed = {
+        conditions: {
+            options: { caseSensitive: true, typeValidation: 'strict' },
+            conditions: [{
+                leftValue: '={{ Boolean($json._allow_retry) }}',
+                rightValue: true,
+                operator: { type: 'boolean', operation: 'true' },
+            }],
+            combinator: 'and',
+        },
+        options: {},
     };
 
     @node({
@@ -3626,7 +3743,8 @@ return previews.map(p => ({ json: p }));`,
         this._7bExtractClipAudio.out(0).to(this._7cReadAudio.in(0));
         this._7cReadAudio.out(0).to(this._7dGetSubtitlesSrt.in(0));
         this._7dGetSubtitlesSrt.out(0).to(this.GetMemeList.in(0));
-        this.GetMemeList.out(0).to(this.ContextMergeAgent.in(0));
+        this.GetMemeList.out(0).to(this.WaitBeforeMerge.in(0));
+        this.WaitBeforeMerge.out(0).to(this.ContextMergeAgent.in(0));
         this.CreateSubtitleBinary.out(0).to(this.ReadWriteFilesFromDisk.in(0));
         this.ReadWriteFilesFromDisk.out(0).to(this._7fFinalRender.in(0));
         this._7fFinalRender.out(0).to(this.WriteSidecarJson.in(0));
@@ -3636,8 +3754,11 @@ return previews.map(p => ({ json: p }));`,
         this.IfSummary429.out(1).to(this._1GlobalSummaryFallback.in(0));
         this.ContextMergeAgent.out(0).to(this.IfMergeOk.in(0));
         this.ContextMergeAgent.out(1).to(this.IfMerge429.in(0));
-        this.IfMerge429.out(0).to(this.WaitMergeError.in(0));
+        this.IfMerge429.out(0).to(this.GuardMergeRetries.in(0));
         this.IfMerge429.out(1).to(this.ContextMergeFallback.in(0));
+        this.GuardMergeRetries.out(0).to(this.IfMergeRetryAllowed.in(0));
+        this.IfMergeRetryAllowed.out(0).to(this.WaitMergeError.in(0));
+        this.IfMergeRetryAllowed.out(1).to(this.ContextMergeFallback.in(0));
         this.PrepareFrames.out(0).to(this.ReadReference.in(0));
         this.IfSummaryOk.out(0).to(this.WaitBeforeScout.in(0));
         this.IfSummaryOk.out(1).to(this._1GlobalSummaryFallback.in(0));
@@ -3651,8 +3772,11 @@ return previews.map(p => ({ json: p }));`,
         this.IfMergeOk.out(1).to(this.ContextMergeFallback.in(0));
         this.ContextMergeFallback.out(0).to(this.CreateSubtitleBinary.in(0));
         this.ContextMergeFallback.out(1).to(this.IfMergeFallback429.in(0));
-        this.IfMergeFallback429.out(0).to(this.WaitMergeFallbackError.in(0));
+        this.IfMergeFallback429.out(0).to(this.GuardMergeFallbackRetries.in(0));
         this.IfMergeFallback429.out(1).to(this.CreateSubtitleBinary.in(0));
+        this.GuardMergeFallbackRetries.out(0).to(this.IfMergeFallbackRetryAllowed.in(0));
+        this.IfMergeFallbackRetryAllowed.out(0).to(this.WaitMergeFallbackError.in(0));
+        this.IfMergeFallbackRetryAllowed.out(1).to(this.CreateSubtitleBinary.in(0));
         this._3GroqWhisperFallback.out(0).to(this.SaveWhisperTranscript.in(0));
         this.IfWhisperOk.out(0).to(this.SaveWhisperTranscript.in(0));
         this.SaveWhisperTranscript.out(0).to(this._1GlobalSummaryAi.in(0));
@@ -3670,7 +3794,8 @@ return previews.map(p => ({ json: p }));`,
         this.IfScout429.out(0).to(this.WaitScoutError.in(0));
         this.IfScout429.out(1).to(this.ScoutLoop.in(0));
         this.ScoutAccumulate.out(0).to(this._3PrepareDirectorPrompt.in(0));
-        this._3PrepareDirectorPrompt.out(0).to(this._4BasicLlmChainDirector.in(0));
+        this._3PrepareDirectorPrompt.out(0).to(this.WaitBeforeDirector.in(0));
+        this.WaitBeforeDirector.out(0).to(this._4BasicLlmChainDirector.in(0));
         this._4BasicLlmChainDirector.out(0).to(this._5SplitClips.in(0));
         this._4BasicLlmChainDirector.out(1).to(this.IfDirector429.in(0));
         this.IfDirector429.out(0).to(this.WaitDirectorError.in(0));

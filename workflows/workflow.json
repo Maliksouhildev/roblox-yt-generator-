@@ -603,8 +603,8 @@
         }
       },
       "retryOnFail": true,
-      "maxTries": 5,
-      "waitBetweenTries": 65000
+      "maxTries": 2,
+      "waitBetweenTries": 35000
     },
     {
       "id": "8f4fbd18-625b-4f48-8c0a-e0e771cf59ef",
@@ -762,8 +762,8 @@
         }
       },
       "retryOnFail": true,
-      "maxTries": 5,
-      "waitBetweenTries": 65000
+      "maxTries": 2,
+      "waitBetweenTries": 35000
     },
     {
       "id": "5fc97116-6695-403a-9335-e9bd4a654b01",
@@ -912,8 +912,8 @@
         }
       },
       "retryOnFail": true,
-      "maxTries": 5,
-      "waitBetweenTries": 65000
+      "maxTries": 2,
+      "waitBetweenTries": 35000
     },
     {
       "id": "7103ac68-8941-45ad-b8e2-316fc5da376a",
@@ -1006,8 +1006,8 @@
         }
       },
       "retryOnFail": true,
-      "maxTries": 5,
-      "waitBetweenTries": 65000
+      "maxTries": 2,
+      "waitBetweenTries": 35000
     },
     {
       "id": "de4b9212-cf26-4e54-86db-60d717d8ae99",
@@ -1088,7 +1088,7 @@
         26000
       ],
       "parameters": {
-        "amount": 1
+        "amount": 30
       }
     },
     {
@@ -1102,7 +1102,7 @@
         26240
       ],
       "parameters": {
-        "amount": 1
+        "amount": 30
       }
     },
     {
@@ -1845,6 +1845,120 @@
       "parameters": {
         "jsCode": "const fs = require('fs');\nconst item = $input.first();\nconst data = (item && item.json) ? item.json : {};\ntry {\n  fs.mkdirSync('/files/temp', { recursive: true });\n  if (data.text || (data.words && data.words.length > 0) || (data.x_groq && data.x_groq.words)) {\n    fs.writeFileSync('/files/temp/transcript.json', JSON.stringify(data));\n  }\n  if (fs.existsSync('/files/temp/unified_timeline_index.json')) {\n    fs.unlinkSync('/files/temp/unified_timeline_index.json');\n  }\n  if (fs.existsSync('/files/temp/viral_anchors.json')) {\n    fs.unlinkSync('/files/temp/viral_anchors.json');\n  }\n} catch (e) {}\nreturn $input.all();"
       }
+    },
+    {
+      "id": "b8c4e1a2-7f90-4a12-9b34-112233445566",
+      "name": "Wait Before Director",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -86440,
+        26140
+      ],
+      "parameters": {
+        "amount": 60
+      },
+      "webhookId": "f4c2a1b0-7e88-4c11-9d22-334455667788"
+    },
+    {
+      "id": "c9d5f2b3-8a01-4b23-8c45-223344556677",
+      "name": "Wait Before Merge",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -84160,
+        26140
+      ],
+      "parameters": {
+        "amount": 45
+      },
+      "webhookId": "a1b2c3d4-e5f6-4789-9abc-def012345678"
+    },
+    {
+      "id": "d1e6a3c4-9b12-4c34-9d56-334455667788",
+      "name": "Guard Merge Retries",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -83500,
+        26260
+      ],
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst sd = $getWorkflowStaticData('global');\nsd._mergeRetries = sd._mergeRetries || {};\nlet clipKey = '0';\ntry { clipKey = String($('Loop Clips').item.json.clip_number || $('Loop Clips').item.json.title || '0'); } catch(e) {\n  try { clipKey = String($('Loop Clips').last().json.clip_number || '0'); } catch(e2) {}\n}\nconst execId = String((typeof $execution !== 'undefined' && $execution.id) ? $execution.id : 'manual');\nconst key = execId + '::' + clipKey;\nconst count = (sd._mergeRetries[key] || 0) + 1;\nsd._mergeRetries[key] = count;\nconst keys = Object.keys(sd._mergeRetries);\nif (keys.length > 50) delete sd._mergeRetries[keys[0]];\nreturn items.map((it, idx) => ({\n  pairedItem: it.pairedItem || { item: idx },\n  json: { ...it.json, _merge_retry_count: count, _allow_retry: count <= 2 }\n}));"
+      }
+    },
+    {
+      "id": "e2f7b4d5-0c23-4d45-8e67-445566778899",
+      "name": "If Merge Retry Allowed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -83460,
+        26320
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ Boolean($json._allow_retry) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "f3a8c5e6-1d34-4e56-9f78-556677889900",
+      "name": "Guard Merge Fallback Retries",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -82420,
+        26380
+      ],
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst sd = $getWorkflowStaticData('global');\nsd._mergeFbRetries = sd._mergeFbRetries || {};\nlet clipKey = '0';\ntry { clipKey = String($('Loop Clips').item.json.clip_number || $('Loop Clips').item.json.title || '0'); } catch(e) {\n  try { clipKey = String($('Loop Clips').last().json.clip_number || '0'); } catch(e2) {}\n}\nconst execId = String((typeof $execution !== 'undefined' && $execution.id) ? $execution.id : 'manual');\nconst key = execId + '::' + clipKey;\nconst count = (sd._mergeFbRetries[key] || 0) + 1;\nsd._mergeFbRetries[key] = count;\nconst keys = Object.keys(sd._mergeFbRetries);\nif (keys.length > 50) delete sd._mergeFbRetries[keys[0]];\nreturn items.map((it, idx) => ({\n  pairedItem: it.pairedItem || { item: idx },\n  json: { ...it.json, _merge_fb_retry_count: count, _allow_retry: count <= 1 }\n}));"
+      }
+    },
+    {
+      "id": "a4b9d6f7-2e45-4f67-8a89-667788990011",
+      "name": "If Merge Fallback Retry Allowed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -82380,
+        26420
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ Boolean($json._allow_retry) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
     }
   ],
   "connections": {
@@ -2126,7 +2240,7 @@
       "main": [
         [
           {
-            "node": "Context Merge Agent",
+            "node": "Wait Before Merge",
             "type": "main",
             "index": 0
           }
@@ -2224,7 +2338,7 @@
       "main": [
         [
           {
-            "node": "Wait Merge Error",
+            "node": "Guard Merge Retries",
             "type": "main",
             "index": 0
           }
@@ -2354,7 +2468,7 @@
       "main": [
         [
           {
-            "node": "Wait Merge Fallback Error",
+            "node": "Guard Merge Fallback Retries",
             "type": "main",
             "index": 0
           }
@@ -2510,7 +2624,7 @@
       "main": [
         [
           {
-            "node": "4. Basic LLM Chain (Director)",
+            "node": "Wait Before Director",
             "type": "main",
             "index": 0
           }
@@ -2894,6 +3008,86 @@
         [
           {
             "node": "1. Global Summary AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Before Director": {
+      "main": [
+        [
+          {
+            "node": "4. Basic LLM Chain (Director)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Before Merge": {
+      "main": [
+        [
+          {
+            "node": "Context Merge Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guard Merge Retries": {
+      "main": [
+        [
+          {
+            "node": "If Merge Retry Allowed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Merge Retry Allowed?": {
+      "main": [
+        [
+          {
+            "node": "Wait Merge Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Context Merge Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guard Merge Fallback Retries": {
+      "main": [
+        [
+          {
+            "node": "If Merge Fallback Retry Allowed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Merge Fallback Retry Allowed?": {
+      "main": [
+        [
+          {
+            "node": "Wait Merge Fallback Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Subtitle Binary",
             "type": "main",
             "index": 0
           }
