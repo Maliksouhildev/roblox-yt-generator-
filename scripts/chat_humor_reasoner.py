@@ -24,6 +24,8 @@ import urllib.error
 GEMINI_KEY_FILES = [
     "/files/temp/gemini_key.txt",
     "/files/gemini_key.txt",
+    "/files/gemini_key_2.txt",
+    "/files/temp/gemini_key_2.txt",
     "/files/temp/n8n_gemini_key.txt",
     "C:/Users/mlkme/Desktop/AI_Clipper/temp/gemini_key.txt",
     "C:/Users/mlkme/Desktop/AI_Clipper/temp/n8n_gemini_key.txt",
@@ -31,10 +33,14 @@ GEMINI_KEY_FILES = [
 ]
 
 
-def get_gemini_api_key() -> str:
-    key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if key and len(key) > 10:
-        return key
+def get_gemini_api_keys() -> list:
+    keys = []
+    for env_name in ["GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_BACKUP_API_KEY"]:
+        val = os.environ.get(env_name, "").strip()
+        for part in val.split(","):
+            p = part.strip()
+            if len(p) > 15 and p not in keys:
+                keys.append(p)
     for path in GEMINI_KEY_FILES:
         if os.path.exists(path):
             try:
@@ -42,13 +48,23 @@ def get_gemini_api_key() -> str:
                     content = f.read().strip()
                 if "{" in content:
                     data = json.loads(content)
-                    for k in ["GEMINI_API_KEY", "gemini_api_key", "apiKey", "key"]:
-                        if data.get(k): return data[k]
-                elif len(content) > 15:
-                    return content
+                    for k in ["GEMINI_API_KEY", "GEMINI_API_KEY_2", "gemini_api_key", "apiKey", "key", "backup_key"]:
+                        v = str(data.get(k) or "").strip()
+                        if len(v) > 15 and v not in keys:
+                            keys.append(v)
+                else:
+                    for line in content.splitlines():
+                        v = line.strip()
+                        if len(v) > 15 and v not in keys:
+                            keys.append(v)
             except Exception:
                 pass
-    return ""
+    return keys
+
+
+def get_gemini_api_key() -> str:
+    keys = get_gemini_api_keys()
+    return keys[0] if keys else ""
 
 
 def format_timestamp(seconds: float) -> str:
@@ -141,26 +157,37 @@ def analyze_humor_multimodal(
         "parts": image_parts + [{"text": prompt_text}]
     }]
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+    api_keys = api_key if isinstance(api_key, list) else ([api_key] if api_key else [])
+    for extra in get_gemini_api_keys():
+        if extra not in api_keys:
+            api_keys.append(extra)
 
-    for attempt in range(2):
-        try:
-            req = urllib.request.Request(
-                url,
-                data=json.dumps({"contents": contents}).encode("utf-8"),
-                headers={"Content-Type": "application/json"}
-            )
-            with urllib.request.urlopen(req, timeout=35) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
-                match = re.search(r'\{[\s\S]*\}', raw_text)
-                if match:
-                    parsed = json.loads(match.group(0))
-                    print(f"[Humor Reasoner] Gemini Vision resolved comedic beat at {format_timestamp(t_laugh)}: {parsed.get('comedy_mechanism')}")
-                    return parsed
-        except Exception as e:
-            print(f"[Humor Reasoner Warning] Gemini Vision attempt {attempt+1} error: {e}", file=sys.stderr)
-            time.sleep(1.5)
+    models_to_try = ["gemini-3.5-flash", "gemini-3.5-flash-lite"]
+    for key_idx, key_val in enumerate(api_keys):
+        for model_name in models_to_try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={key_val}"
+            try:
+                req = urllib.request.Request(
+                    url,
+                    data=json.dumps({"contents": contents}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"}
+                )
+                with urllib.request.urlopen(req, timeout=35) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
+                    match = re.search(r'\{[\s\S]*\}', raw_text)
+                    if match:
+                        parsed = json.loads(match.group(0))
+                        print(f"[Humor Reasoner] {model_name} (key#{key_idx+1}) resolved comedic beat at {format_timestamp(t_laugh)}: {parsed.get('comedy_mechanism')}")
+                        return parsed
+            except urllib.error.HTTPError as e:
+                print(f"[Humor Reasoner Warning] {model_name} (key#{key_idx+1}) HTTP {e.code}", file=sys.stderr)
+                if e.code in (403, 404, 429):
+                    continue
+                time.sleep(1.0)
+            except Exception as e:
+                print(f"[Humor Reasoner Warning] {model_name} (key#{key_idx+1}) error: {e}", file=sys.stderr)
+                time.sleep(1.0)
 
     return {
         "comedy_mechanism": "Verbal / Gameplay Reaction",

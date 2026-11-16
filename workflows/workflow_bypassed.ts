@@ -373,7 +373,7 @@ return [{ pairedItem: { item: 0 }, json: { cam_vision_payload: {
     })
     CamVisionCall = {
         method: 'POST',
-        url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={{ $env.GEMINI_API_KEY }}',
+        url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={{ $env.GEMINI_API_KEY }}',
         sendBody: true,
         specifyBody: 'json',
         jsonBody: '={{ $json.cam_vision_payload }}',
@@ -1656,7 +1656,7 @@ Output ONLY valid raw JSON matching this schema (replace angle-bracket placehold
         waitBetweenTries: 1000,
     })
     GeminiModel2 = {
-        modelName: 'models/gemini-2.5-flash',
+        modelName: 'models/gemini-3.5-flash',
         options: {
             temperature: 0.2,
         },
@@ -1739,7 +1739,7 @@ OUTPUT JSON FORMAT EXACTLY AND ONLY JSON. NO MARKDOWN:
         type: '@n8n/n8n-nodes-langchain.lmChatGoogleGemini',
         version: 1,
         position: [-89380, 26400],
-        credentials: { googlePalmApi: { id: '9NtnnUmLQ5Ydiu6q', name: 'Google Gemini(PaLM) Api account 2' } },
+        credentials: { googlePalmApi: { id: 'EJRA7ZZxsBILsA9T', name: 'gemini 2 ' } },
         retryOnFail: false,
         maxTries: 1,
         waitBetweenTries: 1000,
@@ -1845,7 +1845,7 @@ Output ONLY valid raw JSON matching this schema (replace angle-bracket placehold
         type: '@n8n/n8n-nodes-langchain.lmChatGoogleGemini',
         version: 1,
         position: [-82920, 26500],
-        credentials: { googlePalmApi: { id: '9NtnnUmLQ5Ydiu6q', name: 'Google Gemini(PaLM) Api account 2' } },
+        credentials: { googlePalmApi: { id: 'EJRA7ZZxsBILsA9T', name: 'gemini 2 ' } },
         retryOnFail: false,
         maxTries: 1,
         waitBetweenTries: 1000,
@@ -2186,7 +2186,7 @@ return results;`,
         waitBetweenTries: 1000,
     })
     GeminiModelScout = {
-        modelName: 'models/gemini-2.5-flash',
+        modelName: 'models/gemini-3.5-flash',
         options: {
             temperature: 0.4,
         },
@@ -2225,8 +2225,8 @@ return results;`,
         position: [-87880, 26360],
     })
     ScoutWait = {
-        amount: 2,
-        unit: 'minutes',
+        amount: 45,
+        unit: 'seconds',
     };
 
     @node({
@@ -2409,7 +2409,7 @@ return [{ pairedItem: { item: 0 }, json: { prompt, targetClips, dry_run: isDryRu
         waitBetweenTries: 1000,
     })
     GeminiModelDirector = {
-        modelName: 'models/gemini-2.5-flash',
+        modelName: 'models/gemini-3.5-flash',
         options: {
             temperature: 0.1,
         },
@@ -2849,7 +2849,7 @@ return [{ pairedItem: { item: 0 }, json: { url: randomUrl } }];`,
         position: [-86440, 26140],
     })
     WaitBeforeDirector = {
-        amount: 75,
+        amount: 50,
     };
 
     @node({
@@ -2903,7 +2903,7 @@ return $input.all().map((it, idx) => {
   const count = (Number(it.json._merge_retry_count) || 0) + 1;
   return {
     pairedItem: it.pairedItem || { item: idx },
-    json: { ...it.json, _merge_retry_count: count, _daily_quota_hit: isDaily, _allow_retry: !isDaily && count <= 2 }
+    json: { ...it.json, _merge_retry_count: count, _daily_quota_hit: isDaily, _allow_retry: !isDaily && count <= 1 }
   };
 });`,
     };
@@ -2983,7 +2983,7 @@ return $input.all().map((it, idx) => {
   const count = (Number(it.json._scout_retry_count) || 0) + 1;
   return {
     pairedItem: it.pairedItem || { item: idx },
-    json: { ...it.json, _scout_retry_count: count, _daily_quota_hit: isDaily, _allow_retry: !isDaily && count <= 2 }
+    json: { ...it.json, _scout_retry_count: count, _daily_quota_hit: isDaily, _allow_retry: !isDaily && count <= 1 }
   };
 });`,
     };
@@ -3027,7 +3027,7 @@ return $input.all().map((it, idx) => {
         type: '@n8n/n8n-nodes-langchain.lmChatGoogleGemini',
         version: 1,
         position: [-86920, 26720],
-        credentials: { googlePalmApi: { id: '9NtnnUmLQ5Ydiu6q', name: 'Google Gemini(PaLM) Api account 2' } },
+        credentials: { googlePalmApi: { id: 'EJRA7ZZxsBILsA9T', name: 'gemini 2 ' } },
         retryOnFail: false,
         maxTries: 1,
         waitBetweenTries: 1000,
@@ -3052,7 +3052,7 @@ return $input.all().map((it, idx) => {
   const count = (Number(it.json._director_retry_count) || 0) + 1;
   return {
     pairedItem: it.pairedItem || { item: idx },
-    json: { ...it.json, _director_retry_count: count, _daily_quota_hit: isDaily, _allow_retry: !isDaily && count <= 2 }
+    json: { ...it.json, _director_retry_count: count, _daily_quota_hit: isDaily, _allow_retry: !isDaily && count <= 1 }
   };
 });`,
     };
@@ -3096,7 +3096,7 @@ return $input.all().map((it, idx) => {
         type: '@n8n/n8n-nodes-langchain.lmChatGoogleGemini',
         version: 1,
         position: [-85600, 26680],
-        credentials: { googlePalmApi: { id: '9NtnnUmLQ5Ydiu6q', name: 'Google Gemini(PaLM) Api account 2' } },
+        credentials: { googlePalmApi: { id: 'EJRA7ZZxsBILsA9T', name: 'gemini 2 ' } },
         retryOnFail: false,
         maxTries: 1,
         waitBetweenTries: 1000,
@@ -3168,7 +3168,7 @@ return $input.all().map((it, idx) => {
     })
     GroqVisionAnalyzer = {
         method: 'POST',
-        url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={{ $env.GEMINI_API_KEY }}',
+        url: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key={{ $env.GEMINI_API_KEY }}',
         sendBody: true,
         specifyBody: 'json',
         jsonBody: '={{ $json.vision_payload }}',
@@ -3184,8 +3184,8 @@ return $input.all().map((it, idx) => {
         position: [-90220, 25860],
     })
     WaitSummaryError = {
-        amount: 2.5,
-        unit: 'minutes',
+        amount: 55,
+        unit: 'seconds',
     };
 
     @node({
@@ -3197,8 +3197,8 @@ return $input.all().map((it, idx) => {
         position: [-89660, 26080],
     })
     WaitSummaryFallbackError = {
-        amount: 2.5,
-        unit: 'minutes',
+        amount: 55,
+        unit: 'seconds',
     };
 
     @node({
@@ -3210,8 +3210,8 @@ return $input.all().map((it, idx) => {
         position: [-83420, 26380],
     })
     WaitMergeError = {
-        amount: 2.5,
-        unit: 'minutes',
+        amount: 55,
+        unit: 'seconds',
     };
 
     @node({
@@ -3223,8 +3223,8 @@ return $input.all().map((it, idx) => {
         position: [-82320, 26460],
     })
     WaitMergeFallbackError = {
-        amount: 2.5,
-        unit: 'minutes',
+        amount: 55,
+        unit: 'seconds',
     };
 
     @node({
@@ -3236,8 +3236,8 @@ return $input.all().map((it, idx) => {
         position: [-87040, 26400],
     })
     WaitScoutError = {
-        amount: 2.5,
-        unit: 'minutes',
+        amount: 55,
+        unit: 'seconds',
     };
 
     @node({
@@ -3249,8 +3249,8 @@ return $input.all().map((it, idx) => {
         position: [-85720, 26360],
     })
     WaitDirectorError = {
-        amount: 2.5,
-        unit: 'minutes',
+        amount: 55,
+        unit: 'seconds',
     };
 
     @node({
