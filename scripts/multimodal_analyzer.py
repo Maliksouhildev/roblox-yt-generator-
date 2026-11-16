@@ -22,6 +22,8 @@ import re
 import math
 import subprocess
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from collections import Counter
 import cv2
 import numpy as np
@@ -50,45 +52,36 @@ def format_timestamp(seconds: float) -> str:
 
 
 # ── 1. Vocal Energy & Scream Spikes ─────────────────────────────────────────
-def analyze_audio_spikes(audio_path: str, spike_offset: float = 8.0):
+def analyze_audio_spikes(audio_path: str, spike_offset: float = 8.0, return_meta: bool = False):
     if not audio_path or not os.path.exists(audio_path):
-        return []
+        return ([], 0.0) if return_meta else []
 
+    sr = 8000
     cmd = [
-        "ffmpeg", "-hide_banner", "-i", audio_path,
-        "-af", "highpass=f=200,lowpass=f=3500,astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level",
-        "-f", "null", "-"
+        "ffmpeg", "-hide_banner", "-loglevel", "error",
+        "-i", audio_path,
+        "-af", "highpass=f=200,lowpass=f=3500",
+        "-ac", "1", "-ar", str(sr), "-f", "s16le", "pipe:1"
     ]
     try:
-        p = subprocess.Popen(cmd, stderr=subprocess.PIPE, universal_newlines=True)
-        raw_rms = []
-        c_time = 0.0
-        for line in p.stderr:
-            if "pts_time:" in line:
-                m = re.search(r"pts_time:([\d\.]+)", line)
-                if m: c_time = float(m.group(1))
-            elif "RMS_level=" in line:
-                m = re.search(r"RMS_level=([-\d\.]+|[-+]?inf)", line)
-                if m:
-                    try:
-                        v = float(m.group(1))
-                        if not math.isinf(v) and not math.isnan(v):
-                            raw_rms.append((c_time, v))
-                    except ValueError:
-                        pass
-        p.wait()
+        r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        pcm = np.frombuffer(r.stdout, dtype=np.int16).astype(np.float32) / 32768.0
+        audio_dur = round(len(pcm) / float(sr), 2) if len(pcm) else 0.0
+        win = sr // 2  # 0.5s RMS bins
+        n_bins = len(pcm) // win
+        if n_bins <= 0:
+            return ([], audio_dur) if return_meta else []
 
-        if not raw_rms:
-            return []
+        blocks = pcm[:n_bins * win].reshape(n_bins, win)
+        rms = np.sqrt(np.mean(blocks * blocks, axis=1) + 1e-12)
+        db = 20.0 * np.log10(rms)
+        valid = db[db > -90.0]
+        if len(valid) == 0:
+            return ([], audio_dur) if return_meta else []
 
-        vals = [r[1] for r in raw_rms]
-        median_rms = float(sorted(vals)[len(vals) // 2])
+        median_rms = float(np.median(valid))
         spike_thresh = median_rms + spike_offset
-
-        spikes = []
-        for t, val in raw_rms:
-            if val >= spike_thresh:
-                spikes.append((round(t, 2), round(val, 1)))
+        spikes = [(round(i * 0.5, 2), round(float(db[i]), 1)) for i in range(n_bins) if db[i] >= spike_thresh]
 
         windows = []
         if spikes:
@@ -101,10 +94,10 @@ def analyze_audio_spikes(audio_path: str, spike_offset: float = 8.0):
                     w_start, w_end = t, t + 1.5
             windows.append([w_start, w_end])
 
-        return windows
+        return (windows, audio_dur) if return_meta else windows
     except Exception as e:
         print(f"[Multimodal Warning] Error running audio spike detection: {e}", file=sys.stderr)
-        return []
+        return ([], 0.0) if return_meta else []
 
 
 # ── 2. Face Reaction Analysis ───────────────────────────────────────────────
@@ -119,7 +112,7 @@ def get_mouth_aspect_ratio(landmarks):
     return float(np.linalg.norm(nose - mouth_center) / mouth_width)
 
 
-def analyze_face_reactions(video_path: str, cam_config_path: str, sample_interval: float = 1.5, max_duration: float = None):
+def analyze_face_reactions(video_path: str, cam_config_path: str, sample_interval: float = 1.5, max_duration: float = None, max_wall_sec: float = 240.0):
     if not video_path or not os.path.exists(video_path):
         return None
     if not os.path.exists(EMOTION_MODEL_PATH):
@@ -130,117 +123,163 @@ def analyze_face_reactions(video_path: str, cam_config_path: str, sample_interva
         try:
             with open(cam_config_path, "r", encoding="utf-8") as f:
                 c = json.load(f)
-                if c.get("camera_type") != "none" and "cam_x" in c:
+                if c.get("ai_found") is False or c.get("camera_type") == "none":
+                    print("[Face Scan] No active webcam in cam_config.json; skipping full-VOD face scan.", file=sys.stderr)
+                    return None
+                if "cam_x" in c and "cam_w" in c:
                     cam_box = [c["cam_x"], c["cam_y"], c["cam_w"], c["cam_h"]]
         except Exception:
             pass
 
-    net_emotion = cv2.dnn.readNetFromONNX(EMOTION_MODEL_PATH)
-    detector_yunet = None
-    if os.path.exists(YUNET_MODEL_PATH):
-        detector_yunet = cv2.FaceDetectorYN.create(YUNET_MODEL_PATH, "", (320, 320), 0.6, 0.3, 5000)
+    if not cam_box:
+        return None
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         return None
-
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    video_duration = total_frames / fps
-    if max_duration and max_duration < video_duration:
-        video_duration = max_duration
-
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    cap.release()
 
-    px_box = None
-    if cam_box and len(cam_box) == 4:
-        bx, by, bw, bh = cam_box
-        if bx <= 1.0 and by <= 1.0 and bw <= 1.0 and bh <= 1.0:
-            px_box = [int(bx * width), int(by * height), int(bw * width), int(bh * height)]
-        else:
-            px_box = [int(bx), int(by), int(bw), int(bh)]
-        px_box[0] = max(0, min(width - 10, px_box[0]))
-        px_box[1] = max(0, min(height - 10, px_box[1]))
-        px_box[2] = min(width - px_box[0], px_box[2])
-        px_box[3] = min(height - px_box[1], px_box[3])
+    video_duration = total_frames / fps if total_frames > 0 else 0.0
+    if max_duration and (video_duration <= 0 or max_duration < video_duration):
+        video_duration = max_duration
+    if width < 32 or height < 32:
+        return None
+
+    bx, by, bw, bh = cam_box
+    if bx <= 1.0 and by <= 1.0 and bw <= 1.0 and bh <= 1.0:
+        px_box = [int(bx * width), int(by * height), int(bw * width), int(bh * height)]
+    else:
+        px_box = [int(bx), int(by), int(bw), int(bh)]
+    px_box[0] = max(0, min(width - 20, px_box[0]))
+    px_box[1] = max(0, min(height - 20, px_box[1]))
+    px_box[2] = min(width - px_box[0], px_box[2])
+    px_box[3] = min(height - px_box[1], px_box[3])
+    cbx, cby, cbw, cbh = px_box
+    if cbw < 20 or cbh < 20:
+        return None
+
+    out_w = min(320, max(96, (cbw // 2) * 2))
+    out_h = max(64, int(round(cbh * (out_w / float(cbw))) // 2 * 2))
+
+    net_emotion = cv2.dnn.readNetFromONNX(EMOTION_MODEL_PATH)
+    detector_yunet = None
+    if os.path.exists(YUNET_MODEL_PATH):
+        detector_yunet = cv2.FaceDetectorYN.create(YUNET_MODEL_PATH, "", (out_w, out_h), 0.6, 0.3, 5000)
+
+    # Sequential keyframe-only FFmpeg decode (avoids OpenCV random GOP-redecode stalls on multi-hour VODs)
+    vf_chain = f"crop={cbw}:{cbh}:{cbx}:{cby},scale={out_w}:{out_h},showinfo"
+    cmd = [
+        "ffmpeg", "-hide_banner", "-loglevel", "info",
+        "-skip_loop_filter", "all", "-skip_frame", "nokey",
+        "-i", video_path,
+    ]
+    if max_duration:
+        cmd.extend(["-t", str(max_duration)])
+    cmd.extend([
+        "-an", "-sn",
+        "-vf", vf_chain,
+        "-vsync", "0", "-f", "rawvideo", "-pix_fmt", "bgr24", "pipe:1"
+    ])
+
+    frame_bytes = out_w * out_h * 3
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=frame_bytes * 4)
+    pts_list = []
+
+    def _drain_pts():
+        for raw_line in iter(proc.stderr.readline, b""):
+            line = raw_line.decode("utf-8", errors="ignore")
+            if "pts_time:" in line:
+                m = re.search(r"pts_time:([\d\.]+)", line)
+                if m:
+                    pts_list.append(float(m.group(1)))
+
+    t_err = threading.Thread(target=_drain_pts, daemon=True)
+    t_err.start()
 
     records = []
-    curr_time = 0.0
+    frame_idx = 0
+    last_eval_t = -999.0
+    t_start = time.time()
 
-    while curr_time < video_duration:
-        cap.set(cv2.CAP_PROP_POS_MSEC, curr_time * 1000.0)
-        ret, frame = cap.read()
-        if not ret or frame is None:
-            curr_time += sample_interval
-            continue
+    try:
+        while True:
+            buf = proc.stdout.read(frame_bytes)
+            if len(buf) < frame_bytes:
+                break
+            curr_time = pts_list[frame_idx] if frame_idx < len(pts_list) else (frame_idx * 4.0)
+            frame_idx += 1
 
-        if px_box:
-            bx, by, bw, bh = px_box
-            cam_crop = frame[by:by+bh, bx:bx+bw]
-        else:
-            cam_crop = frame
+            if (time.time() - t_start) > max_wall_sec:
+                print(f"[Face Scan] Wall budget {max_wall_sec}s reached at {curr_time:.1f}s; stopping cleanly.", file=sys.stderr)
+                break
+            if (curr_time - last_eval_t) < sample_interval:
+                continue
+            last_eval_t = curr_time
 
-        if cam_crop.shape[0] < 20 or cam_crop.shape[1] < 20:
-            curr_time += sample_interval
-            continue
+            cam_crop = np.frombuffer(buf, dtype=np.uint8).reshape((out_h, out_w, 3))
+            face_roi = None
+            mar_score = 0.0
 
-        face_roi = None
-        mar_score = 0.0
+            if detector_yunet is not None:
+                faces = detector_yunet.detect(cam_crop)
+                if faces[1] is not None and len(faces[1]) > 0:
+                    best_face = faces[1][0]
+                    fx, fy, fw, fh = int(best_face[0]), int(best_face[1]), int(best_face[2]), int(best_face[3])
+                    fx, fy = max(0, fx), max(0, fy)
+                    fw = min(out_w - fx, fw)
+                    fh = min(out_h - fy, fh)
+                    if fw > 12 and fh > 12:
+                        face_roi = cam_crop[fy:fy+fh, fx:fx+fw]
+                        mar_score = get_mouth_aspect_ratio(best_face[4:14])
 
-        if detector_yunet is not None:
-            c_h, c_w = cam_crop.shape[:2]
-            detector_yunet.setInputSize((c_w, c_h))
-            faces = detector_yunet.detect(cam_crop)
-            if faces[1] is not None and len(faces[1]) > 0:
-                best_face = faces[1][0]
-                fx, fy, fw, fh = int(best_face[0]), int(best_face[1]), int(best_face[2]), int(best_face[3])
-                fx, fy = max(0, fx), max(0, fy)
-                fw = min(c_w - fx, fw)
-                fh = min(c_h - fy, fh)
-                if fw > 15 and fh > 15:
-                    face_roi = cam_crop[fy:fy+fh, fx:fx+fw]
-                    landmarks = best_face[4:14]
-                    mar_score = get_mouth_aspect_ratio(landmarks)
+            if face_roi is None or face_roi.shape[0] < 12 or face_roi.shape[1] < 12:
+                my = int(out_h * 0.15)
+                mx = int(out_w * 0.15)
+                face_roi = cam_crop[my:out_h-my, mx:out_w-mx]
 
-        if face_roi is None or face_roi.shape[0] < 15 or face_roi.shape[1] < 15:
-            c_h, c_w = cam_crop.shape[:2]
-            margin_y = int(c_h * 0.15)
-            margin_x = int(c_w * 0.15)
-            face_roi = cam_crop[margin_y:c_h-margin_y, margin_x:c_w-margin_x]
+            if face_roi.shape[0] < 12 or face_roi.shape[1] < 12:
+                continue
 
-        if face_roi.shape[0] < 15 or face_roi.shape[1] < 15:
-            curr_time += sample_interval
-            continue
+            gray = cv2.cvtColor(face_roi, cv2.COLOR_BGR2GRAY)
+            resized = cv2.resize(gray, (64, 64)).astype(np.float32)
+            blob = np.expand_dims(np.expand_dims(resized, axis=0), axis=0)
 
-        gray = cv2.cvtColor(face_roi, cv2.COLOR_BGR2GRAY)
-        resized = cv2.resize(gray, (64, 64)).astype(np.float32)
-        blob = np.expand_dims(np.expand_dims(resized, axis=0), axis=0)
+            net_emotion.setInput(blob)
+            out = net_emotion.forward()
+            probs = np.exp(out - np.max(out))
+            probs = probs / np.sum(probs)
 
-        net_emotion.setInput(blob)
-        out = net_emotion.forward()
-        probs = np.exp(out - np.max(out))
-        probs = probs / np.sum(probs)
+            joy = float(probs[0][1])
+            surprise = float(probs[0][2])
+            anger = float(probs[0][4])
 
-        joy = float(probs[0][1])      # happiness
-        surprise = float(probs[0][2]) # surprise
-        anger = float(probs[0][4])    # anger
+            intensity = max(joy * 100.0, surprise * 110.0, anger * 80.0)
+            if mar_score > 0.48:
+                intensity = max(intensity, 75.0)
 
-        intensity = max(joy * 100.0, surprise * 110.0, anger * 80.0)
-        if mar_score > 0.48:
-            intensity = max(intensity, 75.0)
+            records.append({
+                "time": round(curr_time, 2),
+                "joy": round(joy, 3),
+                "surprise": round(surprise, 3),
+                "intensity": round(intensity, 1)
+            })
+    finally:
+        try:
+            proc.stdout.close()
+        except Exception:
+            pass
+        if proc.poll() is None:
+            proc.terminate()
+        proc.wait()
+        t_err.join(timeout=2.0)
 
-        records.append({
-            "time": round(curr_time, 2),
-            "joy": round(joy, 3),
-            "surprise": round(surprise, 3),
-            "intensity": round(intensity, 1)
-        })
-        curr_time += sample_interval
-
-    cap.release()
+    print(f"[Face Scan] Decoded {frame_idx} keyframes, scored {len(records)} samples in {time.time()-t_start:.2f}s", file=sys.stderr)
     return {
-        "duration": video_duration,
+        "duration": video_duration or (pts_list[-1] if pts_list else 0.0),
         "samples": records
     }
 
@@ -300,12 +339,17 @@ def run_fusion(
         except Exception as e:
             print(f"[Multimodal Warning] Error analyzing chat: {e}", file=sys.stderr)
 
-    audio_spikes = analyze_audio_spikes(audio_path)
-    face_res = analyze_face_reactions(video_path, cam_config_path)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fut_audio = pool.submit(analyze_audio_spikes, audio_path, 8.0, True)
+        fut_face = pool.submit(analyze_face_reactions, video_path, cam_config_path)
+        audio_spikes, audio_dur = fut_audio.result()
+        face_res = fut_face.result()
 
     duration = 300.0
     if face_res and face_res.get("duration"):
         duration = face_res["duration"]
+    elif audio_dur and audio_dur > 0:
+        duration = audio_dur
     elif chat_res and chat_res.get("duration_sec"):
         duration = chat_res["duration_sec"]
 
