@@ -1573,9 +1573,9 @@ OUTPUT JSON FORMAT EXACTLY AND ONLY JSON. NO MARKDOWN:
         version: 1,
         position: [-90820, 25920],
         credentials: { googlePalmApi: { id: '9NtnnUmLQ5Ydiu6q', name: 'Google Gemini(PaLM) Api account 2' } },
-        retryOnFail: true,
-        maxTries: 5,
-        waitBetweenTries: 65000,
+        retryOnFail: false,
+        maxTries: 1,
+        waitBetweenTries: 1000,
     })
     GeminiModel1 = {
         modelName: 'models/gemini-3.5-flash-lite',
@@ -1651,9 +1651,9 @@ Output ONLY valid raw JSON matching this schema (replace angle-bracket placehold
         version: 1,
         position: [-83900, 26440],
         credentials: { googlePalmApi: { id: '9NtnnUmLQ5Ydiu6q', name: 'Google Gemini(PaLM) Api account 2' } },
-        retryOnFail: true,
-        maxTries: 2,
-        waitBetweenTries: 35000,
+        retryOnFail: false,
+        maxTries: 1,
+        waitBetweenTries: 1000,
     })
     GeminiModel2 = {
         modelName: 'models/gemini-2.5-flash',
@@ -1740,9 +1740,9 @@ OUTPUT JSON FORMAT EXACTLY AND ONLY JSON. NO MARKDOWN:
         version: 1,
         position: [-89380, 26400],
         credentials: { googlePalmApi: { id: '9NtnnUmLQ5Ydiu6q', name: 'Google Gemini(PaLM) Api account 2' } },
-        retryOnFail: true,
-        maxTries: 5,
-        waitBetweenTries: 65000,
+        retryOnFail: false,
+        maxTries: 1,
+        waitBetweenTries: 1000,
     })
     GeminiBackupModel1 = {
         modelName: 'models/gemini-3.5-flash-lite',
@@ -1846,9 +1846,9 @@ Output ONLY valid raw JSON matching this schema (replace angle-bracket placehold
         version: 1,
         position: [-82920, 26500],
         credentials: { googlePalmApi: { id: '9NtnnUmLQ5Ydiu6q', name: 'Google Gemini(PaLM) Api account 2' } },
-        retryOnFail: true,
-        maxTries: 2,
-        waitBetweenTries: 35000,
+        retryOnFail: false,
+        maxTries: 1,
+        waitBetweenTries: 1000,
     })
     GeminiBackupModel3 = {
         modelName: 'models/gemini-3.5-flash-lite',
@@ -2181,9 +2181,9 @@ return results;`,
         version: 1,
         position: [-87680, 26580],
         credentials: { googlePalmApi: { id: '9NtnnUmLQ5Ydiu6q', name: 'Google Gemini(PaLM) Api account 2' } },
-        retryOnFail: true,
-        maxTries: 2,
-        waitBetweenTries: 35000,
+        retryOnFail: false,
+        maxTries: 1,
+        waitBetweenTries: 1000,
     })
     GeminiModelScout = {
         modelName: 'models/gemini-2.5-flash',
@@ -2238,15 +2238,19 @@ return results;`,
     })
     ScoutAccumulate = {
         jsCode: `const allItems = [];
-let runIdx = 0;
-while (true) {
-  try {
-    const items = $items("2. Basic LLM Chain (Scout)", 0, runIdx);
-    if (!items || items.length === 0) break;
-    allItems.push(...items);
-    runIdx++;
-  } catch (e) {
-    break;
+for (const nodeName of ["2. Basic LLM Chain (Scout)", "2. Basic LLM Chain (Scout Fallback)"]) {
+  let runIdx = 0;
+  while (true) {
+    try {
+      const items = $items(nodeName, 0, runIdx);
+      if (!items || items.length === 0) break;
+      for (const it of items) {
+        if (it && it.json && (it.json.output || it.json.text)) allItems.push(it);
+      }
+      runIdx++;
+    } catch (e) {
+      break;
+    }
   }
 }
 const out = allItems.length > 0 ? allItems : $items("2. Basic LLM Chain (Scout)");
@@ -2400,9 +2404,9 @@ return [{ pairedItem: { item: 0 }, json: { prompt, targetClips, dry_run: isDryRu
         version: 1,
         position: [-86220, 26320],
         credentials: { googlePalmApi: { id: '9NtnnUmLQ5Ydiu6q', name: 'Google Gemini(PaLM) Api account 2' } },
-        retryOnFail: true,
-        maxTries: 2,
-        waitBetweenTries: 35000,
+        retryOnFail: false,
+        maxTries: 1,
+        waitBetweenTries: 1000,
     })
     GeminiModelDirector = {
         modelName: 'models/gemini-2.5-flash',
@@ -2788,6 +2792,18 @@ return [{ pairedItem: { item: 0 }, json: { url: randomUrl } }];`,
     };
 
     @node({
+        id: 'wait-before-summary-id',
+        webhookId: 'c1d2e3f4-1111-4222-8333-444455556666',
+        name: 'Wait Before Summary',
+        type: 'n8n-nodes-base.wait',
+        version: 1.1,
+        position: [-91080, 25800],
+    })
+    WaitBeforeSummary = {
+        amount: 15,
+    };
+
+    @node({
         id: 'wait-before-scout-node-id',
         webhookId: 'aab8ae8c-3baf-427d-9b15-c701c91609a9',
         name: 'Wait Before Scout',
@@ -2796,7 +2812,7 @@ return [{ pairedItem: { item: 0 }, json: { url: randomUrl } }];`,
         position: [-89280, 26000],
     })
     WaitBeforeScout = {
-        amount: 30,
+        amount: 45,
     };
 
     @node({
@@ -2821,7 +2837,7 @@ return [{ pairedItem: { item: 0 }, json: { url: randomUrl } }];`,
         position: [-85340, 26240],
     })
     WaitInsideLoop = {
-        amount: 30,
+        amount: 45,
     };
 
     @node({
@@ -2833,7 +2849,19 @@ return [{ pairedItem: { item: 0 }, json: { url: randomUrl } }];`,
         position: [-86440, 26140],
     })
     WaitBeforeDirector = {
-        amount: 60,
+        amount: 75,
+    };
+
+    @node({
+        id: 'b8c4e1a2-7f90-4a12-9b34-112233445577',
+        webhookId: 'f4c2a1b0-7e88-4c11-9d22-334455667799',
+        name: 'Wait Before Director Fallback',
+        type: 'n8n-nodes-base.wait',
+        version: 1.1,
+        position: [-85820, 26420],
+    })
+    WaitBeforeDirectorFallback = {
+        amount: 30,
     };
 
     @node({
@@ -2845,7 +2873,19 @@ return [{ pairedItem: { item: 0 }, json: { url: randomUrl } }];`,
         position: [-84160, 26140],
     })
     WaitBeforeMerge = {
-        amount: 45,
+        amount: 60,
+    };
+
+    @node({
+        id: 'c9d5f2b3-8a01-4b23-8c45-223344556688',
+        webhookId: 'a1b2c3d4-e5f6-4789-9abc-def012345689',
+        name: 'Wait Before Merge Fallback',
+        type: 'n8n-nodes-base.wait',
+        version: 1.1,
+        position: [-83140, 26360],
+    })
+    WaitBeforeMergeFallback = {
+        amount: 30,
     };
 
     @node({
@@ -2856,23 +2896,16 @@ return [{ pairedItem: { item: 0 }, json: { url: randomUrl } }];`,
         position: [-83500, 26260],
     })
     GuardMergeRetries = {
-        jsCode: `const items = $input.all();
-const sd = $getWorkflowStaticData('global');
-sd._mergeRetries = sd._mergeRetries || {};
-let clipKey = '0';
-try { clipKey = String($('Loop Clips').item.json.clip_number || $('Loop Clips').item.json.title || '0'); } catch(e) {
-  try { clipKey = String($('Loop Clips').last().json.clip_number || '0'); } catch(e2) {}
-}
-const execId = String((typeof $execution !== 'undefined' && $execution.id) ? $execution.id : 'manual');
-const key = execId + '::' + clipKey;
-const count = (sd._mergeRetries[key] || 0) + 1;
-sd._mergeRetries[key] = count;
-const keys = Object.keys(sd._mergeRetries);
-if (keys.length > 50) delete sd._mergeRetries[keys[0]];
-return items.map((it, idx) => ({
-  pairedItem: it.pairedItem || { item: idx },
-  json: { ...it.json, _merge_retry_count: count, _allow_retry: count <= 2 }
-}));`,
+        jsCode: `const DAILY_RE = /(?:per\\s*day|daily|free_tier_requests|retry\\s+in\\s+\\d+h)/i;
+return $input.all().map((it, idx) => {
+  const errText = JSON.stringify(it.json.error || it.json.description || it.json.message || it.json);
+  const isDaily = DAILY_RE.test(errText);
+  const count = (Number(it.json._merge_retry_count) || 0) + 1;
+  return {
+    pairedItem: it.pairedItem || { item: idx },
+    json: { ...it.json, _merge_retry_count: count, _daily_quota_hit: isDaily, _allow_retry: !isDaily && count <= 2 }
+  };
+});`,
     };
 
     @node({
@@ -2903,23 +2936,16 @@ return items.map((it, idx) => ({
         position: [-82420, 26380],
     })
     GuardMergeFallbackRetries = {
-        jsCode: `const items = $input.all();
-const sd = $getWorkflowStaticData('global');
-sd._mergeFbRetries = sd._mergeFbRetries || {};
-let clipKey = '0';
-try { clipKey = String($('Loop Clips').item.json.clip_number || $('Loop Clips').item.json.title || '0'); } catch(e) {
-  try { clipKey = String($('Loop Clips').last().json.clip_number || '0'); } catch(e2) {}
-}
-const execId = String((typeof $execution !== 'undefined' && $execution.id) ? $execution.id : 'manual');
-const key = execId + '::' + clipKey;
-const count = (sd._mergeFbRetries[key] || 0) + 1;
-sd._mergeFbRetries[key] = count;
-const keys = Object.keys(sd._mergeFbRetries);
-if (keys.length > 50) delete sd._mergeFbRetries[keys[0]];
-return items.map((it, idx) => ({
-  pairedItem: it.pairedItem || { item: idx },
-  json: { ...it.json, _merge_fb_retry_count: count, _allow_retry: count <= 1 }
-}));`,
+        jsCode: `const DAILY_RE = /(?:per\\s*day|daily|free_tier_requests|retry\\s+in\\s+\\d+h)/i;
+return $input.all().map((it, idx) => {
+  const errText = JSON.stringify(it.json.error || it.json.description || it.json.message || it.json);
+  const isDaily = DAILY_RE.test(errText);
+  const count = (Number(it.json._merge_fb_retry_count) || 0) + 1;
+  return {
+    pairedItem: it.pairedItem || { item: idx },
+    json: { ...it.json, _merge_fb_retry_count: count, _daily_quota_hit: isDaily, _allow_retry: !isDaily && count <= 1 }
+  };
+});`,
     };
 
     @node({
@@ -2930,6 +2956,184 @@ return items.map((it, idx) => ({
         position: [-82380, 26420],
     })
     IfMergeFallbackRetryAllowed = {
+        conditions: {
+            options: { caseSensitive: true, typeValidation: 'strict' },
+            conditions: [{
+                leftValue: '={{ Boolean($json._allow_retry) }}',
+                rightValue: true,
+                operator: { type: 'boolean', operation: 'true' },
+            }],
+            combinator: 'and',
+        },
+        options: {},
+    };
+
+    @node({
+        id: 'a5c0e708-3f56-4a78-9b90-778899001122',
+        name: 'Guard Scout Retries',
+        type: 'n8n-nodes-base.code',
+        version: 2,
+        position: [-87160, 26400],
+    })
+    GuardScoutRetries = {
+        jsCode: `const DAILY_RE = /(?:per\\s*day|daily|free_tier_requests|retry\\s+in\\s+\\d+h)/i;
+return $input.all().map((it, idx) => {
+  const errText = JSON.stringify(it.json.error || it.json.description || it.json.message || it.json);
+  const isDaily = DAILY_RE.test(errText);
+  const count = (Number(it.json._scout_retry_count) || 0) + 1;
+  return {
+    pairedItem: it.pairedItem || { item: idx },
+    json: { ...it.json, _scout_retry_count: count, _daily_quota_hit: isDaily, _allow_retry: !isDaily && count <= 2 }
+  };
+});`,
+    };
+
+    @node({
+        id: 'b6d1f819-4a67-4b89-8c01-889900112233',
+        name: 'If Scout Retry Allowed?',
+        type: 'n8n-nodes-base.if',
+        version: 2.2,
+        position: [-87100, 26400],
+    })
+    IfScoutRetryAllowed = {
+        conditions: {
+            options: { caseSensitive: true, typeValidation: 'strict' },
+            conditions: [{
+                leftValue: '={{ Boolean($json._allow_retry) }}',
+                rightValue: true,
+                operator: { type: 'boolean', operation: 'true' },
+            }],
+            combinator: 'and',
+        },
+        options: {},
+    };
+
+    @node({
+        id: 'c7e2a920-5b78-4c90-9d12-990011223344',
+        name: '2. Basic LLM Chain (Scout Fallback)',
+        type: '@n8n/n8n-nodes-langchain.chainLlm',
+        version: 1.4,
+        position: [-86960, 26560],
+        onError: 'continueErrorOutput',
+    })
+    _2BasicLlmChainScoutFallback = {
+        promptType: 'define',
+        text: "={{ $json.prompt || $('Scout Loop').item.json.prompt }}",
+    };
+
+    @node({
+        id: 'd8f3b031-6c89-4d01-8e23-001122334455',
+        name: 'Gemini Backup Model Scout',
+        type: '@n8n/n8n-nodes-langchain.lmChatGoogleGemini',
+        version: 1,
+        position: [-86920, 26720],
+        credentials: { googlePalmApi: { id: '9NtnnUmLQ5Ydiu6q', name: 'Google Gemini(PaLM) Api account 2' } },
+        retryOnFail: false,
+        maxTries: 1,
+        waitBetweenTries: 1000,
+    })
+    GeminiBackupModelScout = {
+        modelName: 'models/gemini-3.5-flash-lite',
+        options: { temperature: 0.4 },
+    };
+
+    @node({
+        id: 'e9a4c142-7d90-4e12-9f34-112233445566',
+        name: 'Guard Director Retries',
+        type: 'n8n-nodes-base.code',
+        version: 2,
+        position: [-85800, 26340],
+    })
+    GuardDirectorRetries = {
+        jsCode: `const DAILY_RE = /(?:per\\s*day|daily|free_tier_requests|retry\\s+in\\s+\\d+h)/i;
+return $input.all().map((it, idx) => {
+  const errText = JSON.stringify(it.json.error || it.json.description || it.json.message || it.json);
+  const isDaily = DAILY_RE.test(errText);
+  const count = (Number(it.json._director_retry_count) || 0) + 1;
+  return {
+    pairedItem: it.pairedItem || { item: idx },
+    json: { ...it.json, _director_retry_count: count, _daily_quota_hit: isDaily, _allow_retry: !isDaily && count <= 2 }
+  };
+});`,
+    };
+
+    @node({
+        id: 'f0b5d253-8e01-4f23-8a45-223344556677',
+        name: 'If Director Retry Allowed?',
+        type: 'n8n-nodes-base.if',
+        version: 2.2,
+        position: [-85760, 26340],
+    })
+    IfDirectorRetryAllowed = {
+        conditions: {
+            options: { caseSensitive: true, typeValidation: 'strict' },
+            conditions: [{
+                leftValue: '={{ Boolean($json._allow_retry) }}',
+                rightValue: true,
+                operator: { type: 'boolean', operation: 'true' },
+            }],
+            combinator: 'and',
+        },
+        options: {},
+    };
+
+    @node({
+        id: 'a1c6e364-9f12-4a34-9b56-334455667788',
+        name: '4. Basic LLM Chain (Director Fallback)',
+        type: '@n8n/n8n-nodes-langchain.chainLlm',
+        version: 1.4,
+        position: [-85640, 26520],
+        onError: 'continueRegularOutput',
+    })
+    _4BasicLlmChainDirectorFallback = {
+        promptType: 'define',
+        text: "={{ $('3. Prepare Director Prompt').last().json.prompt }}",
+    };
+
+    @node({
+        id: 'b2d7f475-0a23-4b45-8c67-445566778899',
+        name: 'Gemini Backup Model Director',
+        type: '@n8n/n8n-nodes-langchain.lmChatGoogleGemini',
+        version: 1,
+        position: [-85600, 26680],
+        credentials: { googlePalmApi: { id: '9NtnnUmLQ5Ydiu6q', name: 'Google Gemini(PaLM) Api account 2' } },
+        retryOnFail: false,
+        maxTries: 1,
+        waitBetweenTries: 1000,
+    })
+    GeminiBackupModelDirector = {
+        modelName: 'models/gemini-3.5-flash-lite',
+        options: { temperature: 0.1 },
+    };
+
+    @node({
+        id: 'c3e8a586-1b34-4c56-9d78-556677889900',
+        name: 'Guard Summary Retries',
+        type: 'n8n-nodes-base.code',
+        version: 2,
+        position: [-90320, 25860],
+    })
+    GuardSummaryRetries = {
+        jsCode: `const DAILY_RE = /(?:per\\s*day|daily|free_tier_requests|retry\\s+in\\s+\\d+h)/i;
+return $input.all().map((it, idx) => {
+  const errText = JSON.stringify(it.json.error || it.json.description || it.json.message || it.json);
+  const isDaily = DAILY_RE.test(errText);
+  const count = (Number(it.json._summary_retry_count) || 0) + 1;
+  return {
+    pairedItem: it.pairedItem || { item: idx },
+    json: { ...it.json, _summary_retry_count: count, _daily_quota_hit: isDaily, _allow_retry: !isDaily && count <= 1 }
+  };
+});`,
+    };
+
+    @node({
+        id: 'd4f9b697-2c45-4d67-8e89-667788990011',
+        name: 'If Summary Retry Allowed?',
+        type: 'n8n-nodes-base.if',
+        version: 2.2,
+        position: [-90260, 25860],
+    })
+    IfSummaryRetryAllowed = {
         conditions: {
             options: { caseSensitive: true, typeValidation: 'strict' },
             conditions: [{
@@ -3052,43 +3256,34 @@ return items.map((it, idx) => ({
     @node({
         id: '635e4fad-1182-402f-8ed8-b7ca90beccc7',
         name: 'Restore Scout Prompt',
-        type: 'n8n-nodes-base.set',
-        version: 3.4,
+        type: 'n8n-nodes-base.code',
+        version: 2,
         position: [-86880, 26400],
     })
     RestoreScoutPrompt = {
-        assignments: {
-            assignments: [
-                {
-                    id: 'prompt_restore',
-                    name: 'prompt',
-                    value: "={{ $('Scout Loop').item.json.prompt }}",
-                    type: 'string',
-                },
-            ],
-        },
-        options: {},
+        jsCode: `let p = '';
+try { p = $('Scout Loop').item.json.prompt || ''; } catch(e) {}
+if (!p) { try { p = $('Scout Loop').last().json.prompt || ''; } catch(e2) {} }
+return $input.all().map((it, idx) => ({
+  pairedItem: it.pairedItem || { item: idx },
+  json: { ...it.json, prompt: p || it.json.prompt || '' }
+}));`,
     };
 
     @node({
         id: 'd8db1e5e-e451-4ec3-8ec3-c3092f01dc2c',
         name: 'Restore Director Prompt',
-        type: 'n8n-nodes-base.set',
-        version: 3.4,
+        type: 'n8n-nodes-base.code',
+        version: 2,
         position: [-85580, 26380],
     })
     RestoreDirectorPrompt = {
-        assignments: {
-            assignments: [
-                {
-                    id: 'director_prompt_restore',
-                    name: 'prompt',
-                    value: "={{ $('3. Prepare Director Prompt').item.json.prompt }}",
-                    type: 'string',
-                },
-            ],
-        },
-        options: {},
+        jsCode: `let p = '';
+try { p = $('3. Prepare Director Prompt').last().json.prompt || ''; } catch(e) {}
+return $input.all().map((it, idx) => ({
+  pairedItem: it.pairedItem || { item: idx },
+  json: { ...it.json, prompt: p || it.json.prompt || '' }
+}));`,
     };
 
     @node({
@@ -3750,15 +3945,18 @@ return previews.map(p => ({ json: p }));`,
         this._7fFinalRender.out(0).to(this.WriteSidecarJson.in(0));
         this._1GlobalSummaryAi.out(0).to(this.IfSummaryOk.in(0));
         this._1GlobalSummaryAi.out(1).to(this.IfSummary429.in(0));
-        this.IfSummary429.out(0).to(this.WaitSummaryError.in(0));
+        this.IfSummary429.out(0).to(this.GuardSummaryRetries.in(0));
         this.IfSummary429.out(1).to(this._1GlobalSummaryFallback.in(0));
+        this.GuardSummaryRetries.out(0).to(this.IfSummaryRetryAllowed.in(0));
+        this.IfSummaryRetryAllowed.out(0).to(this.WaitSummaryError.in(0));
+        this.IfSummaryRetryAllowed.out(1).to(this._1GlobalSummaryFallback.in(0));
         this.ContextMergeAgent.out(0).to(this.IfMergeOk.in(0));
         this.ContextMergeAgent.out(1).to(this.IfMerge429.in(0));
         this.IfMerge429.out(0).to(this.GuardMergeRetries.in(0));
-        this.IfMerge429.out(1).to(this.ContextMergeFallback.in(0));
+        this.IfMerge429.out(1).to(this.WaitBeforeMergeFallback.in(0));
         this.GuardMergeRetries.out(0).to(this.IfMergeRetryAllowed.in(0));
         this.IfMergeRetryAllowed.out(0).to(this.WaitMergeError.in(0));
-        this.IfMergeRetryAllowed.out(1).to(this.ContextMergeFallback.in(0));
+        this.IfMergeRetryAllowed.out(1).to(this.WaitBeforeMergeFallback.in(0));
         this.PrepareFrames.out(0).to(this.ReadReference.in(0));
         this.IfSummaryOk.out(0).to(this.WaitBeforeScout.in(0));
         this.IfSummaryOk.out(1).to(this._1GlobalSummaryFallback.in(0));
@@ -3769,7 +3967,8 @@ return previews.map(p => ({ json: p }));`,
         this.IfSummaryFallback429.out(0).to(this.WaitSummaryFallbackError.in(0));
         this.IfSummaryFallback429.out(1).to(this.WaitBeforeScout.in(0));
         this.IfMergeOk.out(0).to(this.CreateSubtitleBinary.in(0));
-        this.IfMergeOk.out(1).to(this.ContextMergeFallback.in(0));
+        this.IfMergeOk.out(1).to(this.WaitBeforeMergeFallback.in(0));
+        this.WaitBeforeMergeFallback.out(0).to(this.ContextMergeFallback.in(0));
         this.ContextMergeFallback.out(0).to(this.CreateSubtitleBinary.in(0));
         this.ContextMergeFallback.out(1).to(this.IfMergeFallback429.in(0));
         this.IfMergeFallback429.out(0).to(this.GuardMergeFallbackRetries.in(0));
@@ -3779,7 +3978,8 @@ return previews.map(p => ({ json: p }));`,
         this.IfMergeFallbackRetryAllowed.out(1).to(this.CreateSubtitleBinary.in(0));
         this._3GroqWhisperFallback.out(0).to(this.SaveWhisperTranscript.in(0));
         this.IfWhisperOk.out(0).to(this.SaveWhisperTranscript.in(0));
-        this.SaveWhisperTranscript.out(0).to(this._1GlobalSummaryAi.in(0));
+        this.SaveWhisperTranscript.out(0).to(this.WaitBeforeSummary.in(0));
+        this.WaitBeforeSummary.out(0).to(this._1GlobalSummaryAi.in(0));
         this.IfWhisperOk.out(1).to(this.WaitBeforeFallback.in(0));
         this.WaitBeforeFallback.out(0).to(this.ReadAudioForFallback.in(0));
         this.ReadAudioForFallback.out(0).to(this._3GroqWhisperFallback.in(0));
@@ -3791,15 +3991,25 @@ return previews.map(p => ({ json: p }));`,
         this.ScoutWait.out(0).to(this._2BasicLlmChainScout.in(0));
         this._2BasicLlmChainScout.out(0).to(this.ScoutLoop.in(0));
         this._2BasicLlmChainScout.out(1).to(this.IfScout429.in(0));
-        this.IfScout429.out(0).to(this.WaitScoutError.in(0));
-        this.IfScout429.out(1).to(this.ScoutLoop.in(0));
+        this.IfScout429.out(0).to(this.GuardScoutRetries.in(0));
+        this.IfScout429.out(1).to(this._2BasicLlmChainScoutFallback.in(0));
+        this.GuardScoutRetries.out(0).to(this.IfScoutRetryAllowed.in(0));
+        this.IfScoutRetryAllowed.out(0).to(this.WaitScoutError.in(0));
+        this.IfScoutRetryAllowed.out(1).to(this._2BasicLlmChainScoutFallback.in(0));
+        this._2BasicLlmChainScoutFallback.out(0).to(this.ScoutLoop.in(0));
+        this._2BasicLlmChainScoutFallback.out(1).to(this.ScoutLoop.in(0));
         this.ScoutAccumulate.out(0).to(this._3PrepareDirectorPrompt.in(0));
         this._3PrepareDirectorPrompt.out(0).to(this.WaitBeforeDirector.in(0));
         this.WaitBeforeDirector.out(0).to(this._4BasicLlmChainDirector.in(0));
         this._4BasicLlmChainDirector.out(0).to(this._5SplitClips.in(0));
         this._4BasicLlmChainDirector.out(1).to(this.IfDirector429.in(0));
-        this.IfDirector429.out(0).to(this.WaitDirectorError.in(0));
-        this.IfDirector429.out(1).to(this._5SplitClips.in(0));
+        this.IfDirector429.out(0).to(this.GuardDirectorRetries.in(0));
+        this.IfDirector429.out(1).to(this.WaitBeforeDirectorFallback.in(0));
+        this.GuardDirectorRetries.out(0).to(this.IfDirectorRetryAllowed.in(0));
+        this.IfDirectorRetryAllowed.out(0).to(this.WaitDirectorError.in(0));
+        this.IfDirectorRetryAllowed.out(1).to(this.WaitBeforeDirectorFallback.in(0));
+        this.WaitBeforeDirectorFallback.out(0).to(this._4BasicLlmChainDirectorFallback.in(0));
+        this._4BasicLlmChainDirectorFallback.out(0).to(this._5SplitClips.in(0));
         this.SandboxTestScriptEdl.out(0).to(this.LoadCachedTelemetry.in(0));
         this.LoadCachedTelemetry.out(0).to(this._1PrepareScoutPrompt.in(0));
         this._5SplitClips.out(0).to(this.IfBypassLoopSandbox.in(0));
@@ -3839,6 +4049,12 @@ return previews.map(p => ({ json: p }));`,
         });
         this._4BasicLlmChainDirector.uses({
             ai_languageModel: this.GeminiModelDirector.output,
+        });
+        this._2BasicLlmChainScoutFallback.uses({
+            ai_languageModel: this.GeminiBackupModelScout.output,
+        });
+        this._4BasicLlmChainDirectorFallback.uses({
+            ai_languageModel: this.GeminiBackupModelDirector.output,
         });
     }
 }

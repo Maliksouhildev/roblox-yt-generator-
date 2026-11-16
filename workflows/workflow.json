@@ -559,9 +559,9 @@
           "name": "Google Gemini(PaLM) Api account 2"
         }
       },
-      "retryOnFail": true,
-      "maxTries": 5,
-      "waitBetweenTries": 65000
+      "retryOnFail": false,
+      "maxTries": 1,
+      "waitBetweenTries": 1000
     },
     {
       "id": "045c2797-5d88-4dfa-ab22-e3c76242a114",
@@ -602,9 +602,9 @@
           "name": "Google Gemini(PaLM) Api account 2"
         }
       },
-      "retryOnFail": true,
-      "maxTries": 2,
-      "waitBetweenTries": 35000
+      "retryOnFail": false,
+      "maxTries": 1,
+      "waitBetweenTries": 1000
     },
     {
       "id": "8f4fbd18-625b-4f48-8c0a-e0e771cf59ef",
@@ -688,9 +688,9 @@
           "name": "Google Gemini(PaLM) Api account 2"
         }
       },
-      "retryOnFail": true,
-      "maxTries": 5,
-      "waitBetweenTries": 65000
+      "retryOnFail": false,
+      "maxTries": 1,
+      "waitBetweenTries": 1000
     },
     {
       "id": "a696a584-e58c-432c-9f1c-97bef4601551",
@@ -761,9 +761,9 @@
           "name": "Google Gemini(PaLM) Api account 2"
         }
       },
-      "retryOnFail": true,
-      "maxTries": 2,
-      "waitBetweenTries": 35000
+      "retryOnFail": false,
+      "maxTries": 1,
+      "waitBetweenTries": 1000
     },
     {
       "id": "5fc97116-6695-403a-9335-e9bd4a654b01",
@@ -911,9 +911,9 @@
           "name": "Google Gemini(PaLM) Api account 2"
         }
       },
-      "retryOnFail": true,
-      "maxTries": 2,
-      "waitBetweenTries": 35000
+      "retryOnFail": false,
+      "maxTries": 1,
+      "waitBetweenTries": 1000
     },
     {
       "id": "7103ac68-8941-45ad-b8e2-316fc5da376a",
@@ -968,7 +968,7 @@
         26120
       ],
       "parameters": {
-        "jsCode": "const allItems = [];\nlet runIdx = 0;\nwhile (true) {\n  try {\n    const items = $items(\"2. Basic LLM Chain (Scout)\", 0, runIdx);\n    if (!items || items.length === 0) break;\n    allItems.push(...items);\n    runIdx++;\n  } catch (e) {\n    break;\n  }\n}\nconst out = allItems.length > 0 ? allItems : $items(\"2. Basic LLM Chain (Scout)\");\nlet isDryRun = false;\ntry { isDryRun = Boolean($('1. Prepare Scout Prompt').first().json.dry_run); } catch(e) {}\nreturn out.map(it => ({ json: { ...it.json, dry_run: isDryRun } }));"
+        "jsCode": "const allItems = [];\nfor (const nodeName of [\"2. Basic LLM Chain (Scout)\", \"2. Basic LLM Chain (Scout Fallback)\"]) {\n  let runIdx = 0;\n  while (true) {\n    try {\n      const items = $items(nodeName, 0, runIdx);\n      if (!items || items.length === 0) break;\n      for (const it of items) {\n        if (it && it.json && (it.json.output || it.json.text)) allItems.push(it);\n      }\n      runIdx++;\n    } catch (e) {\n      break;\n    }\n  }\n}\nconst out = allItems.length > 0 ? allItems : $items(\"2. Basic LLM Chain (Scout)\");\nlet isDryRun = false;\ntry { isDryRun = Boolean($('1. Prepare Scout Prompt').first().json.dry_run); } catch(e) {}\nreturn out.map(it => ({ json: { ...it.json, dry_run: isDryRun } }));"
       }
     },
     {
@@ -1005,9 +1005,9 @@
           "name": "Google Gemini(PaLM) Api account 2"
         }
       },
-      "retryOnFail": true,
-      "maxTries": 2,
-      "waitBetweenTries": 35000
+      "retryOnFail": false,
+      "maxTries": 1,
+      "waitBetweenTries": 1000
     },
     {
       "id": "de4b9212-cf26-4e54-86db-60d717d8ae99",
@@ -1088,7 +1088,7 @@
         26000
       ],
       "parameters": {
-        "amount": 30
+        "amount": 45
       }
     },
     {
@@ -1102,7 +1102,7 @@
         26240
       ],
       "parameters": {
-        "amount": 30
+        "amount": 45
       }
     },
     {
@@ -1230,47 +1230,27 @@
     {
       "id": "635e4fad-1182-402f-8ed8-b7ca90beccc7",
       "name": "Restore Scout Prompt",
-      "type": "n8n-nodes-base.set",
-      "typeVersion": 3.4,
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [
         -86880,
         26400
       ],
       "parameters": {
-        "assignments": {
-          "assignments": [
-            {
-              "id": "prompt_restore",
-              "name": "prompt",
-              "value": "={{ $('Scout Loop').item.json.prompt }}",
-              "type": "string"
-            }
-          ]
-        },
-        "options": {}
+        "jsCode": "let p = '';\ntry { p = $('Scout Loop').item.json.prompt || ''; } catch(e) {}\nif (!p) { try { p = $('Scout Loop').last().json.prompt || ''; } catch(e2) {} }\nreturn $input.all().map((it, idx) => ({\n  pairedItem: it.pairedItem || { item: idx },\n  json: { ...it.json, prompt: p || it.json.prompt || '' }\n}));"
       }
     },
     {
       "id": "d8db1e5e-e451-4ec3-8ec3-c3092f01dc2c",
       "name": "Restore Director Prompt",
-      "type": "n8n-nodes-base.set",
-      "typeVersion": 3.4,
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [
         -85580,
         26380
       ],
       "parameters": {
-        "assignments": {
-          "assignments": [
-            {
-              "id": "director_prompt_restore",
-              "name": "prompt",
-              "value": "={{ $('3. Prepare Director Prompt').item.json.prompt }}",
-              "type": "string"
-            }
-          ]
-        },
-        "options": {}
+        "jsCode": "let p = '';\ntry { p = $('3. Prepare Director Prompt').last().json.prompt || ''; } catch(e) {}\nreturn $input.all().map((it, idx) => ({\n  pairedItem: it.pairedItem || { item: idx },\n  json: { ...it.json, prompt: p || it.json.prompt || '' }\n}));"
       }
     },
     {
@@ -1856,7 +1836,7 @@
         26140
       ],
       "parameters": {
-        "amount": 60
+        "amount": 75
       },
       "webhookId": "f4c2a1b0-7e88-4c11-9d22-334455667788"
     },
@@ -1870,7 +1850,7 @@
         26140
       ],
       "parameters": {
-        "amount": 45
+        "amount": 60
       },
       "webhookId": "a1b2c3d4-e5f6-4789-9abc-def012345678"
     },
@@ -1884,7 +1864,7 @@
         26260
       ],
       "parameters": {
-        "jsCode": "const items = $input.all();\nconst sd = $getWorkflowStaticData('global');\nsd._mergeRetries = sd._mergeRetries || {};\nlet clipKey = '0';\ntry { clipKey = String($('Loop Clips').item.json.clip_number || $('Loop Clips').item.json.title || '0'); } catch(e) {\n  try { clipKey = String($('Loop Clips').last().json.clip_number || '0'); } catch(e2) {}\n}\nconst execId = String((typeof $execution !== 'undefined' && $execution.id) ? $execution.id : 'manual');\nconst key = execId + '::' + clipKey;\nconst count = (sd._mergeRetries[key] || 0) + 1;\nsd._mergeRetries[key] = count;\nconst keys = Object.keys(sd._mergeRetries);\nif (keys.length > 50) delete sd._mergeRetries[keys[0]];\nreturn items.map((it, idx) => ({\n  pairedItem: it.pairedItem || { item: idx },\n  json: { ...it.json, _merge_retry_count: count, _allow_retry: count <= 2 }\n}));"
+        "jsCode": "const DAILY_RE = /(?:per\\s*day|daily|free_tier_requests|retry\\s+in\\s+\\d+h)/i;\nreturn $input.all().map((it, idx) => {\n  const errText = JSON.stringify(it.json.error || it.json.description || it.json.message || it.json);\n  const isDaily = DAILY_RE.test(errText);\n  const count = (Number(it.json._merge_retry_count) || 0) + 1;\n  return {\n    pairedItem: it.pairedItem || { item: idx },\n    json: { ...it.json, _merge_retry_count: count, _daily_quota_hit: isDaily, _allow_retry: !isDaily && count <= 2 }\n  };\n});"
       }
     },
     {
@@ -1927,7 +1907,7 @@
         26380
       ],
       "parameters": {
-        "jsCode": "const items = $input.all();\nconst sd = $getWorkflowStaticData('global');\nsd._mergeFbRetries = sd._mergeFbRetries || {};\nlet clipKey = '0';\ntry { clipKey = String($('Loop Clips').item.json.clip_number || $('Loop Clips').item.json.title || '0'); } catch(e) {\n  try { clipKey = String($('Loop Clips').last().json.clip_number || '0'); } catch(e2) {}\n}\nconst execId = String((typeof $execution !== 'undefined' && $execution.id) ? $execution.id : 'manual');\nconst key = execId + '::' + clipKey;\nconst count = (sd._mergeFbRetries[key] || 0) + 1;\nsd._mergeFbRetries[key] = count;\nconst keys = Object.keys(sd._mergeFbRetries);\nif (keys.length > 50) delete sd._mergeFbRetries[keys[0]];\nreturn items.map((it, idx) => ({\n  pairedItem: it.pairedItem || { item: idx },\n  json: { ...it.json, _merge_fb_retry_count: count, _allow_retry: count <= 1 }\n}));"
+        "jsCode": "const DAILY_RE = /(?:per\\s*day|daily|free_tier_requests|retry\\s+in\\s+\\d+h)/i;\nreturn $input.all().map((it, idx) => {\n  const errText = JSON.stringify(it.json.error || it.json.description || it.json.message || it.json);\n  const isDaily = DAILY_RE.test(errText);\n  const count = (Number(it.json._merge_fb_retry_count) || 0) + 1;\n  return {\n    pairedItem: it.pairedItem || { item: idx },\n    json: { ...it.json, _merge_fb_retry_count: count, _daily_quota_hit: isDaily, _allow_retry: !isDaily && count <= 1 }\n  };\n});"
       }
     },
     {
@@ -1959,6 +1939,257 @@
         },
         "options": {}
       }
+    },
+    {
+      "id": "wait-before-summary-id",
+      "name": "Wait Before Summary",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -91080,
+        25800
+      ],
+      "parameters": {
+        "amount": 15
+      },
+      "webhookId": "c1d2e3f4-1111-4222-8333-444455556666"
+    },
+    {
+      "id": "c3e8a586-1b34-4c56-9d78-556677889900",
+      "name": "Guard Summary Retries",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -90320,
+        25860
+      ],
+      "parameters": {
+        "jsCode": "const DAILY_RE = /(?:per\\s*day|daily|free_tier_requests|retry\\s+in\\s+\\d+h)/i;\nreturn $input.all().map((it, idx) => {\n  const errText = JSON.stringify(it.json.error || it.json.description || it.json.message || it.json);\n  const isDaily = DAILY_RE.test(errText);\n  const count = (Number(it.json._summary_retry_count) || 0) + 1;\n  return {\n    pairedItem: it.pairedItem || { item: idx },\n    json: { ...it.json, _summary_retry_count: count, _daily_quota_hit: isDaily, _allow_retry: !isDaily && count <= 1 }\n  };\n});"
+      }
+    },
+    {
+      "id": "d4f9b697-2c45-4d67-8e89-667788990011",
+      "name": "If Summary Retry Allowed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -90260,
+        25860
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ Boolean($json._allow_retry) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "a5c0e708-3f56-4a78-9b90-778899001122",
+      "name": "Guard Scout Retries",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -87160,
+        26400
+      ],
+      "parameters": {
+        "jsCode": "const DAILY_RE = /(?:per\\s*day|daily|free_tier_requests|retry\\s+in\\s+\\d+h)/i;\nreturn $input.all().map((it, idx) => {\n  const errText = JSON.stringify(it.json.error || it.json.description || it.json.message || it.json);\n  const isDaily = DAILY_RE.test(errText);\n  const count = (Number(it.json._scout_retry_count) || 0) + 1;\n  return {\n    pairedItem: it.pairedItem || { item: idx },\n    json: { ...it.json, _scout_retry_count: count, _daily_quota_hit: isDaily, _allow_retry: !isDaily && count <= 2 }\n  };\n});"
+      }
+    },
+    {
+      "id": "b6d1f819-4a67-4b89-8c01-889900112233",
+      "name": "If Scout Retry Allowed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -87100,
+        26400
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ Boolean($json._allow_retry) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "c7e2a920-5b78-4c90-9d12-990011223344",
+      "name": "2. Basic LLM Chain (Scout Fallback)",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [
+        -86960,
+        26560
+      ],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.prompt || $('Scout Loop').item.json.prompt }}"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "d8f3b031-6c89-4d01-8e23-001122334455",
+      "name": "Gemini Backup Model Scout",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        -86920,
+        26720
+      ],
+      "parameters": {
+        "modelName": "models/gemini-3.5-flash-lite",
+        "options": {
+          "temperature": 0.4
+        }
+      },
+      "retryOnFail": false,
+      "maxTries": 1,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "googlePalmApi": {
+          "id": "9NtnnUmLQ5Ydiu6q",
+          "name": "Google Gemini(PaLM) Api account 2"
+        }
+      }
+    },
+    {
+      "id": "e9a4c142-7d90-4e12-9f34-112233445566",
+      "name": "Guard Director Retries",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -85800,
+        26340
+      ],
+      "parameters": {
+        "jsCode": "const DAILY_RE = /(?:per\\s*day|daily|free_tier_requests|retry\\s+in\\s+\\d+h)/i;\nreturn $input.all().map((it, idx) => {\n  const errText = JSON.stringify(it.json.error || it.json.description || it.json.message || it.json);\n  const isDaily = DAILY_RE.test(errText);\n  const count = (Number(it.json._director_retry_count) || 0) + 1;\n  return {\n    pairedItem: it.pairedItem || { item: idx },\n    json: { ...it.json, _director_retry_count: count, _daily_quota_hit: isDaily, _allow_retry: !isDaily && count <= 2 }\n  };\n});"
+      }
+    },
+    {
+      "id": "f0b5d253-8e01-4f23-8a45-223344556677",
+      "name": "If Director Retry Allowed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -85760,
+        26340
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ Boolean($json._allow_retry) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "b8c4e1a2-7f90-4a12-9b34-112233445577",
+      "name": "Wait Before Director Fallback",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -85820,
+        26420
+      ],
+      "parameters": {
+        "amount": 30
+      },
+      "webhookId": "f4c2a1b0-7e88-4c11-9d22-334455667799"
+    },
+    {
+      "id": "a1c6e364-9f12-4a34-9b56-334455667788",
+      "name": "4. Basic LLM Chain (Director Fallback)",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [
+        -85640,
+        26520
+      ],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('3. Prepare Director Prompt').last().json.prompt }}"
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "b2d7f475-0a23-4b45-8c67-445566778899",
+      "name": "Gemini Backup Model Director",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        -85600,
+        26680
+      ],
+      "parameters": {
+        "modelName": "models/gemini-3.5-flash-lite",
+        "options": {
+          "temperature": 0.1
+        }
+      },
+      "retryOnFail": false,
+      "maxTries": 1,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "googlePalmApi": {
+          "id": "9NtnnUmLQ5Ydiu6q",
+          "name": "Google Gemini(PaLM) Api account 2"
+        }
+      }
+    },
+    {
+      "id": "c9d5f2b3-8a01-4b23-8c45-223344556688",
+      "name": "Wait Before Merge Fallback",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -83140,
+        26360
+      ],
+      "parameters": {
+        "amount": 30
+      },
+      "webhookId": "a1b2c3d4-e5f6-4789-9abc-def012345689"
     }
   ],
   "connections": {
@@ -2302,7 +2533,7 @@
       "main": [
         [
           {
-            "node": "Wait Summary Error",
+            "node": "Guard Summary Retries",
             "type": "main",
             "index": 0
           }
@@ -2345,7 +2576,7 @@
         ],
         [
           {
-            "node": "Context Merge Fallback",
+            "node": "Wait Before Merge Fallback",
             "type": "main",
             "index": 0
           }
@@ -2439,7 +2670,7 @@
         ],
         [
           {
-            "node": "Context Merge Fallback",
+            "node": "Wait Before Merge Fallback",
             "type": "main",
             "index": 0
           }
@@ -2595,14 +2826,14 @@
       "main": [
         [
           {
-            "node": "Wait Scout Error",
+            "node": "Guard Scout Retries",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "Scout Loop",
+            "node": "2. Basic LLM Chain (Scout Fallback)",
             "type": "main",
             "index": 0
           }
@@ -2653,14 +2884,14 @@
       "main": [
         [
           {
-            "node": "Wait Director Error",
+            "node": "Guard Director Retries",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "5. Split Clips",
+            "node": "Wait Before Director Fallback",
             "type": "main",
             "index": 0
           }
@@ -3007,7 +3238,7 @@
       "main": [
         [
           {
-            "node": "1. Global Summary AI",
+            "node": "Wait Before Summary",
             "type": "main",
             "index": 0
           }
@@ -3058,7 +3289,7 @@
         ],
         [
           {
-            "node": "Context Merge Fallback",
+            "node": "Wait Before Merge Fallback",
             "type": "main",
             "index": 0
           }
@@ -3088,6 +3319,177 @@
         [
           {
             "node": "Create Subtitle Binary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Before Summary": {
+      "main": [
+        [
+          {
+            "node": "1. Global Summary AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guard Summary Retries": {
+      "main": [
+        [
+          {
+            "node": "If Summary Retry Allowed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Summary Retry Allowed?": {
+      "main": [
+        [
+          {
+            "node": "Wait Summary Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "1. Global Summary Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guard Scout Retries": {
+      "main": [
+        [
+          {
+            "node": "If Scout Retry Allowed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Scout Retry Allowed?": {
+      "main": [
+        [
+          {
+            "node": "Wait Scout Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "2. Basic LLM Chain (Scout Fallback)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2. Basic LLM Chain (Scout Fallback)": {
+      "main": [
+        [
+          {
+            "node": "Scout Loop",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Scout Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Backup Model Scout": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "2. Basic LLM Chain (Scout Fallback)",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guard Director Retries": {
+      "main": [
+        [
+          {
+            "node": "If Director Retry Allowed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Director Retry Allowed?": {
+      "main": [
+        [
+          {
+            "node": "Wait Director Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait Before Director Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Before Director Fallback": {
+      "main": [
+        [
+          {
+            "node": "4. Basic LLM Chain (Director Fallback)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4. Basic LLM Chain (Director Fallback)": {
+      "main": [
+        [
+          {
+            "node": "5. Split Clips",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Backup Model Director": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "4. Basic LLM Chain (Director Fallback)",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Before Merge Fallback": {
+      "main": [
+        [
+          {
+            "node": "Context Merge Fallback",
             "type": "main",
             "index": 0
           }
