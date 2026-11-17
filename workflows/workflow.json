@@ -576,8 +576,8 @@
       },
       "credentials": {
         "googlePalmApi": {
-          "id": "9NtnnUmLQ5Ydiu6q",
-          "name": "Google Gemini(PaLM) Api account 2"
+          "id": "q8anzSUz4rLj7HSv",
+          "name": "yacine"
         }
       },
       "retryOnFail": false,
@@ -612,7 +612,7 @@
         26440
       ],
       "parameters": {
-        "modelName": "models/gemini-3.5-flash",
+        "modelName": "models/gemini-2.5-flash",
         "options": {
           "temperature": 0.2,
           "maxOutputTokens": 4096,
@@ -640,8 +640,8 @@
       },
       "credentials": {
         "googlePalmApi": {
-          "id": "EJRA7ZZxsBILsA9T",
-          "name": "gemini 2 "
+          "id": "q8anzSUz4rLj7HSv",
+          "name": "yacine"
         }
       },
       "retryOnFail": false,
@@ -841,8 +841,8 @@
       },
       "credentials": {
         "googlePalmApi": {
-          "id": "9NtnnUmLQ5Ydiu6q",
-          "name": "Google Gemini(PaLM) Api account 2"
+          "id": "EJRA7ZZxsBILsA9T",
+          "name": "gemini 2 "
         }
       },
       "retryOnFail": false,
@@ -984,7 +984,7 @@
         26580
       ],
       "parameters": {
-        "modelName": "models/gemini-3.5-flash",
+        "modelName": "models/gemini-2.5-flash",
         "options": {
           "temperature": 0.4,
           "maxOutputTokens": 8192,
@@ -1012,8 +1012,8 @@
       },
       "credentials": {
         "googlePalmApi": {
-          "id": "EJRA7ZZxsBILsA9T",
-          "name": "gemini 2 "
+          "id": "q8anzSUz4rLj7HSv",
+          "name": "yacine"
         }
       },
       "retryOnFail": false,
@@ -1073,7 +1073,7 @@
         26120
       ],
       "parameters": {
-        "jsCode": "const allItems = [];\nconst normalizeTimestamps = (txt) => String(txt || '').replace(/\\[([^\\]]*?)(\\d{1,3}):(\\d{2}(?:\\.\\d+)?)s?([^\\]]*?)\\]/gi, (full) =>\n  full.replace(/(\\d{1,3}):(\\d{2}(?:\\.\\d+)?)s?/gi, (_, m, s) => (parseInt(m, 10) * 60 + parseFloat(s)).toFixed(1) + 's')\n);\nconst cleanScoutText = (raw) => {\n  let t = normalizeTimestamps(raw).trim();\n  if (!t) return '';\n  // Drop incomplete trailing fragment line (e.g. cut off at \"- [ESCALATION / STRUGGLE] Timestamp: [12:36.4s -\")\n  const lines = t.split('\\n');\n  while (lines.length > 2) {\n    const last = lines[lines.length - 1].trim();\n    if (!last || /(?:[-:|[]\\s*$|Archetype:\\s*$)/.test(last)) {\n      lines.pop();\n    } else {\n      break;\n    }\n  }\n  return lines.join('\\n').trim();\n};\n\nfor (const nodeName of [\"2. Basic LLM Chain (Scout)\", \"2. Basic LLM Chain (Scout Fallback)\"]) {\n  let runIdx = 0;\n  while (true) {\n    try {\n      const items = $items(nodeName, 0, runIdx);\n      if (!items || items.length === 0) break;\n      for (const it of items) {\n        const rawOut = it && it.json && (it.json.output || it.json.text);\n        if (rawOut) {\n          const cleaned = cleanScoutText(rawOut);\n          allItems.push({ json: { ...it.json, text: it.json.text ? cleaned : it.json.text, output: it.json.output ? cleaned : it.json.output } });\n        }\n      }\n      runIdx++;\n    } catch (e) {\n      break;\n    }\n  }\n}\nconst validItems = allItems.filter(it => String(it.json.output || it.json.text || '').trim().length >= 120);\nconst out = validItems.length > 0 ? validItems : (allItems.length > 0 ? allItems : $items(\"2. Basic LLM Chain (Scout)\"));\nlet isDryRun = false;\ntry { isDryRun = Boolean($('1. Prepare Scout Prompt').first().json.dry_run); } catch(e) {}\nreturn out.map(it => ({ json: { ...it.json, dry_run: isDryRun } }));"
+        "jsCode": "const allItems = [];\nconst normalizeTimestamps = (txt) => String(txt || '').replace(/\\[([^\\]]*?)(\\d{1,3}):(\\d{2}(?:\\.\\d+)?)s?([^\\]]*?)\\]/gi, (full) =>\n  full.replace(/(\\d{1,3}):(\\d{2}(?:\\.\\d+)?)s?/gi, (_, m, s) => (parseInt(m, 10) * 60 + parseFloat(s)).toFixed(1) + 's')\n);\nconst cleanScoutText = (raw) => {\n  let t = normalizeTimestamps(raw).trim();\n  if (!t) return '';\n  // Drop incomplete trailing fragment line (e.g. cut off at \"- [ESCALATION / STRUGGLE] Timestamp: [12:36.4s -\")\n  const lines = t.split('\\n');\n  while (lines.length > 2) {\n    const last = lines[lines.length - 1].trim();\n    if (!last || /(?:[-:|[]\\s*$|Archetype:\\s*$)/.test(last)) {\n      lines.pop();\n    } else {\n      break;\n    }\n  }\n  return lines.join('\\n').trim();\n};\n\nfor (const nodeName of [\"2. Basic LLM Chain (Scout)\", \"2. Basic LLM Chain (Scout Fallback)\", \"2. Basic LLM Chain (Scout Mistral Fallback)\"]) {\n  let runIdx = 0;\n  while (true) {\n    try {\n      const items = $items(nodeName, 0, runIdx);\n      if (!items || items.length === 0) break;\n      for (const it of items) {\n        const rawOut = it && it.json && (it.json.output || it.json.text);\n        if (rawOut) {\n          const cleaned = cleanScoutText(rawOut);\n          allItems.push({ json: { ...it.json, text: it.json.text ? cleaned : it.json.text, output: it.json.output ? cleaned : it.json.output } });\n        }\n      }\n      runIdx++;\n    } catch (e) {\n      break;\n    }\n  }\n}\nconst validItems = allItems.filter(it => String(it.json.output || it.json.text || '').trim().length >= 120);\nconst out = validItems.length > 0 ? validItems : (allItems.length > 0 ? allItems : $items(\"2. Basic LLM Chain (Scout)\"));\nlet isDryRun = false;\ntry { isDryRun = Boolean($('1. Prepare Scout Prompt').first().json.dry_run); } catch(e) {}\nreturn out.map(it => ({ json: { ...it.json, dry_run: isDryRun } }));"
       }
     },
     {
@@ -1086,7 +1086,7 @@
         26120
       ],
       "parameters": {
-        "jsCode": "const fs = require('fs');\nconst items = $input.all();\nlet allSnippets = \"\";\n\nitems.forEach((item, index) => {\n  allSnippets += `\\n\\n=== SCOUTED MOMENTS CHUNK ${index + 1} ===\\n`;\n  allSnippets += item.json.text || item.json.output || \"\";\n});\n\nlet isDryRun = items.some(it => Boolean(it.json && it.json.dry_run));\nif (!isDryRun) {\n  try { isDryRun = Boolean($('1. Prepare Scout Prompt').first().json.dry_run); } catch(e) {}\n}\n\n// Pull Proven Multimodal Anchors (with disk fallback for <10s Sandbox runs)\nlet anchorsList = [];\ntry {\n  const fusionItem = $('Run Multimodal Fusion').first();\n  if (fusionItem && fusionItem.json && fusionItem.json.stdout) {\n    const parsed = JSON.parse(fusionItem.json.stdout);\n    if (parsed && parsed.anchors) anchorsList = parsed.anchors;\n  }\n} catch(e) {}\n\nif (anchorsList.length === 0) {\n  try {\n    const lct = $('Load Cached Telemetry').first().json;\n    if (lct && lct.anchors) anchorsList = lct.anchors;\n  } catch(e) {}\n}\nif (anchorsList.length === 0 && fs.existsSync('/files/temp/unified_timeline_index.json')) {\n  try {\n    const idx = JSON.parse(fs.readFileSync('/files/temp/unified_timeline_index.json', 'utf8'));\n    if (idx && idx.anchors) anchorsList = idx.anchors;\n  } catch(e) {}\n}\n\nlet viralContext = \"\";\nif (anchorsList.length > 0) {\n  viralContext = \"\\n=== PROVEN AUDIENCE & REACTION ANCHORS ===\\n\" +\n    anchorsList.slice(0, 18).map(a => `[ANCHOR #${a.anchor_id}] Peak at ${a.peak_time}s (${a.peak_tc || ''}) | Score: ${a.virality_score}/100 | Model Fit: ${a.recommended_archetype || a.comedy_mechanism || 'Comedy'}\\n` +\n      `  - Audio: ${a.audio_signal || ''} | Chat: ${a.chat_signal || ''} | Face: ${a.face_signal || ''}\\n` +\n      (a.why_chat_laughed ? `  - Why They Laughed: ${a.why_chat_laughed}\\n` : '') +\n      (a.setup_tension_hook ? `  - Tension Hook: ${a.setup_tension_hook}\\n` : '') +\n      (a.callback_links && a.callback_links.length ? `  - Callback Candidates: ${a.callback_links.map(cb => cb.time + 's (\"' + cb.keyword + '\"): ' + cb.text).join(' | ')}\\n` : '') +\n      (a.is_multi_beat && a.beat_2 ? `  - Multi-Beat Callback: Beat 2 at ${a.beat_2.peak_time}s\\n` : '') +\n      (a.annotated_context ? `  - Exact Float-Second Context: ${String(a.annotated_context).substring(0, 600).replace(/\\\\n/g, ' | ')}\\n` : '')\n    ).join(\"\\n\") + \"\\n\";\n}\n\nlet streamContext = \"\";\ntry {\n  const summaryRaw = $('1. Global Summary AI').first().json.output || $('1. Global Summary Fallback').first().json.output || \"{}\";\n  const summary = JSON.parse(summaryRaw.replace(/```json/gi,'').replace(/```/g,'').trim());\n  streamContext = [\n    summary.game ? \"GAME: \" + summary.game : \"\",\n    summary.global_summary ? \"STREAM SUMMARY: \" + summary.global_summary : \"\",\n    summary.vibe ? \"VIBE: \" + summary.vibe : \"\",\n    (summary.key_themes && summary.key_themes.length) ? \"KEY THEMES: \" + summary.key_themes.join(\", \") : \"\"\n  ].filter(Boolean).join(\"\\n\");\n} catch(e) {}\n\nconst targetClips = 5;\n\nconst jsonSchema = '{\"clips\":[{\"clip_number\":1,\"narrative_archetype\":\"HUBRIS_INSTANT_KARMA\",\"estimated_vod_segment\":\"X-Y minutes\",\"title\":\"3-4 Word Curiosity Teaser 💀\",\"hook_caption\":\"3-5 WORDS IN ALL CAPS\",\"theme\":\"Core viral theme\",\"structure_type\":\"Multi-Segment Narrative Arc\",\"start_time\":53.3,\"end_time\":453.7,\"payoff_time\":450.0,\"segments\":[{\"start\":53.3,\"end\":64.4,\"role\":\"SETUP\"},{\"start\":144.8,\"end\":160.7,\"role\":\"ESCALATION\"},{\"start\":441.9,\"end\":453.7,\"role\":\"PAYOFF\"}],\"assembled_spoken_script\":\"Full stitched spoken lines in exact EDL playback order...\",\"signal_justification\":{\"chat_burst\":\"Z=3.4 sigma / top laugh quote\",\"db_spike\":\"+11.2dB scream at X:XX\",\"face_emotion\":\"Surprise/Joy X%\"},\"cause_and_effect_setup\":\"Clear setup explaining cold-viewer 3-act narrative arc\"}]}';\n\nconst prompt =\n  'SYSTEM: You are the #1 Elite YouTube Shorts Creative Director & Narrative Architect. You are editing non-linear, ultra-high-retention YouTube Shorts from a 1+ hour gaming livestream.\\n\\n' +\n  (streamContext ? '=== STREAM CONTEXT ===\\n' + streamContext + '\\n\\n' : '') +\n  (viralContext ? viralContext + '\\n' : '') +\n\n  '=== MULTI-SEGMENT NARRATIVE ARCHING (STOP EXTRACTING ISOLATED 20s SOUNDBITES) ===\\n' +\n  'CRITICAL DIRECTIVE: STOP extracting isolated, random 15-22s soundbites or single continuous slices! You MUST construct unified 30s-45s YouTube Shorts by stitching non-sequential moments together into a complete beginning-to-end 3-act story arc:\\n' +\n  '• Act 1 — [SETUP / STAKES] (role: \"SETUP\", 8-15s): The wager, challenge, promise, rules, or boast that gives a cold viewer clear stakes (e.g., agreeing to a 1v1 for the Nicholas Scythe).\\n' +\n  '• Act 2 — [ESCALATION / STRUGGLE] (role: \"ESCALATION\", 8-16s): The gameplay action, rising tension, failure, glitch/cheating discovery, or frantic no-hit frustration (jumping past dead air after SETUP).\\n' +\n  '• Act 3 — [PAYOFF / REACTION] (role: \"PAYOFF\", 8-16s): The victory, confession, scam accusation, trade resolution, or item reveal + reaction.\\n' +\n  'Every approved Short MUST populate all three roles in segments[]: [{\"start\": t1, \"end\": t2, \"role\": \"SETUP\"}, {\"start\": t3, \"end\": t4, \"role\": \"ESCALATION\"}, {\"start\": t5, \"end\": t6, \"role\": \"PAYOFF\"}] (with optional 1.8-2.4s non-spoilering \"HOOK_CLIMAX\" at index 0 ONLY for Flash-Forward/Mystery clips).\\n\\n' +\n\n  '=== 5 VIRAL YOUTUBE SHORTS NARRATIVE FRAMEWORKS (SELECT BEST MODEL PER CLIP) ===\\n' +\n  'Evaluate each candidate moment against ALL 5 proven frameworks and diversify archetypes across your selected clips (EVERY framework MUST include SETUP -> ESCALATION -> PAYOFF):\\n' +\n  '1. IN_MEDIA_RES_FLASHFORWARD (Optional HOOK_CLIMAX -> SETUP -> ESCALATION -> PAYOFF):\\n' +\n  '   - Optional 1.8-2.4s HOOK_CLIMAX cut strictly 0.3s BEFORE the final reveal/punchline so nothing is spoiled, then rewind to SETUP -> ESCALATION -> PAYOFF.\\n' +\n  '2. DOUBLE_DOWN_ESCALATION (SETUP -> ESCALATION -> PAYOFF):\\n' +\n  '   - Stitch initial wager/claim/failure (SETUP) -> jump-cut past dead air -> double-down struggle (ESCALATION) -> bigger PAYOFF.\\n' +\n  '3. HUBRIS_INSTANT_KARMA (SETUP -> ESCALATION -> PAYOFF):\\n' +\n  '   - Zero fluff! Open directly on streamer\\'s boldest claim/wager (SETUP), cut to gameplay struggle (ESCALATION), smash-cut to collapse/consequence + 2.5s reaction (PAYOFF).\\n' +\n  '4. MYSTERY_OPEN_LOOP (Optional HOOK_CLIMAX -> SETUP -> ESCALATION -> PAYOFF):\\n' +\n  '   - Open with an intriguing question or anomaly, stitch SETUP stakes, ESCALATION clues, and sharp PAYOFF twist reveal.\\n' +\n  '5. REVERSE_PAYOFF_LOOP (SETUP -> ESCALATION -> PAYOFF):\\n' +\n  '   - Pick start/end words so the final PAYOFF words flow grammatically & rhythmically straight back into SETUP\\'s 0:00 opening words.\\n\\n' +\n\n  '=== STRICT RETENTION, SENTENCE-BOUNDARY & COLD-VIEWER SCRIPTING RULES ===\\n' +\n  '• ZERO-CONTEXT COLD VIEWER RULE: Assume the viewer knows NOTHING about this stream. Stitch the actual SETUP wager/stakes segment first even if it occurred 1-15 minutes before the climax!\\n' +\n  '• ZERO RANDOM MID-SENTENCE CUTS: Every segment start MUST equal the exact start_s of a complete sentence `[start_s - end_s]` in the transcript/anchors, and every segment end MUST equal the exact end_s of a complete sentence! NEVER cut mid-clause or mid-word.\\n' +\n  '• NO SPOILERS AT 0:00: A hook must create an information gap (tension/curiosity/stakes), NEVER spoil the final outcome at 0:00.\\n' +\n  '• ZERO OVERLAPPING TIMESTAMPS: SETUP, ESCALATION, and PAYOFF MUST have strictly non-overlapping timestamps (SETUP.end < ESCALATION.start and ESCALATION.end < PAYOFF.start). Never repeat identical lines across segments!\\n' +\n  '• DISTINCT SCENES (>= 120s APART): Each clip MUST tell a distinct story arc with a distinct PAYOFF climax (for full 1h+ VODs >= 120s apart; on shorter highlights never duplicate the same PAYOFF). Reject superchat thank-yous and giveaway bot spam.\\n' +\n  '• RUTHLESS DEAD-AIR REMOVAL & 30-45s TARGET: Total stitched duration across all segments MUST be strictly between 30s and 45s (sweet spot 32s-42s).\\n\\n' +\n\n  '=== RULE 1: STRICT ANTI-ADMIN, ANTI-MENU, ANTI-INTRO-RULES, ANTI-RAID & ANTI-BROWSER FILTER ===\\n' +\n  '• NEVER include desktop/browser screens, Chrome/Edge tabs, Twitch/YouTube chat popout dashboards, Roblox ESC pause/settings menus, YouTube Studio, notepad, OBS, or admin housekeeping in any clip!\\n' +\n  '• [STRICT ANTI-INTRO, ANTI-RULES BANTER & ANTI-RAID]: FORBID selecting opening stream-rules/giveaway explanations (\"like the stream\", \"keep counter\", \"watch till the end of the stream\", \"rules of the stream\") or raid thank-yous (\"thank you for the raid\", \"welcome raiders\"). Every Short MUST feature actual in-game action, jumpscares, or comedic gameplay events!\\n' +\n  '• NEVER include outro panhandling (\"everybody subscribe\", \"hit the like button\", \"smash the like\", \"don\\'t forget to subscribe\") or end-of-stream sign-offs!\\n' +\n  '• NEVER include slow UI menus, trade request dialogues, inventory browsing, or passive donation roll calls.\\n\\n' +\n\n  '=== RULE 2: ZERO-SECOND RETENTION & HOOK RULES (First 0-3 Seconds) ===\\n' +\n  '• ZERO DEAD TIME AT HOOK: The first 3 seconds are make-or-break for Shorts retention.\\n' +\n  '• ZERO-SECOND RETENTION & STRICT ANTI-MID-THOUGHT PREAMBLE: REJECT clips that start mid-thought or with casual hesitation banter.\\n' +\n  '• NON-CHRONOLOGICAL HOOKS: Only place a HOOK_CLIMAX segment first in segments[] when total stitched duration across segments[] is >= 30 seconds and it never spoils PAYOFF.\\n' +\n  '• CONTINUOUS ACTION PRESERVATION: Include full silent gameplay action (1v1 gunfights, chases, tense moments) inside SETUP/ESCALATION/PAYOFF intervals.\\n\\n' +\n\n  '=== RULE 3: SINGLE PREMISE NARRATIVE COHESION & CAUSE-EFFECT EDL (ANTI-CHAOS) ===\\n' +\n  '• SINGLE PREMISE NARRATIVE COHESION: Every Short must tell ONE unified beginning-to-end micro-story fulfilling the hook banner and title.\\n' +\n  '• CAUSE-EFFECT EDL (ANTI-CHAOS): DISQUALIFY raw isolated screams without context. Every Short MUST pair SETUP -> ESCALATION -> PAYOFF.\\n\\n' +\n\n  '=== RULE 4: PAYOFF IMPACT & ANTI-CLIMAX FILTER ===\\n' +\n  '• PAYOFF IMPACT & ANTI-CLIMAX FILTER: Climax MUST deliver real comedic/dramatic impact. Allow strictly 2.0-3.5s reaction aftermath, never 20s of chatter.\\n' +\n  '• NATURAL CLIP DURATION: Target punchy high-retention windows strictly between 30s and 45s across your stitched EDL.\\n' +\n  '• CLEAN RESOLUTION: Every cut must respect complete spoken sentences and laughs.\\n\\n' +\n\n  '=== RULE 5: TITLES & HOOK CAPTIONS ===\\n' +\n  '1. TITLE: Curiosity Gap 3-4 words + emoji (💀, 😭, 😱, 🤯), <=25 chars.\\n' +\n  '2. HOOK_CAPTION: 3-5 WORDS IN ALL CAPS, 100% factual to screen.\\n\\n' +\n\n  '=== RULE 6: MANDATORY 3-ACT MULTI-SEGMENT SCHEMA ===\\n' +\n  '• EVERY approved Short MUST populate \"segments\": [{\"start\": t1, \"end\": t2, \"role\": \"SETUP\"}, {\"start\": t3, \"end\": t4, \"role\": \"ESCALATION\"}, {\"start\": t5, \"end\": t6, \"role\": \"PAYOFF\"}] (plus optional leading \"HOOK_CLIMAX\" 1.8-2.4s before SETUP).\\n' +\n  '• Never copy example timestamps; use exact VOD float seconds grounded in the transcript/anchors below.\\n\\n' +\n\n  '=== OUTPUT FORMAT ===\\n' +\n  'Return strictly valid JSON only. No markdown formatting, no explanations.\\n' +\n  'Output exactly ' + targetClips + ' diverse clips across different narrative_archetype values:\\n' +\n  jsonSchema + '\\n\\n' +\n  '--- SCOUTED SNIPPETS ---\\n' +\n  allSnippets;\n\nreturn [{ pairedItem: { item: 0 }, json: { prompt, targetClips, dry_run: isDryRun } }];"
+        "jsCode": "const fs = require('fs');\nconst items = $input.all();\nlet allSnippets = \"\";\n\nitems.forEach((item, index) => {\n  allSnippets += `\\n\\n=== SCOUTED MOMENTS CHUNK ${index + 1} ===\\n`;\n  allSnippets += item.json.text || item.json.output || \"\";\n});\n\nlet isDryRun = items.some(it => Boolean(it.json && it.json.dry_run));\nif (!isDryRun) {\n  try { isDryRun = Boolean($('1. Prepare Scout Prompt').first().json.dry_run); } catch(e) {}\n}\n\n// Pull Proven Multimodal Anchors (with disk fallback for <10s Sandbox runs)\nlet anchorsList = [];\ntry {\n  const fusionItem = $('Run Multimodal Fusion').first();\n  if (fusionItem && fusionItem.json && fusionItem.json.stdout) {\n    const parsed = JSON.parse(fusionItem.json.stdout);\n    if (parsed && parsed.anchors) anchorsList = parsed.anchors;\n  }\n} catch(e) {}\n\nif (anchorsList.length === 0) {\n  try {\n    const lct = $('Load Cached Telemetry').first().json;\n    if (lct && lct.anchors) anchorsList = lct.anchors;\n  } catch(e) {}\n}\nif (anchorsList.length === 0 && fs.existsSync('/files/temp/unified_timeline_index.json')) {\n  try {\n    const idx = JSON.parse(fs.readFileSync('/files/temp/unified_timeline_index.json', 'utf8'));\n    if (idx && idx.anchors) anchorsList = idx.anchors;\n  } catch(e) {}\n}\n\nlet viralContext = \"\";\nif (anchorsList.length > 0) {\n  viralContext = \"\\n=== PROVEN AUDIENCE & REACTION ANCHORS ===\\n\" +\n    anchorsList.slice(0, 18).map(a => `[ANCHOR #${a.anchor_id}] Peak at ${a.peak_time}s (${a.peak_tc || ''}) | Score: ${a.virality_score}/100 | Model Fit: ${a.recommended_archetype || a.comedy_mechanism || 'Comedy'}\\n` +\n      `  - Audio: ${a.audio_signal || ''} | Chat: ${a.chat_signal || ''} | Face: ${a.face_signal || ''}\\n` +\n      (a.why_chat_laughed ? `  - Why They Laughed: ${a.why_chat_laughed}\\n` : '') +\n      (a.setup_tension_hook ? `  - Tension Hook: ${a.setup_tension_hook}\\n` : '') +\n      (a.callback_links && a.callback_links.length ? `  - Callback Candidates: ${a.callback_links.map(cb => cb.time + 's (\"' + cb.keyword + '\"): ' + cb.text).join(' | ')}\\n` : '') +\n      (a.is_multi_beat && a.beat_2 ? `  - Multi-Beat Callback: Beat 2 at ${a.beat_2.peak_time}s\\n` : '') +\n      (a.annotated_context ? `  - Exact Float-Second Context: ${String(a.annotated_context).substring(0, 600).replace(/\\\\n/g, ' | ')}\\n` : '')\n    ).join(\"\\n\") + \"\\n\";\n}\n\nlet streamContext = \"\";\ntry {\n  let summaryRaw = \"\";\n  for (const sNode of ['1. Global Summary AI', '1. Global Summary Fallback', '1. Global Summary Mistral Fallback']) {\n    if (summaryRaw) break;\n    try { summaryRaw = $(sNode).first().json.output || $(sNode).first().json.text || \"\"; } catch(e0) {}\n  }\n  const summary = JSON.parse((summaryRaw || \"{}\").replace(/```json/gi,'').replace(/```/g,'').trim());\n  streamContext = [\n    summary.game ? \"GAME: \" + summary.game : \"\",\n    summary.global_summary ? \"STREAM SUMMARY: \" + summary.global_summary : \"\",\n    summary.vibe ? \"VIBE: \" + summary.vibe : \"\",\n    (summary.key_themes && summary.key_themes.length) ? \"KEY THEMES: \" + summary.key_themes.join(\", \") : \"\"\n  ].filter(Boolean).join(\"\\n\");\n} catch(e) {}\n\nconst targetClips = 5;\n\nconst jsonSchema = '{\"clips\":[{\"clip_number\":1,\"narrative_archetype\":\"HUBRIS_INSTANT_KARMA\",\"estimated_vod_segment\":\"X-Y minutes\",\"title\":\"3-4 Word Curiosity Teaser 💀\",\"hook_caption\":\"3-5 WORDS IN ALL CAPS\",\"theme\":\"Core viral theme\",\"structure_type\":\"Multi-Segment Narrative Arc\",\"start_time\":53.3,\"end_time\":453.7,\"payoff_time\":450.0,\"segments\":[{\"start\":53.3,\"end\":64.4,\"role\":\"SETUP\"},{\"start\":144.8,\"end\":160.7,\"role\":\"ESCALATION\"},{\"start\":441.9,\"end\":453.7,\"role\":\"PAYOFF\"}],\"assembled_spoken_script\":\"Full stitched spoken lines in exact EDL playback order...\",\"signal_justification\":{\"chat_burst\":\"Z=3.4 sigma / top laugh quote\",\"db_spike\":\"+11.2dB scream at X:XX\",\"face_emotion\":\"Surprise/Joy X%\"},\"cause_and_effect_setup\":\"Clear setup explaining cold-viewer 3-act narrative arc\"}]}';\n\nconst prompt =\n  'SYSTEM: You are the #1 Elite YouTube Shorts Creative Director & Narrative Architect. You are editing non-linear, ultra-high-retention YouTube Shorts from a 1+ hour gaming livestream.\\n\\n' +\n  (streamContext ? '=== STREAM CONTEXT ===\\n' + streamContext + '\\n\\n' : '') +\n  (viralContext ? viralContext + '\\n' : '') +\n\n  '=== MULTI-SEGMENT NARRATIVE ARCHING (STOP EXTRACTING ISOLATED 20s SOUNDBITES) ===\\n' +\n  'CRITICAL DIRECTIVE: STOP extracting isolated, random 15-22s soundbites or single continuous slices! You MUST construct unified 30s-45s YouTube Shorts by stitching non-sequential moments together into a complete beginning-to-end 3-act story arc:\\n' +\n  '• Act 1 — [SETUP / STAKES] (role: \"SETUP\", 8-15s): The wager, challenge, promise, rules, or boast that gives a cold viewer clear stakes (e.g., agreeing to a 1v1 for the Nicholas Scythe).\\n' +\n  '• Act 2 — [ESCALATION / STRUGGLE] (role: \"ESCALATION\", 8-16s): The gameplay action, rising tension, failure, glitch/cheating discovery, or frantic no-hit frustration (jumping past dead air after SETUP).\\n' +\n  '• Act 3 — [PAYOFF / REACTION] (role: \"PAYOFF\", 8-16s): The victory, confession, scam accusation, trade resolution, or item reveal + reaction.\\n' +\n  'Every approved Short MUST populate all three roles in segments[]: [{\"start\": t1, \"end\": t2, \"role\": \"SETUP\"}, {\"start\": t3, \"end\": t4, \"role\": \"ESCALATION\"}, {\"start\": t5, \"end\": t6, \"role\": \"PAYOFF\"}] (with optional 1.8-2.4s non-spoilering \"HOOK_CLIMAX\" at index 0 ONLY for Flash-Forward/Mystery clips).\\n\\n' +\n\n  '=== 5 VIRAL YOUTUBE SHORTS NARRATIVE FRAMEWORKS (SELECT BEST MODEL PER CLIP) ===\\n' +\n  'Evaluate each candidate moment against ALL 5 proven frameworks and diversify archetypes across your selected clips (EVERY framework MUST include SETUP -> ESCALATION -> PAYOFF):\\n' +\n  '1. IN_MEDIA_RES_FLASHFORWARD (Optional HOOK_CLIMAX -> SETUP -> ESCALATION -> PAYOFF):\\n' +\n  '   - Optional 1.8-2.4s HOOK_CLIMAX cut strictly 0.3s BEFORE the final reveal/punchline so nothing is spoiled, then rewind to SETUP -> ESCALATION -> PAYOFF.\\n' +\n  '2. DOUBLE_DOWN_ESCALATION (SETUP -> ESCALATION -> PAYOFF):\\n' +\n  '   - Stitch initial wager/claim/failure (SETUP) -> jump-cut past dead air -> double-down struggle (ESCALATION) -> bigger PAYOFF.\\n' +\n  '3. HUBRIS_INSTANT_KARMA (SETUP -> ESCALATION -> PAYOFF):\\n' +\n  '   - Zero fluff! Open directly on streamer\\'s boldest claim/wager (SETUP), cut to gameplay struggle (ESCALATION), smash-cut to collapse/consequence + 2.5s reaction (PAYOFF).\\n' +\n  '4. MYSTERY_OPEN_LOOP (Optional HOOK_CLIMAX -> SETUP -> ESCALATION -> PAYOFF):\\n' +\n  '   - Open with an intriguing question or anomaly, stitch SETUP stakes, ESCALATION clues, and sharp PAYOFF twist reveal.\\n' +\n  '5. REVERSE_PAYOFF_LOOP (SETUP -> ESCALATION -> PAYOFF):\\n' +\n  '   - Pick start/end words so the final PAYOFF words flow grammatically & rhythmically straight back into SETUP\\'s 0:00 opening words.\\n\\n' +\n\n  '=== STRICT RETENTION, SENTENCE-BOUNDARY & COLD-VIEWER SCRIPTING RULES ===\\n' +\n  '• ZERO-CONTEXT COLD VIEWER RULE: Assume the viewer knows NOTHING about this stream. Stitch the actual SETUP wager/stakes segment first even if it occurred 1-15 minutes before the climax!\\n' +\n  '• ZERO RANDOM MID-SENTENCE CUTS: Every segment start MUST equal the exact start_s of a complete sentence `[start_s - end_s]` in the transcript/anchors, and every segment end MUST equal the exact end_s of a complete sentence! NEVER cut mid-clause or mid-word.\\n' +\n  '• NO SPOILERS AT 0:00: A hook must create an information gap (tension/curiosity/stakes), NEVER spoil the final outcome at 0:00.\\n' +\n  '• ZERO OVERLAPPING TIMESTAMPS: SETUP, ESCALATION, and PAYOFF MUST have strictly non-overlapping timestamps (SETUP.end < ESCALATION.start and ESCALATION.end < PAYOFF.start). Never repeat identical lines across segments!\\n' +\n  '• DISTINCT SCENES (>= 120s APART): Each clip MUST tell a distinct story arc with a distinct PAYOFF climax (for full 1h+ VODs >= 120s apart; on shorter highlights never duplicate the same PAYOFF). Reject superchat thank-yous and giveaway bot spam.\\n' +\n  '• RUTHLESS DEAD-AIR REMOVAL & 30-45s TARGET: Total stitched duration across all segments MUST be strictly between 30s and 45s (sweet spot 32s-42s).\\n\\n' +\n\n  '=== RULE 1: STRICT ANTI-ADMIN, ANTI-MENU, ANTI-INTRO-RULES, ANTI-RAID & ANTI-BROWSER FILTER ===\\n' +\n  '• NEVER include desktop/browser screens, Chrome/Edge tabs, Twitch/YouTube chat popout dashboards, Roblox ESC pause/settings menus, YouTube Studio, notepad, OBS, or admin housekeeping in any clip!\\n' +\n  '• [STRICT ANTI-INTRO, ANTI-RULES BANTER & ANTI-RAID]: FORBID selecting opening stream-rules/giveaway explanations (\"like the stream\", \"keep counter\", \"watch till the end of the stream\", \"rules of the stream\") or raid thank-yous (\"thank you for the raid\", \"welcome raiders\"). Every Short MUST feature actual in-game action, jumpscares, or comedic gameplay events!\\n' +\n  '• NEVER include outro panhandling (\"everybody subscribe\", \"hit the like button\", \"smash the like\", \"don\\'t forget to subscribe\") or end-of-stream sign-offs!\\n' +\n  '• NEVER include slow UI menus, trade request dialogues, inventory browsing, or passive donation roll calls.\\n\\n' +\n\n  '=== RULE 2: ZERO-SECOND RETENTION & HOOK RULES (First 0-3 Seconds) ===\\n' +\n  '• ZERO DEAD TIME AT HOOK: The first 3 seconds are make-or-break for Shorts retention.\\n' +\n  '• ZERO-SECOND RETENTION & STRICT ANTI-MID-THOUGHT PREAMBLE: REJECT clips that start mid-thought or with casual hesitation banter.\\n' +\n  '• NON-CHRONOLOGICAL HOOKS: Only place a HOOK_CLIMAX segment first in segments[] when total stitched duration across segments[] is >= 30 seconds and it never spoils PAYOFF.\\n' +\n  '• CONTINUOUS ACTION PRESERVATION: Include full silent gameplay action (1v1 gunfights, chases, tense moments) inside SETUP/ESCALATION/PAYOFF intervals.\\n\\n' +\n\n  '=== RULE 3: SINGLE PREMISE NARRATIVE COHESION & CAUSE-EFFECT EDL (ANTI-CHAOS) ===\\n' +\n  '• SINGLE PREMISE NARRATIVE COHESION: Every Short must tell ONE unified beginning-to-end micro-story fulfilling the hook banner and title.\\n' +\n  '• CAUSE-EFFECT EDL (ANTI-CHAOS): DISQUALIFY raw isolated screams without context. Every Short MUST pair SETUP -> ESCALATION -> PAYOFF.\\n\\n' +\n\n  '=== RULE 4: PAYOFF IMPACT & ANTI-CLIMAX FILTER ===\\n' +\n  '• PAYOFF IMPACT & ANTI-CLIMAX FILTER: Climax MUST deliver real comedic/dramatic impact. Allow strictly 2.0-3.5s reaction aftermath, never 20s of chatter.\\n' +\n  '• NATURAL CLIP DURATION: Target punchy high-retention windows strictly between 30s and 45s across your stitched EDL.\\n' +\n  '• CLEAN RESOLUTION: Every cut must respect complete spoken sentences and laughs.\\n\\n' +\n\n  '=== RULE 5: TITLES & HOOK CAPTIONS ===\\n' +\n  '1. TITLE: Curiosity Gap 3-4 words + emoji (💀, 😭, 😱, 🤯), <=25 chars.\\n' +\n  '2. HOOK_CAPTION: 3-5 WORDS IN ALL CAPS, 100% factual to screen.\\n\\n' +\n\n  '=== RULE 6: MANDATORY 3-ACT MULTI-SEGMENT SCHEMA ===\\n' +\n  '• EVERY approved Short MUST populate \"segments\": [{\"start\": t1, \"end\": t2, \"role\": \"SETUP\"}, {\"start\": t3, \"end\": t4, \"role\": \"ESCALATION\"}, {\"start\": t5, \"end\": t6, \"role\": \"PAYOFF\"}] (plus optional leading \"HOOK_CLIMAX\" 1.8-2.4s before SETUP).\\n' +\n  '• Never copy example timestamps; use exact VOD float seconds grounded in the transcript/anchors below.\\n\\n' +\n\n  '=== OUTPUT FORMAT ===\\n' +\n  'Return strictly valid JSON only. No markdown formatting, no explanations.\\n' +\n  'Output exactly ' + targetClips + ' diverse clips across different narrative_archetype values:\\n' +\n  jsonSchema + '\\n\\n' +\n  '--- SCOUTED SNIPPETS ---\\n' +\n  allSnippets;\n\nreturn [{ pairedItem: { item: 0 }, json: { prompt, targetClips, dry_run: isDryRun } }];"
       }
     },
     {
@@ -1099,7 +1099,7 @@
         26320
       ],
       "parameters": {
-        "modelName": "models/gemini-3.5-flash",
+        "modelName": "models/gemini-2.5-flash",
         "options": {
           "temperature": 0.1,
           "maxOutputTokens": 8192,
@@ -1127,8 +1127,8 @@
       },
       "credentials": {
         "googlePalmApi": {
-          "id": "EJRA7ZZxsBILsA9T",
-          "name": "gemini 2 "
+          "id": "q8anzSUz4rLj7HSv",
+          "name": "yacine"
         }
       },
       "retryOnFail": false,
@@ -1274,7 +1274,7 @@
         25860
       ],
       "parameters": {
-        "amount": 55,
+        "amount": 15,
         "unit": "seconds"
       }
     },
@@ -1289,7 +1289,7 @@
         26080
       ],
       "parameters": {
-        "amount": 55,
+        "amount": 15,
         "unit": "seconds"
       }
     },
@@ -1304,7 +1304,7 @@
         26380
       ],
       "parameters": {
-        "amount": 55,
+        "amount": 15,
         "unit": "seconds"
       }
     },
@@ -1319,7 +1319,7 @@
         26460
       ],
       "parameters": {
-        "amount": 55,
+        "amount": 15,
         "unit": "seconds"
       }
     },
@@ -2222,8 +2222,8 @@
       "waitBetweenTries": 1000,
       "credentials": {
         "googlePalmApi": {
-          "id": "9NtnnUmLQ5Ydiu6q",
-          "name": "Google Gemini(PaLM) Api account 2"
+          "id": "EJRA7ZZxsBILsA9T",
+          "name": "gemini 2 "
         }
       }
     },
@@ -2297,7 +2297,7 @@
         "promptType": "define",
         "text": "={{ $('3. Prepare Director Prompt').last().json.prompt }}"
       },
-      "onError": "continueRegularOutput"
+      "onError": "continueErrorOutput"
     },
     {
       "id": "b2d7f475-0a23-4b45-8c67-445566778899",
@@ -2340,8 +2340,8 @@
       "waitBetweenTries": 1000,
       "credentials": {
         "googlePalmApi": {
-          "id": "9NtnnUmLQ5Ydiu6q",
-          "name": "Google Gemini(PaLM) Api account 2"
+          "id": "EJRA7ZZxsBILsA9T",
+          "name": "gemini 2 "
         }
       }
     },
@@ -2444,6 +2444,180 @@
         -87920,
         26360
       ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.prompt || $('Scout Loop').item.json.prompt }}"
+      },
+      "id": "mistral-scout-chain-fallback",
+      "name": "2. Basic LLM Chain (Scout Mistral Fallback)",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [
+        -86760,
+        26560
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "model": "mistral-large-latest",
+        "options": {
+          "temperature": 0.4,
+          "maxTokens": 8192,
+          "maxRetries": 2
+        }
+      },
+      "id": "mistral-scout-model-node",
+      "name": "Mistral Backup Model Scout",
+      "type": "@n8n/n8n-nodes-langchain.lmChatMistralCloud",
+      "typeVersion": 1,
+      "position": [
+        -86720,
+        26720
+      ],
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "GPkRAk0iPJOL3lzl",
+          "name": "Mistral Cloud account"
+        }
+      },
+      "retryOnFail": false,
+      "maxTries": 1,
+      "waitBetweenTries": 1000
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('3. Prepare Director Prompt').last().json.prompt }}"
+      },
+      "id": "mistral-director-chain-fallback",
+      "name": "4. Basic LLM Chain (Director Mistral Fallback)",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [
+        -85440,
+        26520
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "model": "mistral-large-latest",
+        "options": {
+          "temperature": 0.1,
+          "maxTokens": 8192,
+          "maxRetries": 2
+        }
+      },
+      "id": "mistral-director-model-node",
+      "name": "Mistral Backup Model Director",
+      "type": "@n8n/n8n-nodes-langchain.lmChatMistralCloud",
+      "typeVersion": 1,
+      "position": [
+        -85400,
+        26680
+      ],
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "GPkRAk0iPJOL3lzl",
+          "name": "Mistral Cloud account"
+        }
+      },
+      "retryOnFail": false,
+      "maxTries": 1,
+      "waitBetweenTries": 1000
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('3. Groq Whisper').first().json.text ? $('3. Groq Whisper').first().json.text.substring(0,40000) : '' }}",
+        "options": {
+          "systemMessage": "You are the Lead Narrative Director for a top gaming creator. Your task is to analyze the entire VOD transcript and provide a profound, hallucination-free Global Summary.\n\nTASK:\n1. Identify the specific Game being played.\n2. Summarize the overarching narrative/goal of the entire VOD in 3-4 sentences.\n3. Define the precise \"Vibe\" (e.g., Chaotic, Educational, Story-driven).\n4. Extract key recurring themes or inside jokes.\n\nOUTPUT JSON FORMAT EXACTLY AND ONLY JSON. NO MARKDOWN:\n{\n  \"game\": \"Name of Game\",\n  \"global_summary\": \"Streamer is trying to...\",\n  \"vibe\": \"High-energy rage\",\n  \"key_themes\": [\"dying to fall damage\", \"lag complaining\"]\n}"
+        }
+      },
+      "id": "mistral-summary-chain-fallback",
+      "name": "1. Global Summary Mistral Fallback",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        -89160,
+        26260
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "model": "mistral-small-latest",
+        "options": {
+          "temperature": 0.1,
+          "maxTokens": 4096,
+          "maxRetries": 2
+        }
+      },
+      "id": "mistral-summary-model-node",
+      "name": "Mistral Backup Model Summary",
+      "type": "@n8n/n8n-nodes-langchain.lmChatMistralCloud",
+      "typeVersion": 1,
+      "position": [
+        -89140,
+        26420
+      ],
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "GPkRAk0iPJOL3lzl",
+          "name": "Mistral Cloud account"
+        }
+      },
+      "retryOnFail": false,
+      "maxTries": 1,
+      "waitBetweenTries": 1000
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "PROPOSED HOOK BANNER FROM DIRECTOR:\n{{ $('Loop Clips').item.json.hook_caption || $('Loop Clips').item.json.title }}\n\nCLIP TITLE:\n{{ $('Loop Clips').item.json.title }}\n\nCLIP THEME:\n{{ $('Loop Clips').item.json.theme }}\n\nAVAILABLE SOUNDS (pick from these exact filenames):\n{{ (function(){ let o=''; try{ o=$('Get Meme List').item.json.stdout||''; }catch(e){ try{ o=$('Get Meme List').last().json.stdout||''; }catch(e2){} } return o ? o.split('---DIMENSIONS---')[0].trim().replace(/\\\\n/g, ', ') : 'vine-boom-sound-effect_KT89XIq.mp3, huh_37bAoRo.mp3, fartmeme.mp3'; })() }}\n\nFULL TIMECODED TRANSCRIPT OF THE CLIP (read every word before placing ANY effects):\n{{ (function(){ let lc={}; try{ lc=$('Loop Clips').item.json||{}; }catch(e){ try{ lc=$('Loop Clips').last().json||{}; }catch(e2){} } const arc=String(lc.assembled_spoken_script||'').trim(); let j={}; try{ j=$('7d. Get Subtitles (SRT)').last().json||{}; }catch(e){} if(!j||(!j.words&&!j.x_groq&&!j.text)){ try{ j=$('7d. Get Subtitles (SRT)').item.json||{}; }catch(e2){} } const w=j.words||(j.x_groq&&j.x_groq.words)||[]; const timed=w.length>0?w.map(x=>'['+Number(x.start||0).toFixed(1)+'s] '+x.word).join(' '):String(j.text||'').trim(); if(arc&&timed) return arc+'\\n\\nTIMECODED WORDS:\\n'+timed; return arc||timed||String(lc.title||lc.hook_caption||'Gameplay highlight clip'); })() }}",
+        "options": {
+          "systemMessage": "You are an Elite YouTube Shorts Editor & Sound Designer.\nYou have the Director's PROPOSED HOOK BANNER and the full timecoded transcript below.\nOutput ONLY raw JSON matching:\n{\"story_hook\": \"<3_TO_5_WORD_FACTUAL_HOOK_IN_ALL_CAPS>\", \"climax_quote\": \"<exact 3 to 5 spoken words from transcript>\", \"reaction_triggers\": [14.2], \"memes\": []}"
+        }
+      },
+      "id": "mistral-merge-agent-fallback",
+      "name": "Context Merge Mistral Fallback",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        -82720,
+        26420
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "model": "mistral-small-latest",
+        "options": {
+          "temperature": 0.2,
+          "maxTokens": 4096,
+          "maxRetries": 2
+        }
+      },
+      "id": "mistral-merge-model-node",
+      "name": "Mistral Backup Model Merge",
+      "type": "@n8n/n8n-nodes-langchain.lmChatMistralCloud",
+      "typeVersion": 1,
+      "position": [
+        -82680,
+        26580
+      ],
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "GPkRAk0iPJOL3lzl",
+          "name": "Mistral Cloud account"
+        }
+      },
+      "retryOnFail": false,
+      "maxTries": 1,
+      "waitBetweenTries": 1000
     }
   ],
   "connections": {
@@ -2899,14 +3073,14 @@
       "main": [
         [
           {
-            "node": "Wait Summary Fallback Error",
+            "node": "1. Global Summary Mistral Fallback",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "Wait Before Scout",
+            "node": "1. Global Summary Mistral Fallback",
             "type": "main",
             "index": 0
           }
@@ -2960,7 +3134,7 @@
         ],
         [
           {
-            "node": "Create Subtitle Binary",
+            "node": "Context Merge Mistral Fallback",
             "type": "main",
             "index": 0
           }
@@ -3572,7 +3746,7 @@
         ],
         [
           {
-            "node": "Create Subtitle Binary",
+            "node": "Context Merge Mistral Fallback",
             "type": "main",
             "index": 0
           }
@@ -3659,7 +3833,7 @@
         ],
         [
           {
-            "node": "Scout Loop",
+            "node": "2. Basic LLM Chain (Scout Mistral Fallback)",
             "type": "main",
             "index": 0
           }
@@ -3722,6 +3896,13 @@
         [
           {
             "node": "5. Split Clips",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "4. Basic LLM Chain (Director Mistral Fallback)",
             "type": "main",
             "index": 0
           }
@@ -3803,6 +3984,101 @@
           {
             "node": "2. Basic LLM Chain (Scout Fallback)",
             "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "1. Global Summary Mistral Fallback": {
+      "main": [
+        [
+          {
+            "node": "Run Multimodal Fusion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mistral Backup Model Summary": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "1. Global Summary Mistral Fallback",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2. Basic LLM Chain (Scout Mistral Fallback)": {
+      "main": [
+        [
+          {
+            "node": "Scout Loop",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Scout Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mistral Backup Model Scout": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "2. Basic LLM Chain (Scout Mistral Fallback)",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4. Basic LLM Chain (Director Mistral Fallback)": {
+      "main": [
+        [
+          {
+            "node": "5. Split Clips",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mistral Backup Model Director": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "4. Basic LLM Chain (Director Mistral Fallback)",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Context Merge Mistral Fallback": {
+      "main": [
+        [
+          {
+            "node": "Create Subtitle Binary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mistral Backup Model Merge": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Context Merge Mistral Fallback",
+            "type": "ai_languageModel",
             "index": 0
           }
         ]

@@ -1716,7 +1716,7 @@ OUTPUT JSON FORMAT EXACTLY AND ONLY JSON. NO MARKDOWN:
         type: '@n8n/n8n-nodes-langchain.lmChatGoogleGemini',
         version: 1,
         position: [-90820, 25920],
-        credentials: { googlePalmApi: { id: '9NtnnUmLQ5Ydiu6q', name: 'Google Gemini(PaLM) Api account 2' } },
+        credentials: { googlePalmApi: { id: 'q8anzSUz4rLj7HSv', name: 'yacine' } },
         retryOnFail: false,
         maxTries: 1,
         waitBetweenTries: 1000,
@@ -1803,13 +1803,13 @@ Output ONLY valid raw JSON matching this schema (replace angle-bracket placehold
         type: '@n8n/n8n-nodes-langchain.lmChatGoogleGemini',
         version: 1,
         position: [-83900, 26440],
-        credentials: { googlePalmApi: { id: 'EJRA7ZZxsBILsA9T', name: 'gemini 2 ' } },
+        credentials: { googlePalmApi: { id: 'q8anzSUz4rLj7HSv', name: 'yacine' } },
         retryOnFail: false,
         maxTries: 1,
         waitBetweenTries: 1000,
     })
     GeminiModel2 = {
-        modelName: 'models/gemini-3.5-flash',
+        modelName: 'models/gemini-2.5-flash',
         options: {
             temperature: 0.2,
             maxOutputTokens: 4096,
@@ -2016,7 +2016,7 @@ Output ONLY valid raw JSON matching this schema (replace angle-bracket placehold
         type: '@n8n/n8n-nodes-langchain.lmChatGoogleGemini',
         version: 1,
         position: [-82920, 26500],
-        credentials: { googlePalmApi: { id: '9NtnnUmLQ5Ydiu6q', name: 'Google Gemini(PaLM) Api account 2' } },
+        credentials: { googlePalmApi: { id: 'EJRA7ZZxsBILsA9T', name: 'gemini 2 ' } },
         retryOnFail: false,
         maxTries: 1,
         waitBetweenTries: 1000,
@@ -2377,13 +2377,13 @@ return results;`,
         type: '@n8n/n8n-nodes-langchain.lmChatGoogleGemini',
         version: 1,
         position: [-87680, 26580],
-        credentials: { googlePalmApi: { id: 'EJRA7ZZxsBILsA9T', name: 'gemini 2 ' } },
+        credentials: { googlePalmApi: { id: 'q8anzSUz4rLj7HSv', name: 'yacine' } },
         retryOnFail: false,
         maxTries: 1,
         waitBetweenTries: 1000,
     })
     GeminiModelScout = {
-        modelName: 'models/gemini-3.5-flash',
+        modelName: 'models/gemini-2.5-flash',
         options: {
             temperature: 0.4,
             maxOutputTokens: 8192,
@@ -2463,7 +2463,7 @@ const cleanScoutText = (raw) => {
   return lines.join('\\n').trim();
 };
 
-for (const nodeName of ["2. Basic LLM Chain (Scout)", "2. Basic LLM Chain (Scout Fallback)"]) {
+for (const nodeName of ["2. Basic LLM Chain (Scout)", "2. Basic LLM Chain (Scout Fallback)", "2. Basic LLM Chain (Scout Mistral Fallback)"]) {
   let runIdx = 0;
   while (true) {
     try {
@@ -2549,8 +2549,12 @@ if (anchorsList.length > 0) {
 
 let streamContext = "";
 try {
-  const summaryRaw = $('1. Global Summary AI').first().json.output || $('1. Global Summary Fallback').first().json.output || "{}";
-  const summary = JSON.parse(summaryRaw.replace(/\`\`\`json/gi,'').replace(/\`\`\`/g,'').trim());
+  let summaryRaw = "";
+  for (const sNode of ['1. Global Summary AI', '1. Global Summary Fallback', '1. Global Summary Mistral Fallback']) {
+    if (summaryRaw) break;
+    try { summaryRaw = $(sNode).first().json.output || $(sNode).first().json.text || ""; } catch(e0) {}
+  }
+  const summary = JSON.parse((summaryRaw || "{}").replace(/\`\`\`json/gi,'').replace(/\`\`\`/g,'').trim());
   streamContext = [
     summary.game ? "GAME: " + summary.game : "",
     summary.global_summary ? "STREAM SUMMARY: " + summary.global_summary : "",
@@ -2641,13 +2645,13 @@ return [{ pairedItem: { item: 0 }, json: { prompt, targetClips, dry_run: isDryRu
         type: '@n8n/n8n-nodes-langchain.lmChatGoogleGemini',
         version: 1,
         position: [-86220, 26320],
-        credentials: { googlePalmApi: { id: 'EJRA7ZZxsBILsA9T', name: 'gemini 2 ' } },
+        credentials: { googlePalmApi: { id: 'q8anzSUz4rLj7HSv', name: 'yacine' } },
         retryOnFail: false,
         maxTries: 1,
         waitBetweenTries: 1000,
     })
     GeminiModelDirector = {
-        modelName: 'models/gemini-3.5-flash',
+        modelName: 'models/gemini-2.5-flash',
         options: {
             temperature: 0.1,
             maxOutputTokens: 8192,
@@ -3564,7 +3568,7 @@ return $input.all().map((it, idx) => {
         type: '@n8n/n8n-nodes-langchain.lmChatGoogleGemini',
         version: 1,
         position: [-86920, 26720],
-        credentials: { googlePalmApi: { id: '9NtnnUmLQ5Ydiu6q', name: 'Google Gemini(PaLM) Api account 2' } },
+        credentials: { googlePalmApi: { id: 'EJRA7ZZxsBILsA9T', name: 'gemini 2 ' } },
         retryOnFail: false,
         maxTries: 1,
         waitBetweenTries: 1000,
@@ -3631,7 +3635,7 @@ return $input.all().map((it, idx) => {
         type: '@n8n/n8n-nodes-langchain.chainLlm',
         version: 1.4,
         position: [-85640, 26520],
-        onError: 'continueRegularOutput',
+        onError: 'continueErrorOutput',
     })
     _4BasicLlmChainDirectorFallback = {
         promptType: 'define',
@@ -3644,7 +3648,7 @@ return $input.all().map((it, idx) => {
         type: '@n8n/n8n-nodes-langchain.lmChatGoogleGemini',
         version: 1,
         position: [-85600, 26680],
-        credentials: { googlePalmApi: { id: '9NtnnUmLQ5Ydiu6q', name: 'Google Gemini(PaLM) Api account 2' } },
+        credentials: { googlePalmApi: { id: 'EJRA7ZZxsBILsA9T', name: 'gemini 2 ' } },
         retryOnFail: false,
         maxTries: 1,
         waitBetweenTries: 1000,
@@ -3663,6 +3667,158 @@ return $input.all().map((it, idx) => {
                 ],
             },
         },
+    };
+
+    @node({
+        id: 'mistral-scout-chain-fallback',
+        name: '2. Basic LLM Chain (Scout Mistral Fallback)',
+        type: '@n8n/n8n-nodes-langchain.chainLlm',
+        version: 1.4,
+        position: [-86760, 26560],
+        onError: 'continueErrorOutput',
+    })
+    _2BasicLlmChainScoutMistralFallback = {
+        promptType: 'define',
+        text: "={{ $json.prompt || $('Scout Loop').item.json.prompt }}",
+    };
+
+    @node({
+        id: 'mistral-scout-model-node',
+        name: 'Mistral Backup Model Scout',
+        type: '@n8n/n8n-nodes-langchain.lmChatMistralCloud',
+        version: 1,
+        position: [-86720, 26720],
+        credentials: { mistralCloudApi: { id: 'GPkRAk0iPJOL3lzl', name: 'Mistral Cloud account' } },
+        retryOnFail: false,
+        maxTries: 1,
+        waitBetweenTries: 1000,
+    })
+    MistralBackupModelScout = {
+        model: 'mistral-large-latest',
+        options: { temperature: 0.4, maxTokens: 8192, maxRetries: 2 },
+    };
+
+    @node({
+        id: 'mistral-director-chain-fallback',
+        name: '4. Basic LLM Chain (Director Mistral Fallback)',
+        type: '@n8n/n8n-nodes-langchain.chainLlm',
+        version: 1.4,
+        position: [-85440, 26520],
+        onError: 'continueRegularOutput',
+    })
+    _4BasicLlmChainDirectorMistralFallback = {
+        promptType: 'define',
+        text: "={{ $('3. Prepare Director Prompt').last().json.prompt }}",
+    };
+
+    @node({
+        id: 'mistral-director-model-node',
+        name: 'Mistral Backup Model Director',
+        type: '@n8n/n8n-nodes-langchain.lmChatMistralCloud',
+        version: 1,
+        position: [-85400, 26680],
+        credentials: { mistralCloudApi: { id: 'GPkRAk0iPJOL3lzl', name: 'Mistral Cloud account' } },
+        retryOnFail: false,
+        maxTries: 1,
+        waitBetweenTries: 1000,
+    })
+    MistralBackupModelDirector = {
+        model: 'mistral-large-latest',
+        options: { temperature: 0.1, maxTokens: 8192, maxRetries: 2 },
+    };
+
+    @node({
+        id: 'mistral-summary-chain-fallback',
+        name: '1. Global Summary Mistral Fallback',
+        type: '@n8n/n8n-nodes-langchain.agent',
+        version: 1.7,
+        position: [-89160, 26260],
+        onError: 'continueRegularOutput',
+    })
+    _1GlobalSummaryMistralFallback = {
+        promptType: 'define',
+        text: "={{ $('3. Groq Whisper').first().json.text ? $('3. Groq Whisper').first().json.text.substring(0,40000) : '' }}",
+        options: {
+            systemMessage: `You are the Lead Narrative Director for a top gaming creator. Your task is to analyze the entire VOD transcript and provide a profound, hallucination-free Global Summary.
+
+TASK:
+1. Identify the specific Game being played.
+2. Summarize the overarching narrative/goal of the entire VOD in 3-4 sentences.
+3. Define the precise "Vibe" (e.g., Chaotic, Educational, Story-driven).
+4. Extract key recurring themes or inside jokes.
+
+OUTPUT JSON FORMAT EXACTLY AND ONLY JSON. NO MARKDOWN:
+{
+  "game": "Name of Game",
+  "global_summary": "Streamer is trying to...",
+  "vibe": "High-energy rage",
+  "key_themes": ["dying to fall damage", "lag complaining"]
+}`,
+        },
+    };
+
+    @node({
+        id: 'mistral-summary-model-node',
+        name: 'Mistral Backup Model Summary',
+        type: '@n8n/n8n-nodes-langchain.lmChatMistralCloud',
+        version: 1,
+        position: [-89140, 26420],
+        credentials: { mistralCloudApi: { id: 'GPkRAk0iPJOL3lzl', name: 'Mistral Cloud account' } },
+        retryOnFail: false,
+        maxTries: 1,
+        waitBetweenTries: 1000,
+    })
+    MistralBackupModelSummary = {
+        model: 'mistral-small-latest',
+        options: { temperature: 0.1, maxTokens: 4096, maxRetries: 2 },
+    };
+
+    @node({
+        id: 'mistral-merge-agent-fallback',
+        name: 'Context Merge Mistral Fallback',
+        type: '@n8n/n8n-nodes-langchain.agent',
+        version: 1.7,
+        position: [-82720, 26420],
+        onError: 'continueRegularOutput',
+    })
+    ContextMergeMistralFallback = {
+        promptType: 'define',
+        text: `PROPOSED HOOK BANNER FROM DIRECTOR:
+{{ $('Loop Clips').item.json.hook_caption || $('Loop Clips').item.json.title }}
+
+CLIP TITLE:
+{{ $('Loop Clips').item.json.title }}
+
+CLIP THEME:
+{{ $('Loop Clips').item.json.theme }}
+
+AVAILABLE SOUNDS (pick from these exact filenames):
+{{ (function(){ let o=''; try{ o=$('Get Meme List').item.json.stdout||''; }catch(e){ try{ o=$('Get Meme List').last().json.stdout||''; }catch(e2){} } return o ? o.split('---DIMENSIONS---')[0].trim().replace(/\\n/g, ', ') : 'vine-boom-sound-effect_KT89XIq.mp3, huh_37bAoRo.mp3, fartmeme.mp3'; })() }}
+
+FULL TIMECODED TRANSCRIPT OF THE CLIP (read every word before placing ANY effects):
+{{ (function(){ let lc={}; try{ lc=$('Loop Clips').item.json||{}; }catch(e){ try{ lc=$('Loop Clips').last().json||{}; }catch(e2){} } const arc=String(lc.assembled_spoken_script||'').trim(); let j={}; try{ j=$('7d. Get Subtitles (SRT)').last().json||{}; }catch(e){} if(!j||(!j.words&&!j.x_groq&&!j.text)){ try{ j=$('7d. Get Subtitles (SRT)').item.json||{}; }catch(e2){} } const w=j.words||(j.x_groq&&j.x_groq.words)||[]; const timed=w.length>0?w.map(x=>'['+Number(x.start||0).toFixed(1)+'s] '+x.word).join(' '):String(j.text||'').trim(); if(arc&&timed) return arc+'\n\nTIMECODED WORDS:\n'+timed; return arc||timed||String(lc.title||lc.hook_caption||'Gameplay highlight clip'); })() }}`,
+        options: {
+            systemMessage: `You are an Elite YouTube Shorts Editor & Sound Designer.
+You have the Director's PROPOSED HOOK BANNER and the full timecoded transcript below.
+Output ONLY raw JSON matching:
+{"story_hook": "<3_TO_5_WORD_FACTUAL_HOOK_IN_ALL_CAPS>", "climax_quote": "<exact 3 to 5 spoken words from transcript>", "reaction_triggers": [14.2], "memes": []}`,
+        },
+    };
+
+    @node({
+        id: 'mistral-merge-model-node',
+        name: 'Mistral Backup Model Merge',
+        type: '@n8n/n8n-nodes-langchain.lmChatMistralCloud',
+        version: 1,
+        position: [-82680, 26580],
+        credentials: { mistralCloudApi: { id: 'GPkRAk0iPJOL3lzl', name: 'Mistral Cloud account' } },
+        retryOnFail: false,
+        maxTries: 1,
+        waitBetweenTries: 1000,
+    })
+    MistralBackupModelMerge = {
+        model: 'mistral-small-latest',
+        options: { temperature: 0.2, maxTokens: 4096, maxRetries: 2 },
     };
 
     @node({
@@ -3743,7 +3899,7 @@ return $input.all().map((it, idx) => {
         position: [-90220, 25860],
     })
     WaitSummaryError = {
-        amount: 55,
+        amount: 15,
         unit: 'seconds',
     };
 
@@ -3756,7 +3912,7 @@ return $input.all().map((it, idx) => {
         position: [-89660, 26080],
     })
     WaitSummaryFallbackError = {
-        amount: 55,
+        amount: 15,
         unit: 'seconds',
     };
 
@@ -3769,7 +3925,7 @@ return $input.all().map((it, idx) => {
         position: [-83420, 26380],
     })
     WaitMergeError = {
-        amount: 55,
+        amount: 15,
         unit: 'seconds',
     };
 
@@ -3782,7 +3938,7 @@ return $input.all().map((it, idx) => {
         position: [-82320, 26460],
     })
     WaitMergeFallbackError = {
-        amount: 55,
+        amount: 15,
         unit: 'seconds',
     };
 
@@ -4526,18 +4682,20 @@ return previews.map(p => ({ json: p }));`,
         this.RunMultimodalFusion.out(0).to(this._1PrepareScoutPrompt.in(0));
         this._1GlobalSummaryFallback.out(0).to(this.RunMultimodalFusion.in(0));
         this._1GlobalSummaryFallback.out(1).to(this.IfSummaryFallback429.in(0));
-        this.IfSummaryFallback429.out(0).to(this.WaitSummaryFallbackError.in(0));
-        this.IfSummaryFallback429.out(1).to(this.WaitBeforeScout.in(0));
+        this.IfSummaryFallback429.out(0).to(this._1GlobalSummaryMistralFallback.in(0));
+        this.IfSummaryFallback429.out(1).to(this._1GlobalSummaryMistralFallback.in(0));
+        this._1GlobalSummaryMistralFallback.out(0).to(this.RunMultimodalFusion.in(0));
         this.IfMergeOk.out(0).to(this.CreateSubtitleBinary.in(0));
         this.IfMergeOk.out(1).to(this.WaitBeforeMergeFallback.in(0));
         this.WaitBeforeMergeFallback.out(0).to(this.ContextMergeFallback.in(0));
         this.ContextMergeFallback.out(0).to(this.CreateSubtitleBinary.in(0));
         this.ContextMergeFallback.out(1).to(this.IfMergeFallback429.in(0));
         this.IfMergeFallback429.out(0).to(this.GuardMergeFallbackRetries.in(0));
-        this.IfMergeFallback429.out(1).to(this.CreateSubtitleBinary.in(0));
+        this.IfMergeFallback429.out(1).to(this.ContextMergeMistralFallback.in(0));
         this.GuardMergeFallbackRetries.out(0).to(this.IfMergeFallbackRetryAllowed.in(0));
         this.IfMergeFallbackRetryAllowed.out(0).to(this.WaitMergeFallbackError.in(0));
-        this.IfMergeFallbackRetryAllowed.out(1).to(this.CreateSubtitleBinary.in(0));
+        this.IfMergeFallbackRetryAllowed.out(1).to(this.ContextMergeMistralFallback.in(0));
+        this.ContextMergeMistralFallback.out(0).to(this.CreateSubtitleBinary.in(0));
         this._3GroqWhisperFallback.out(0).to(this.SaveWhisperTranscript.in(0));
         this.IfWhisperOk.out(0).to(this.SaveWhisperTranscript.in(0));
         this.SaveWhisperTranscript.out(0).to(this.WaitBeforeSummary.in(0));
@@ -4562,7 +4720,9 @@ return previews.map(p => ({ json: p }));`,
         this.IfScoutRetryAllowed.out(0).to(this.WaitScoutError.in(0));
         this.IfScoutRetryAllowed.out(1).to(this._2BasicLlmChainScoutFallback.in(0));
         this._2BasicLlmChainScoutFallback.out(0).to(this.ScoutLoop.in(0));
-        this._2BasicLlmChainScoutFallback.out(1).to(this.ScoutLoop.in(0));
+        this._2BasicLlmChainScoutFallback.out(1).to(this._2BasicLlmChainScoutMistralFallback.in(0));
+        this._2BasicLlmChainScoutMistralFallback.out(0).to(this.ScoutLoop.in(0));
+        this._2BasicLlmChainScoutMistralFallback.out(1).to(this.ScoutLoop.in(0));
         this.ScoutAccumulate.out(0).to(this._3PrepareDirectorPrompt.in(0));
         this._3PrepareDirectorPrompt.out(0).to(this.WaitBeforeDirector.in(0));
         this.WaitBeforeDirector.out(0).to(this._4BasicLlmChainDirector.in(0));
@@ -4575,6 +4735,8 @@ return previews.map(p => ({ json: p }));`,
         this.IfDirectorRetryAllowed.out(1).to(this.WaitBeforeDirectorFallback.in(0));
         this.WaitBeforeDirectorFallback.out(0).to(this._4BasicLlmChainDirectorFallback.in(0));
         this._4BasicLlmChainDirectorFallback.out(0).to(this._5SplitClips.in(0));
+        this._4BasicLlmChainDirectorFallback.out(1).to(this._4BasicLlmChainDirectorMistralFallback.in(0));
+        this._4BasicLlmChainDirectorMistralFallback.out(0).to(this._5SplitClips.in(0));
         this.SandboxTestScriptEdl.out(0).to(this.LoadCachedTelemetry.in(0));
         this.LoadCachedTelemetry.out(0).to(this._1PrepareScoutPrompt.in(0));
         this._5SplitClips.out(0).to(this.IfBypassLoopSandbox.in(0));
@@ -4620,6 +4782,18 @@ return previews.map(p => ({ json: p }));`,
         });
         this._4BasicLlmChainDirectorFallback.uses({
             ai_languageModel: this.GeminiBackupModelDirector.output,
+        });
+        this._2BasicLlmChainScoutMistralFallback.uses({
+            ai_languageModel: this.MistralBackupModelScout.output,
+        });
+        this._4BasicLlmChainDirectorMistralFallback.uses({
+            ai_languageModel: this.MistralBackupModelDirector.output,
+        });
+        this._1GlobalSummaryMistralFallback.uses({
+            ai_languageModel: this.MistralBackupModelSummary.output,
+        });
+        this.ContextMergeMistralFallback.uses({
+            ai_languageModel: this.MistralBackupModelMerge.output,
         });
     }
 }

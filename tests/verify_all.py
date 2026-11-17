@@ -131,6 +131,13 @@ checks = [
     ("Gemini Backup Model Scout", "gemini-2.5-flash", "GeminiBackupModelScout uses full gemini-2.5-flash with BLOCK_NONE"),
     ("Gemini Model (Director)", "BLOCK_NONE", "GeminiModelDirector disables overly strict safety cutoffs"),
     ("Gemini Backup Model Director", "gemini-2.5-flash", "GeminiBackupModelDirector uses full gemini-2.5-flash"),
+
+    # 15. Multi-Provider Tier-3 Mistral Cloud Waterfall
+    ("Mistral Backup Model Scout", "mistral-large-latest", "MistralBackupModelScout Tier-3 cross-provider Scout fallback"),
+    ("Mistral Backup Model Director", "mistral-large-latest", "MistralBackupModelDirector Tier-3 cross-provider Director fallback"),
+    ("Mistral Backup Model Merge", "mistral-small-latest", "MistralBackupModelMerge Tier-3 cross-provider Context Merge fallback"),
+    ("Mistral Backup Model Summary", "mistral-small-latest", "MistralBackupModelSummary Tier-3 cross-provider Global Summary fallback"),
+    ("Scout Accumulate", "2. Basic LLM Chain (Scout Mistral Fallback)", "ScoutAccumulate collects Tier-3 Mistral Scout outputs"),
 ]
 
 all_passed = True
