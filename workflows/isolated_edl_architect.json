@@ -1,0 +1,2745 @@
+{
+  "id": "IsoEdlArchitectV1",
+  "name": "Isolated Multimodal Script & EDL Architect",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger-yt-short",
+      "name": "When clicking Test workflow",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -97000,
+        26100
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "execute-workflow-trigger-yt-short",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        -97000,
+        26500
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "sandbox-trigger-script-edl",
+      "name": "Sandbox: Test Script & EDL",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -89280,
+        26300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\ntry {\n  const sd = $getWorkflowStaticData('global');\n  sd._scout_primary_dead = false;\n  sd._scout_consec_429 = 0;\n  sd._summary_retry_count = 0;\n  sd._director_retry_count = 0;\n  sd._merge_retry_count = 0;\n  sd._merge_fb_retry_count = 0;\n} catch (e) {}\n\nconst pinned = ($input.first() && $input.first().json) || {};\nlet indexDoc = null;\nlet whisperDoc = null;\nlet sliceCfg = null;\ntry {\n  if (fs.existsSync('/files/temp/iteration_dataset_override.json')) {\n    sliceCfg = JSON.parse(fs.readFileSync('/files/temp/iteration_dataset_override.json', 'utf8'));\n  }\n} catch (e) {}\n\n// Prefer pinned data if user pinned a full cached payload in n8n UI (unless dataset override is active)\nif (!sliceCfg && pinned.words && Array.isArray(pinned.words) && pinned.words.length > 0) {\n  whisperDoc = pinned;\n}\n\nconst idxPath = (sliceCfg && sliceCfg.index_path) || '/files/temp/unified_timeline_index.json';\nif (!indexDoc && fs.existsSync(idxPath)) {\n  try {\n    indexDoc = JSON.parse(fs.readFileSync(idxPath, 'utf8'));\n  } catch (e) {}\n}\n\n// Discover best cached Whisper transcript\nconst txCandidates = [\n  ...(sliceCfg && sliceCfg.transcript_path ? [sliceCfg.transcript_path] : []),\n  '/files/temp/transcript.json',\n  '/files/outputs/whisper_28754.json',\n  '/files/temp/whisper_raw.json',\n  '/files/outputs/whisper_28696.json',\n];\nif (!whisperDoc) {\n  for (const p of txCandidates) {\n    if (fs.existsSync(p)) {\n      try {\n        const d = JSON.parse(fs.readFileSync(p, 'utf8'));\n        const words = d.words || (d.x_groq && d.x_groq.words) || [];\n        if (words.length > 0 || (d.text && d.text.length > 50)) {\n          whisperDoc = d;\n          break;\n        }\n      } catch (e) {}\n    }\n  }\n}\n\nif (!whisperDoc && !indexDoc) {\n  throw new Error('SANDBOX ERROR: No cached telemetry found in /files/temp/. Run telemetry_fusion_indexer.py or pin telemetry JSON.');\n}\n\n// Optional secondary caches if unified_timeline_index wasn't built yet\nlet audioEnergy = null;\nlet chatClusters = null;\nlet comedicBeats = null;\nlet faceEmotions = null;\n\ntry { if (fs.existsSync('/files/temp/audio_energy.json')) audioEnergy = JSON.parse(fs.readFileSync('/files/temp/audio_energy.json', 'utf8')); } catch (e) {}\ntry { if (fs.existsSync('/files/temp/chat_laughter_clusters.json')) chatClusters = JSON.parse(fs.readFileSync('/files/temp/chat_laughter_clusters.json', 'utf8')); } catch (e) {}\ntry { if (fs.existsSync('/files/temp/comedic_beats.json')) comedicBeats = JSON.parse(fs.readFileSync('/files/temp/comedic_beats.json', 'utf8')); } catch (e) {}\ntry { if (fs.existsSync('/files/temp/face_emotions.json')) faceEmotions = JSON.parse(fs.readFileSync('/files/temp/face_emotions.json', 'utf8')); } catch (e) {}\n\nlet words = (whisperDoc && (whisperDoc.words || (whisperDoc.x_groq && whisperDoc.x_groq.words))) || [];\nlet duration = (whisperDoc && whisperDoc.duration) || (indexDoc && indexDoc.stream_duration_sec) || (words.length ? words[words.length - 1].end : 3600);\nlet outText = (whisperDoc && whisperDoc.text) || '';\nlet outAnchors = (indexDoc && indexDoc.anchors) || pinned.anchors || [];\nlet outSentences = (indexDoc && indexDoc.annotated_sentences) || [];\nlet outMacro = (indexDoc && indexDoc.macro_high_signal_timeline) || '';\n\nif (sliceCfg && (sliceCfg.slice_start_sec !== undefined || sliceCfg.slice_end_sec !== undefined)) {\n  const sLo = Number(sliceCfg.slice_start_sec ?? 0);\n  const sHi = Number(sliceCfg.slice_end_sec ?? duration);\n  outSentences = outSentences.filter(s => Number(s.end || 0) >= sLo && Number(s.start || 0) <= sHi);\n  outAnchors = outAnchors.filter(a => Number(a.peak_time || a.start || 0) >= sLo && Number(a.peak_time || a.start || 0) <= sHi);\n  if (outAnchors.length === 0 && indexDoc && indexDoc.anchors) outAnchors = indexDoc.anchors;\n  const sliceWords = words.filter(w => Number(w.end || 0) >= sLo && Number(w.start || 0) <= sHi);\n  if (sliceWords.length > 0) outText = sliceWords.map(w => String(w.word || '').trim()).join(' ');\n  outMacro = outSentences.filter(s => (s.tags || []).length > 0).slice(0, 120).map(s => s.annotated_line).join('\\n');\n}\n\nreturn [{\n  pairedItem: { item: 0 },\n  json: {\n    dry_run: pinned.dry_run !== undefined ? Boolean(pinned.dry_run) : true,\n    streamer_name: pinned.streamer_name || 'KreekCraft',\n    stream_file: pinned.stream_file || 'sandbox_cached_stream.mp4',\n    dataset_label: (sliceCfg && sliceCfg.label) || 'default',\n    duration,\n    text: outText,\n    words,\n    anchors: outAnchors,\n    macro_high_signal_timeline: outMacro,\n    annotated_sentences: outSentences,\n    audio_energy: audioEnergy,\n    chat_laughter_clusters: chatClusters,\n    comedic_beats: comedicBeats,\n    face_emotions: faceEmotions,\n  }\n}];"
+      },
+      "id": "load-cached-telemetry-id",
+      "name": "Load Cached Telemetry",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -88880,
+        26300
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ (function(){ let t=''; try{ t=$('Save Whisper Transcript').first().json.text||''; }catch(e){} if(!t){ try{ t=$('3. Groq Whisper').first().json.text||''; }catch(e2){} } if(!t){ try{ t=$('3. Groq Whisper Fallback').first().json.text||''; }catch(e3){} } if(!t){ try{ t=$('Load Cached Telemetry').first().json.text||''; }catch(e4){} } return String(t).substring(0,40000); })() }}",
+        "options": {
+          "systemMessage": "You are the Lead Narrative Director for a top gaming creator. Your task is to analyze the entire VOD transcript and provide a profound, hallucination-free Global Summary.\n\nTASK:\n1. Identify the specific Game being played.\n2. Summarize the overarching narrative/goal of the entire VOD in 3-4 sentences.\n3. Define the precise \"Vibe\" (e.g., Chaotic, Educational, Story-driven).\n4. Extract key recurring themes or inside jokes.\n\nOUTPUT JSON FORMAT EXACTLY AND ONLY JSON. NO MARKDOWN:\n{\n  \"game\": \"Name of Game\",\n  \"global_summary\": \"Streamer is trying to...\",\n  \"vibe\": \"High-energy rage\",\n  \"key_themes\": [\"dying to fall damage\", \"lag complaining\"]\n}"
+        }
+      },
+      "id": "dc7ef757-3107-45a3-b001-7a42944b1ed4",
+      "name": "1. Global Summary AI",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        -90820,
+        25700
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.5-flash-lite",
+        "options": {
+          "maxOutputTokens": 4096,
+          "temperature": 0.1,
+          "safetySettings": {
+            "values": [
+              {
+                "category": "HARM_CATEGORY_HARASSMENT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_HATE_SPEECH",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                "threshold": "BLOCK_NONE"
+              }
+            ]
+          }
+        }
+      },
+      "id": "270b118f-cf07-4559-9922-5de2171f0fab",
+      "name": "Gemini Model 1",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        -90820,
+        25920
+      ],
+      "retryOnFail": false,
+      "maxTries": 1,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "googlePalmApi": {
+          "id": "Et5CBlcuIS6UC5eM",
+          "name": "loop3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ !!$json.output }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "f98462bc-7b70-4aae-9479-4047b773f86b",
+      "name": "IF: Summary OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -89540,
+        25800
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ JSON.stringify($json) }}",
+              "rightValue": "429",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            },
+            {
+              "leftValue": "={{ JSON.stringify($json) }}",
+              "rightValue": "quota",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            },
+            {
+              "leftValue": "={{ JSON.stringify($json) }}",
+              "rightValue": "Too many requests",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "d7092f89-f76c-46f3-8524-198e354a283e",
+      "name": "If Summary 429",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -90460,
+        25840
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const DAILY_RE = /(?:per\\s*day|daily|free_tier_requests|retry\\s+in\\s+\\d+h)/i;\nconst sd = $getWorkflowStaticData('global');\nreturn $input.all().map((it, idx) => {\n  const errText = JSON.stringify(it.json.error || it.json.description || it.json.message || it.json);\n  const isDaily = DAILY_RE.test(errText);\n  const count = (Number(sd._summary_retry_count) || 0) + 1;\n  sd._summary_retry_count = count;\n  return {\n    pairedItem: it.pairedItem || { item: idx },\n    json: { ...it.json, _summary_retry_count: count, _daily_quota_hit: isDaily || count > 1, _allow_retry: !isDaily && count <= 1 }\n  };\n});"
+      },
+      "id": "c3e8a586-1b34-4c56-9d78-556677889900",
+      "name": "Guard Summary Retries",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -90320,
+        25860
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ Boolean($json._allow_retry) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d4f9b697-2c45-4d67-8e89-667788990011",
+      "name": "If Summary Retry Allowed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -90260,
+        25860
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 3
+      },
+      "id": "814039ad-b3da-4a65-a386-ca700f7ae9f0",
+      "webhookId": "3191aaa5-eacf-4f3d-82c4-61302cc2d6a3",
+      "name": "Wait Summary Error",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -90220,
+        25860
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ (function(){ let t=''; try{ t=$('Save Whisper Transcript').first().json.text||''; }catch(e){} if(!t){ try{ t=$('3. Groq Whisper').first().json.text||''; }catch(e2){} } if(!t){ try{ t=$('3. Groq Whisper Fallback').first().json.text||''; }catch(e3){} } if(!t){ try{ t=$('Load Cached Telemetry').first().json.text||''; }catch(e4){} } return String(t).substring(0,40000); })() }}",
+        "options": {
+          "systemMessage": "You are the Lead Narrative Director for a top gaming creator. Your task is to analyze the entire VOD transcript and provide a profound, hallucination-free Global Summary.\n\nTASK:\n1. Identify the specific Game being played.\n2. Summarize the overarching narrative/goal of the entire VOD in 3-4 sentences.\n3. Define the precise \"Vibe\" (e.g., Chaotic, Educational, Story-driven).\n4. Extract key recurring themes or inside jokes.\n\nOUTPUT JSON FORMAT EXACTLY AND ONLY JSON. NO MARKDOWN:\n{\n  \"game\": \"Name of Game\",\n  \"global_summary\": \"Streamer is trying to...\",\n  \"vibe\": \"High-energy rage\",\n  \"key_themes\": [\"dying to fall damage\", \"lag complaining\"]\n}"
+        }
+      },
+      "id": "9e74015d-4297-45ec-9e9a-6cdd63ba6aae",
+      "name": "1. Global Summary Fallback",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        -89400,
+        26160
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-2.5-flash",
+        "options": {
+          "maxOutputTokens": 4096,
+          "temperature": 0.1,
+          "safetySettings": {
+            "values": [
+              {
+                "category": "HARM_CATEGORY_HARASSMENT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_HATE_SPEECH",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                "threshold": "BLOCK_NONE"
+              }
+            ]
+          }
+        }
+      },
+      "id": "5d708cdf-058b-4dff-a7c3-fe6f77de9fab",
+      "name": "Gemini Backup Model 1",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        -89380,
+        26400
+      ],
+      "retryOnFail": false,
+      "maxTries": 1,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "googlePalmApi": {
+          "id": "EJRA7ZZxsBILsA9T",
+          "name": "gemini 2 "
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ JSON.stringify($json) }}",
+              "rightValue": "429",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            },
+            {
+              "leftValue": "={{ JSON.stringify($json) }}",
+              "rightValue": "quota",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            },
+            {
+              "leftValue": "={{ JSON.stringify($json) }}",
+              "rightValue": "Too many requests",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "91fa46c6-1b59-4b1d-82e8-23b35d72949f",
+      "name": "If Summary Fallback 429",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -89900,
+        26140
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 3
+      },
+      "id": "38a839b9-edfd-4248-be53-513b7e4bc5ed",
+      "webhookId": "bde66e7f-1ca0-4412-af35-5e26b3783164",
+      "name": "Wait Summary Fallback Error",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -89660,
+        26080
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ (function(){ let t=''; try{ t=$('Save Whisper Transcript').first().json.text||''; }catch(e){} if(!t){ try{ t=$('3. Groq Whisper').first().json.text||''; }catch(e2){} } if(!t){ try{ t=$('3. Groq Whisper Fallback').first().json.text||''; }catch(e3){} } if(!t){ try{ t=$('Load Cached Telemetry').first().json.text||''; }catch(e4){} } return String(t).substring(0,40000); })() }}",
+        "options": {
+          "systemMessage": "You are the Lead Narrative Director for a top gaming creator. Your task is to analyze the entire VOD transcript and provide a profound, hallucination-free Global Summary.\n\nTASK:\n1. Identify the specific Game being played.\n2. Summarize the overarching narrative/goal of the entire VOD in 3-4 sentences.\n3. Define the precise \"Vibe\" (e.g., Chaotic, Educational, Story-driven).\n4. Extract key recurring themes or inside jokes.\n\nOUTPUT JSON FORMAT EXACTLY AND ONLY JSON. NO MARKDOWN:\n{\n  \"game\": \"Name of Game\",\n  \"global_summary\": \"Streamer is trying to...\",\n  \"vibe\": \"High-energy rage\",\n  \"key_themes\": [\"dying to fall damage\", \"lag complaining\"]\n}"
+        }
+      },
+      "id": "mistral-summary-chain-fallback",
+      "name": "1. Global Summary Mistral Fallback",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        -89160,
+        26260
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "model": "mistral-small-latest",
+        "options": {
+          "maxTokens": 4096,
+          "temperature": 0.1,
+          "maxRetries": 2
+        }
+      },
+      "id": "mistral-summary-model-node",
+      "name": "Mistral Backup Model Summary",
+      "type": "@n8n/n8n-nodes-langchain.lmChatMistralCloud",
+      "typeVersion": 1,
+      "position": [
+        -89140,
+        26420
+      ],
+      "retryOnFail": false,
+      "maxTries": 1,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "GPkRAk0iPJOL3lzl",
+          "name": "Mistral Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\ntry {\n  const sd = $getWorkflowStaticData('global');\n  sd._scout_primary_dead = false;\n  sd._scout_consec_429 = 0;\n  sd._summary_retry_count = 0;\n  sd._director_retry_count = 0;\n  sd._merge_retry_count = 0;\n  sd._merge_fb_retry_count = 0;\n} catch (e) {}\nlet whisperData = null;\n\ntry {\n  const items = $input.all();\n  if (items && items[0] && items[0].json && (items[0].json.text || (items[0].json.annotated_sentences && items[0].json.annotated_sentences.length))) {\n    whisperData = items[0].json;\n  }\n} catch(e) {}\n\nif (!whisperData) {\n  try {\n    const lct = $('Load Cached Telemetry').first().json;\n    if (lct && (lct.text || (lct.words && lct.words.length))) whisperData = lct;\n  } catch(e) {}\n}\nif (!whisperData) {\n  try {\n    const w = $('3. Groq Whisper').first().json;\n    if (w && w.text && w.text.length > 10) whisperData = w;\n  } catch(e) {}\n}\nif (!whisperData) {\n  try {\n    const w2 = $('3. Groq Whisper Fallback').first().json;\n    if (w2 && w2.text && w2.text.length > 10) whisperData = w2;\n  } catch(e) {}\n}\n\nif (!whisperData || (!whisperData.text && !(whisperData.annotated_sentences && whisperData.annotated_sentences.length))) {\n    throw new Error('CRITICAL ERROR: Transcript text is missing. Run Whisper node or Load Cached Telemetry first.');\n}\n\nconst isDryRun = Boolean(whisperData.dry_run);\nconst rawText = whisperData.text || '';\nlet whisperWords = whisperData.words || (whisperData.x_groq && whisperData.x_groq.words) || [];\nconst durationMinutes = (whisperData.duration || (whisperWords.length ? whisperWords[whisperWords.length - 1].end : 1800)) / 60;\n\n// Load freshly generated Unified Multimodal Timeline Index (stale index files are unlinked in Find Stream & Save Whisper Transcript)\nlet indexDoc = null;\nif (fs.existsSync('/files/temp/unified_timeline_index.json')) {\n  try {\n    indexDoc = JSON.parse(fs.readFileSync('/files/temp/unified_timeline_index.json', 'utf8'));\n  } catch(e) {}\n}\n\n// Use annotated [dB_PEAK], [CHAT_BURST], [FACE_SPIKE], [WPM_SPIKE] sentences in BOTH Production & Sandbox modes\nlet annotatedSentences = whisperData.annotated_sentences || (indexDoc && indexDoc.annotated_sentences) || [];\n\n// Filter Whisper prompt hallucinations (repeated intro music loops / prompt leakage)\nconst isHallucination = (txt) => {\n  const low = String(txt || '').toLowerCase();\n  if (low.includes('strawberry elephant') || low.includes('taco combinacion')) return true;\n  const keys = ['roblox gaming', 'lucky blocks', 'divine mutation', '10x luck', 'streamer reacting', 'gaming chaos'];\n  const hits = keys.filter(k => low.includes(k)).length;\n  return hits >= 2;\n};\n\nlet sentences = [];\nif (annotatedSentences.length > 0) {\n  sentences = annotatedSentences.map(s => `[${Number(s.start).toFixed(1)}s - ${Number(s.end).toFixed(1)}s]${(s.tags && s.tags.length) ? ' ' + s.tags.join(' ') : ''} ${s.text}`);\n} else {\n  let currSentence = \"\";\n  let currStart = -1;\n  let currEnd = -1;\n  for (let w of whisperWords) {\n    if (currStart === -1) currStart = w.start;\n    currSentence += w.word;\n    currEnd = w.end;\n    if (/[.!?]$/.test(w.word.trim())) {\n      if (!isHallucination(currSentence)) {\n        sentences.push(`[${currStart.toFixed(1)}s - ${currEnd.toFixed(1)}s] ${currSentence.trim()}`);\n      }\n      currSentence = \"\";\n      currStart = -1;\n    }\n  }\n  if (currSentence && !isHallucination(currSentence)) {\n    sentences.push(`[${currStart.toFixed(1)}s - ${currEnd.toFixed(1)}s] ${currSentence.trim()}`);\n  }\n}\n\nconst numberedLines = sentences.length > 0 ? sentences : (rawText.match(/[^.!?]+[.!?]+/g) || [rawText]).map((s, i) => '[L' + (i+1) + '] ' + s.trim());\n\n// Multimodal Viral Anchors Extraction\nlet viralAnchors = whisperData.anchors || [];\nif (viralAnchors.length === 0) {\n  try {\n    const fusionItem = $('Run Multimodal Fusion').first();\n    if (fusionItem && fusionItem.json && fusionItem.json.stdout) {\n      const parsed = JSON.parse(fusionItem.json.stdout);\n      if (parsed && parsed.anchors && parsed.anchors.length > 0) {\n        viralAnchors = parsed.anchors;\n      }\n    }\n  } catch(e) {}\n}\nif (viralAnchors.length === 0 && indexDoc && indexDoc.anchors) {\n  viralAnchors = indexDoc.anchors;\n}\n\nconst macroTimeline = whisperData.macro_high_signal_timeline || (indexDoc && indexDoc.macro_high_signal_timeline) || '';\n\nlet multimodalHeader = \"\";\nif (viralAnchors.length > 0) {\n  multimodalHeader = \"\\n=== [PROVEN MULTIMODAL VIRAL PEAKS (AUDIENCE CHAT, FACECAM & VOCAL ENERGY)] ===\\n\" +\n    \"The following moments across the full 1+ hour VOD have been empirically pre-verified by live chat velocity bursts (LMAO, 💀, WTF), streamer face reactions (laughter/shock), vocal dB spikes, and WPM bursts.\\n\" +\n    \"YOU MUST PRIORITIZE SELECTING MOMENTS AROUND THESE PROVEN PEAKS AND LINKING LONG-RANGE CALLBACKS ACROSS THE STREAM:\\n\\n\";\n\n  for (let a of viralAnchors.slice(0, 20)) {\n    multimodalHeader += `• [ANCHOR #${a.anchor_id}] [${a.start}s - ${a.end}s] (Peak at ${a.peak_time}s | Score: ${a.virality_score}/100 | Fit: ${a.recommended_archetype || 'CONTINUOUS_GAMEPLAY_CLUTCH_OR_FAIL'})\\n` +\n      `  - Audience Chat (Lag-Compensated): ${a.chat_signal}\\n` +\n      `  - Streamer Facecam: ${a.face_signal}\\n` +\n      `  - Audio Energy: ${a.audio_signal}\\n` +\n      (a.viewer_voice_present ? `  - Viewer / In-Game Voice Active: YES ([VIEWER_OR_GAME_VOICE])\\n` : '') +\n      (a.why_chat_laughed ? `  - Why Chat Laughed: ${a.why_chat_laughed}\\n` : '') +\n      (a.comedy_mechanism ? `  - Comedic Catalyst: ${a.comedy_mechanism}\\n` : '') +\n      (a.setup_tension_hook ? `  - Setup Tension Hook (In-Media-Res): ${a.setup_tension_hook}\\n` : '') +\n      (a.callback_links && a.callback_links.length ? `  - Cross-Stream Callback Links: ${a.callback_links.map(cb => cb.tc + ' (\"' + cb.keyword + '\"): ' + cb.text).join(' | ')}\\n` : '') +\n      (a.is_multi_beat && a.beat_2 ? `  - Compound Multi-Beat Callback: Beat 2 at ${a.beat_2.peak_time}s (\"it happened again\")\\n` : '') +\n      (a.recommended_structure ? `  - Recommended Arc: ${a.recommended_structure}\\n` : '') +\n      (a.transcript_snippet ? `  - Transcript Preview: \"${a.transcript_snippet.substring(0, 180)}\"\\n` : '') +\n      `\\n`;\n  }\n}\n\n// Parity char-budgeted chunking (~75k chars/chunk, capped at 4 chunks) identical across Sandbox & Production\nconst totalSentenceChars = numberedLines.reduce((acc, s) => acc + s.length + 1, 0);\nconst charChunks = Math.max(1, Math.ceil(totalSentenceChars / 75000));\nlet numChunks = Math.min(4, Math.max(1, charChunks));\nconst linesPerChunk = Math.ceil(numberedLines.length / numChunks);\nconst overlap = 10;\nconst MAX_CHUNK_CHARS = 120000;\n\nconst results = [];\nfor (let i = 0; i < numChunks; i++) {\n  const start = Math.max(0, i * linesPerChunk - overlap);\n  const end = Math.min(numberedLines.length, (i + 1) * linesPerChunk + overlap);\n  let chunkText = numberedLines.slice(start, end).join('\\n');\n  if (chunkText.length > MAX_CHUNK_CHARS) {\n    chunkText = chunkText.substring(0, MAX_CHUNK_CHARS) + '\\n[... chunk trimmed to fit token limit ...]';\n  }\n\n  const prompt =\n    'SYSTEM: You are an elite YouTube Shorts Viral Content Scout & Story Architect. Read the synchronized multimodal transcript index ([dB_PEAK], [SCREAM], [LAUGH_BURST], [WPM_SPIKE], [VIEWER_OR_GAME_VOICE], [FACE:*], [CHAT_BURST]) and extract 4-5 high-retention 22-45s clip candidates matching our 6 Structural Archetype Blueprints.\\n\\n' +\n    (multimodalHeader ? multimodalHeader + '\\n' : '') +\n    '=== CRITICAL ANTI-ADMIN, ANTI-IDLE, ANTI-INTRO, ANTI-RULES & ANTI-OUTRO FILTER ===\\n' +\n    'The streamer frequently Alt-Tabs out of Roblox into Chrome, Notepad, or OBS, explains stream rules at the start, or idles between matches. You MUST REJECT any segments containing:\\n' +\n    '• Typing player usernames into search bars, Chrome/browser tabs, YouTube Studio live chat popouts, Roblox website group/payout pages, Discord DMs, or settings.\\n' +\n    '• [STRICT ANTI-INTRO, ANTI-RULES BANTER & ANTI-RAID]: FORBID selecting opening stream-rules or giveaway explanations (\"like the stream\", \"keep counter\", \"watch till the end of the stream\", \"rules of the stream\") and FORBID raid thank-yous (\"thank you for the raid\", \"welcome raiders\"). Clips MUST feature actual in-game action, jumpscares, viewer roasts, or comedic gameplay events!\\n' +\n    '• [STRICT ANTI-OUTRO & ANTI-STATIC SCREEN]: REJECT outro panhandling or stream wrap-up banter (\"everybody subscribe\", \"hit the like button\", \"smash that like\", \"see you next stream\", \"we\\'re going to say bye\", \"came from the stream\", \"comment ... tomorrow\", \"ending the stream\", \"see you next time\") and static BRB/ending screens.\\n' +\n    '• Reading long lists of $3 donations or subscriber names while idling in menus ([STRICT ANTI-CONVERSATIONAL BANTER & DONATION AFTERMATH]).\\n' +\n    '• [STRICT ANTI-IDLE & ANTI-STATIC]: REJECT segments where the character is standing still in a lobby waiting for a match, reading chat idly, or staring at a wall!\\n' +\n    '• [STRICT ANTI-LOADING SCREEN]: NEVER start a clip at [0.0s - 3.0s] or on intro music/loading screens.\\n' +\n    '• [STRICT ANTI-SLOW-UI & TRADE MENUS]: REJECT segments where the streamer spends 10+ seconds clicking buttons inside inventory/trade UI panels.\\n' +\n    '• [STRICT ANTI-GRIND & ANTI-FARMING]: REJECT repetitive grinding, farming coins/potatoes, or boring waiting.\\n\\n' +\n    '=== THE 6 VIRAL ARCHETYPE BLUEPRINTS (CHOOSE BEST STRUCTURE — NO FORCED FRANKENSTEIN STITCHING) ===\\n' +\n    'Match each candidate honestly to ONE of these 6 blueprints (1, 2, 3, or 4 segments as required by the actual event; NEVER stitch unrelated moments together!):\\n' +\n    '1. CONTINUOUS_GAMEPLAY_CLUTCH_OR_FAIL (1 Continuous Segment, 24s-42s, role: CONTINUOUS_ARC): Setup, tension, and scream/victory/fail occur continuously with < 4.0s dead air. Zero artificial cuts!\\n' +\n    '2. VIEWER_OR_CHAT_ROAST_INTERACTION (1-2 Segments, 22s-38s, roles: PROMPT_SETUP + REACTION_PAYOFF): Triggered by [VIEWER_OR_GAME_VOICE], chat troll/donation read aloud, followed by hilarious comeback/sarcasm.\\n' +\n    '3. HUBRIS_WAGER_INSTANT_KARMA (2-3 Segments, 25s-42s, roles: WAGER_SETUP + [ESCALATION] + KARMA_PAYOFF): Cocky boast/bet/promise -> gameplay struggle -> instant collapse/karma.\\n' +\n    '4. COMEDIC_STORYTELLING_OR_SARCASM (1-3 Segments, 25s-44s, roles: PREMISE + [ESCALATION] + PUNCHLINE): Absurd story, sarcastic bit, or hilarious realization with clear punchline.\\n' +\n    '5. FLASHFORWARD_MYSTERY_INVESTIGATION (3-4 Segments, 30s-45s, roles: [optional 1.8-2.4s HOOK_CLIMAX] + SETUP + ESCALATION + PAYOFF): Longer multi-minute mystery/betrayal separated by >60s.\\n' +\n    '6. EMOTIONAL_SHOCK_OR_BETRAYAL (1-3 Segments, 25s-42s, roles: SETUP + [ESCALATION] + PAYOFF): Genuine plot twist, betrayal, or rare jaw-dropping event ([FACE:SHOCK_OR_SCREAM] + [CHAT_BURST]) with 3.0-4.5s reaction aftermath.\\n\\n' +\n    '• [ZERO-SECOND RETENTION & STRICT ANTI-MID-THOUGHT PREAMBLE]: Every opening segment MUST begin cleanly at the exact start of a complete sentence (zero previous-scene spillover).\\n' +\n    '• [CAUSE-EFFECT NARRATIVE THROUGH-LINE & ANTI-CHAOS]: If using multiple segments separated by > 25s, they MUST belong to the exact same storyline/topic/entity.\\n' +\n    '• [SATISFYING CLIMAX ONLY]: Final segment MUST include the full climax + 2.5s-4.5s of reaction/laughter aftermath, ending cleanly on a complete sentence. NEVER cut mid-sentence!\\n\\n' +\n    'OUTPUT: Plain text only. For each of the 4-5 archetype candidates (totaling 22-45s each), provide:\\n' +\n    '- Tag & Archetype: [TAG NAME] | Archetype: [ONE OF THE 6 ARCHETYPES]\\n' +\n    '- Segments & Roles: list each segment [X.Xs - Y.Ys] with its blueprint role (e.g. [CONTINUOUS_ARC], [PROMPT_SETUP] + [REACTION_PAYOFF], [WAGER_SETUP] + [KARMA_PAYOFF], etc.)\\n' +\n    '- Climax / Payoff Peak Time: [Z.Zs] (and verify segment end >= Z.Zs + 2.5s)\\n' +\n    '- Multimodal Signal Drivers: (Chat Z-score, dB spike, Emotion, Viewer Voice, WPM)\\n' +\n    '- Exact Verbatim Quotes for each segment\\n\\n' +\n    'STRICT CHUNK SCOPE, FORMAT & COMPLETION RULES:\\n' +\n    '- Prioritize candidates whose PAYOFF occurs inside CHUNK ' + (i+1) + ' timestamps.\\n' +\n    '- Output at most 1 FLASHFORWARD_MYSTERY_INVESTIGATION per chunk; prioritize tight single-scene CONTINUOUS_GAMEPLAY_CLUTCH_OR_FAIL, VIEWER_OR_CHAT_ROAST_INTERACTION, COMEDIC_STORYTELLING_OR_SARCASM, and HUBRIS_WAGER_INSTANT_KARMA arcs (24s-42s total).\\n' +\n    '- Output ALL timestamps strictly in RAW DECIMAL SECONDS (e.g. [408.0s - 441.2s]), NEVER MM:SS format (never [06:48.0s]).\\n' +\n    '- Complete 3-4 full candidates cleanly and NEVER stop mid-line or mid-archetype.\\n\\n' +\n    '--- CHUNK ' + (i+1) + '/' + numChunks + ' ---\\n' +\n    chunkText;\n\n  results.push({ json: { prompt, chunk_index: i+1, dry_run: isDryRun } });\n}\n\nreturn results;"
+      },
+      "id": "d7ccb05d-cddd-43bd-9178-85d70aea5672",
+      "name": "1. Prepare Scout Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -88480,
+        26120
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "scout-loop",
+      "name": "Scout Loop",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -88080,
+        26240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ Boolean($json.dry_run) === true }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-sandbox-skip-wait-id",
+      "name": "If Sandbox Skip Wait",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -87920,
+        26300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "let dead = false;\ntry {\n  const sd = $getWorkflowStaticData('global');\n  dead = Boolean(sd._scout_primary_dead);\n} catch (e) {}\nreturn $input.all().map((it, idx) => ({\n  pairedItem: it.pairedItem || { item: idx },\n  json: { ...it.json, _scout_primary_live: !dead }\n}));"
+      },
+      "id": "route-scout-model-health",
+      "name": "Check Scout Primary Health",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -87960,
+        26300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ Boolean($json._scout_primary_live) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-scout-primary-live",
+      "name": "If Scout Primary Live?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -87920,
+        26360
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 3,
+        "unit": "seconds"
+      },
+      "id": "scout-wait",
+      "webhookId": "2f6fc711-3d06-4fc7-b26e-cda2f33f745a",
+      "name": "Scout Wait",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        -87880,
+        26360
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.prompt }}"
+      },
+      "id": "7103ac68-8941-45ad-b8e2-316fc5da376a",
+      "name": "2. Basic LLM Chain (Scout)",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [
+        -87700,
+        26380
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.5-flash-lite",
+        "options": {
+          "maxOutputTokens": 8192,
+          "temperature": 0.4,
+          "safetySettings": {
+            "values": [
+              {
+                "category": "HARM_CATEGORY_HARASSMENT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_HATE_SPEECH",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                "threshold": "BLOCK_NONE"
+              }
+            ]
+          }
+        }
+      },
+      "id": "235ad0b2-bf2d-4feb-8cd2-2148eb3678bb",
+      "name": "Gemini Model (Scout)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        -87680,
+        26580
+      ],
+      "retryOnFail": false,
+      "maxTries": 1,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "googlePalmApi": {
+          "id": "Et5CBlcuIS6UC5eM",
+          "name": "loop3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ JSON.stringify($json) }}",
+              "rightValue": "429",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            },
+            {
+              "leftValue": "={{ JSON.stringify($json) }}",
+              "rightValue": "quota",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            },
+            {
+              "leftValue": "={{ JSON.stringify($json) }}",
+              "rightValue": "Too many requests",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "1e2137e1-14ba-42d8-909e-9f6289cbd48b",
+      "name": "If Scout 429",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -87300,
+        26440
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const DAILY_RE = /(?:per\\s*day|daily|free_tier_requests|retry\\s+in\\s+\\d+h)/i;\nconst sd = $getWorkflowStaticData('global');\nreturn $input.all().map((it, idx) => {\n  const errText = JSON.stringify(it.json.error || it.json.description || it.json.message || it.json);\n  const isDaily = DAILY_RE.test(errText);\n  const count = (Number(it.json._scout_retry_count) || 0) + 1;\n  sd._scout_consec_429 = (Number(sd._scout_consec_429) || 0) + 1;\n  const allowRetry = !isDaily && count <= 1 && Number(sd._scout_consec_429) <= 1;\n  if (!allowRetry) sd._scout_primary_dead = true;\n  return {\n    pairedItem: it.pairedItem || { item: idx },\n    json: { ...it.json, _scout_retry_count: count, _daily_quota_hit: isDaily || !allowRetry, _allow_retry: allowRetry }\n  };\n});"
+      },
+      "id": "a5c0e708-3f56-4a78-9b90-778899001122",
+      "name": "Guard Scout Retries",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -87160,
+        26400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ Boolean($json._allow_retry) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b6d1f819-4a67-4b89-8c01-889900112233",
+      "name": "If Scout Retry Allowed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -87100,
+        26400
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 3
+      },
+      "id": "e2edbe01-ce1f-43a4-ada4-0d33731d2638",
+      "webhookId": "506b74c0-050d-4688-92a5-cd9089194b8a",
+      "name": "Wait Scout Error",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -87040,
+        26400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "let p = '';\ntry { p = $('Scout Loop').item.json.prompt || ''; } catch(e) {}\nif (!p) { try { p = $('Scout Loop').last().json.prompt || ''; } catch(e2) {} }\nreturn $input.all().map((it, idx) => ({\n  pairedItem: it.pairedItem || { item: idx },\n  json: { ...it.json, prompt: p || it.json.prompt || '' }\n}));"
+      },
+      "id": "635e4fad-1182-402f-8ed8-b7ca90beccc7",
+      "name": "Restore Scout Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -86880,
+        26400
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.prompt || $('Scout Loop').item.json.prompt }}"
+      },
+      "id": "c7e2a920-5b78-4c90-9d12-990011223344",
+      "name": "2. Basic LLM Chain (Scout Fallback)",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [
+        -86960,
+        26560
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-2.5-flash",
+        "options": {
+          "maxOutputTokens": 8192,
+          "temperature": 0.4,
+          "safetySettings": {
+            "values": [
+              {
+                "category": "HARM_CATEGORY_HARASSMENT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_HATE_SPEECH",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                "threshold": "BLOCK_NONE"
+              }
+            ]
+          }
+        }
+      },
+      "id": "d8f3b031-6c89-4d01-8e23-001122334455",
+      "name": "Gemini Backup Model Scout",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        -86920,
+        26720
+      ],
+      "retryOnFail": false,
+      "maxTries": 1,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "googlePalmApi": {
+          "id": "EJRA7ZZxsBILsA9T",
+          "name": "gemini 2 "
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.prompt || $('Scout Loop').item.json.prompt }}"
+      },
+      "id": "mistral-scout-chain-fallback",
+      "name": "2. Basic LLM Chain (Scout Mistral Fallback)",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [
+        -86520,
+        26640
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "model": "mistral-large-latest",
+        "options": {
+          "maxTokens": 8192,
+          "temperature": 0.4,
+          "maxRetries": 2
+        }
+      },
+      "id": "mistral-scout-model-node",
+      "name": "Mistral Backup Model Scout",
+      "type": "@n8n/n8n-nodes-langchain.lmChatMistralCloud",
+      "typeVersion": 1,
+      "position": [
+        -86460,
+        26840
+      ],
+      "retryOnFail": false,
+      "maxTries": 1,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "GPkRAk0iPJOL3lzl",
+          "name": "Mistral Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const allItems = [];\nconst normalizeTimestamps = (txt) => String(txt || '').replace(/\\[([^\\]]*?)(\\d{1,3}):(\\d{2}(?:\\.\\d+)?)s?([^\\]]*?)\\]/gi, (full) =>\n  full.replace(/(\\d{1,3}):(\\d{2}(?:\\.\\d+)?)s?/gi, (_, m, s) => (parseInt(m, 10) * 60 + parseFloat(s)).toFixed(1) + 's')\n);\nconst cleanScoutText = (raw) => {\n  let t = normalizeTimestamps(raw).trim();\n  if (!t) return '';\n  // Drop incomplete trailing fragment line (e.g. cut off at \"- [ESCALATION / STRUGGLE] Timestamp: [12:36.4s -\")\n  const lines = t.split('\\n');\n  while (lines.length > 2) {\n    const last = lines[lines.length - 1].trim();\n    if (!last || /(?:[-:|[]\\s*$|Archetype:\\s*$)/.test(last)) {\n      lines.pop();\n    } else {\n      break;\n    }\n  }\n  return lines.join('\\n').trim();\n};\n\nfor (const nodeName of [\"2. Basic LLM Chain (Scout)\", \"2. Basic LLM Chain (Scout Fallback)\", \"2. Basic LLM Chain (Scout Mistral Fallback)\"]) {\n  let runIdx = 0;\n  while (true) {\n    try {\n      const items = $items(nodeName, 0, runIdx);\n      if (!items || items.length === 0) break;\n      for (const it of items) {\n        const rawOut = it && it.json && (it.json.output || it.json.text);\n        if (rawOut) {\n          const cleaned = cleanScoutText(rawOut);\n          allItems.push({ json: { ...it.json, text: it.json.text ? cleaned : it.json.text, output: it.json.output ? cleaned : it.json.output } });\n        }\n      }\n      runIdx++;\n    } catch (e) {\n      break;\n    }\n  }\n}\nconst validItems = allItems.filter(it => String(it.json.output || it.json.text || '').trim().length >= 120);\nconst out = validItems.length > 0 ? validItems : (allItems.length > 0 ? allItems : $items(\"2. Basic LLM Chain (Scout)\"));\nlet isDryRun = false;\ntry { isDryRun = Boolean($('1. Prepare Scout Prompt').first().json.dry_run); } catch(e) {}\nreturn out.map(it => ({ json: { ...it.json, dry_run: isDryRun } }));"
+      },
+      "id": "scout-accumulate",
+      "name": "Scout Accumulate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -86660,
+        26120
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst items = $input.all();\nlet allSnippets = \"\";\n\nitems.forEach((item, index) => {\n  allSnippets += `\\n\\n=== SCOUTED MOMENTS CHUNK ${index + 1} ===\\n`;\n  allSnippets += String(item.json.text || item.json.output || \"\").substring(0, 4200);\n});\nif (allSnippets.length > 16000) allSnippets = allSnippets.substring(0, 16000);\n\nlet isDryRun = items.some(it => Boolean(it.json && it.json.dry_run));\nif (!isDryRun) {\n  try { isDryRun = Boolean($('1. Prepare Scout Prompt').first().json.dry_run); } catch(e) {}\n}\n\n// Pull Proven Multimodal Anchors (with disk fallback for <10s Sandbox runs)\nlet anchorsList = [];\ntry {\n  const fusionItem = $('Run Multimodal Fusion').first();\n  if (fusionItem && fusionItem.json && fusionItem.json.stdout) {\n    const parsed = JSON.parse(fusionItem.json.stdout);\n    if (parsed && parsed.anchors) anchorsList = parsed.anchors;\n  }\n} catch(e) {}\n\nif (anchorsList.length === 0) {\n  try {\n    const lct = $('Load Cached Telemetry').first().json;\n    if (lct && lct.anchors) anchorsList = lct.anchors;\n  } catch(e) {}\n}\nif (anchorsList.length === 0 && fs.existsSync('/files/temp/unified_timeline_index.json')) {\n  try {\n    const idx = JSON.parse(fs.readFileSync('/files/temp/unified_timeline_index.json', 'utf8'));\n    if (idx && idx.anchors) anchorsList = idx.anchors;\n  } catch(e) {}\n}\n\nlet viralContext = \"\";\nif (anchorsList.length > 0) {\n  viralContext = \"\\n=== PROVEN AUDIENCE & REACTION ANCHORS ===\\n\" +\n    anchorsList.slice(0, 12).map(a => `[ANCHOR #${a.anchor_id}] Peak at ${a.peak_time}s (${a.peak_tc || ''}) | Score: ${a.virality_score}/100 | Model Fit: ${a.recommended_archetype || a.comedy_mechanism || 'CONTINUOUS_GAMEPLAY_CLUTCH_OR_FAIL'}\\n` +\n      `  - Audio: ${a.audio_signal || ''} | Chat: ${a.chat_signal || ''} | Face: ${a.face_signal || ''}\\n` +\n      (a.viewer_voice_present ? `  - Viewer/In-Game Voice Present: YES\\n` : '') +\n      (a.why_chat_laughed ? `  - Why They Laughed: ${a.why_chat_laughed}\\n` : '') +\n      (a.setup_tension_hook ? `  - Tension Hook: ${a.setup_tension_hook}\\n` : '') +\n      (a.callback_links && a.callback_links.length ? `  - Callback Candidates: ${a.callback_links.slice(0, 2).map(cb => cb.time + 's (\"' + cb.keyword + '\"): ' + cb.text).join(' | ')}\\n` : '') +\n      (a.is_multi_beat && a.beat_2 ? `  - Multi-Beat Callback: Beat 2 at ${a.beat_2.peak_time}s\\n` : '') +\n      (a.annotated_context ? `  - Exact ±45s Float-Second Context: ${String(a.annotated_context).substring(0, 780).replace(/\\n/g, ' | ')}\\n` : '')\n    ).join(\"\\n\") + \"\\n\";\n}\n\nlet streamContext = \"\";\ntry {\n  let summaryRaw = \"\";\n  for (const sNode of ['1. Global Summary AI', '1. Global Summary Fallback', '1. Global Summary Mistral Fallback']) {\n    if (summaryRaw) break;\n    try { summaryRaw = $(sNode).first().json.output || $(sNode).first().json.text || \"\"; } catch(e0) {}\n  }\n  if (!summaryRaw && fs.existsSync('/files/temp/global_summary.json')) {\n    summaryRaw = fs.readFileSync('/files/temp/global_summary.json', 'utf8');\n  }\n  const cleanedSum = String(summaryRaw || \"{}\").replace(/```json/gi,'').replace(/```/g,'').trim();\n  const sumMatch = cleanedSum.match(/\\{[\\s\\S]*\\}/);\n  const summary = JSON.parse(sumMatch ? sumMatch[0] : cleanedSum);\n  if (summary && (summary.game || summary.global_summary)) {\n    try { fs.writeFileSync('/files/temp/global_summary.json', JSON.stringify(summary, null, 2)); } catch(eS) {}\n  }\n  streamContext = [\n    summary.game ? \"GAME: \" + summary.game : \"\",\n    summary.global_summary ? \"STREAM SUMMARY: \" + summary.global_summary : \"\",\n    summary.vibe ? \"VIBE: \" + summary.vibe : \"\",\n    (summary.key_themes && summary.key_themes.length) ? \"KEY THEMES: \" + summary.key_themes.join(\", \") : \"\"\n  ].filter(Boolean).join(\"\\n\");\n} catch(e) {}\n\nconst targetClips = 5;\n\nconst jsonSchema = '{\"clips\":[{\"clip_number\":1,\"narrative_archetype\":\"CONTINUOUS_GAMEPLAY_CLUTCH_OR_FAIL\",\"estimated_vod_segment\":\"X-Y minutes\",\"title\":\"3-4 Word Curiosity Teaser 💀\",\"hook_caption\":\"3-5 WORDS IN ALL CAPS\",\"virality_score\":9.2,\"theme\":\"Core viral theme\",\"structure_type\":\"Blueprint Archetype\",\"start_time\":420.5,\"end_time\":452.0,\"payoff_time\":448.0,\"segments\":[{\"start\":420.5,\"end\":452.0,\"role\":\"CONTINUOUS_ARC\"}],\"assembled_spoken_script\":\"Full verbatim spoken lines in exact EDL playback order...\",\"signal_justification\":{\"chat_burst\":\"Z=3.4 sigma / top laugh quote\",\"db_spike\":\"+11.2dB scream at X:XX\",\"face_emotion\":\"FACE:SHOCK_OR_SCREAM\",\"viewer_voice_present\":false},\"cause_and_effect_setup\":\"Clear explanation of why setup & payoff belong together\"}]}';\n\nconst prompt =\n  'SYSTEM: You are the #1 Elite YouTube Shorts Creative Director & Narrative Architect. You are editing ultra-high-retention YouTube Shorts (22s-45s, sweet spot 24s-45s) from a livestream using 5 synchronized multimodal telemetry signals.\\n\\n' +\n  (streamContext ? '=== STREAM CONTEXT ===\\n' + streamContext + '\\n\\n' : '') +\n  (viralContext ? viralContext + '\\n' : '') +\n\n  '=== THE 6 VIRAL ARCHETYPE BLUEPRINTS (NO FORCED FRANKENSTEIN STITCHING) ===\\n' +\n  'CRITICAL DIRECTIVE: STOP blindly stitching unrelated moments into forced 3-act edits! Choose 1, 2, 3, or 4 segments honestly matching ONE of these 6 Structural Archetype Templates:\\n' +\n  '1. CONTINUOUS_GAMEPLAY_CLUTCH_OR_FAIL (1 Continuous Segment, 24s-42s):\\n' +\n  '   - Use when setup, rising gameplay tension, and scream/victory/fail happen continuously within 24-42s with < 4.0s dead air.\\n' +\n  '   - segments[]: [{\"start\": t1, \"end\": t2, \"role\": \"CONTINUOUS_ARC\"}] (ZERO artificial internal cuts!).\\n' +\n  '2. VIEWER_OR_CHAT_ROAST_INTERACTION (1-2 Segments, 22s-38s):\\n' +\n  '   - Use when triggered by [VIEWER_OR_GAME_VOICE], a wild chat/donation message read aloud, or player trolling, followed by hilarious comeback/sarcasm.\\n' +\n  '   - segments[]: [{\"start\": t1, \"end\": t2, \"role\": \"PROMPT_SETUP\"}, {\"start\": t3, \"end\": t4, \"role\": \"REACTION_PAYOFF\"}] (or 1 segment if < 2s gap).\\n' +\n  '3. HUBRIS_WAGER_INSTANT_KARMA (2-3 Segments, 25s-42s):\\n' +\n  '   - Streamer makes a cocky boast, bet, or promise -> gameplay struggle -> instant collapse/failure.\\n' +\n  '   - segments[]: [{\"start\": t1, \"end\": t2, \"role\": \"WAGER_SETUP\"}, {\"start\": t3, \"end\": t4, \"role\": \"KARMA_PAYOFF\"}] (with optional middle ESCALATION if needed).\\n' +\n  '4. COMEDIC_STORYTELLING_OR_SARCASM (1-3 Segments, 25s-44s):\\n' +\n  '   - Streamer tells an absurd story, executes a sarcastic bit, voice-acts an NPC, or hits a hilarious realization.\\n' +\n  '   - segments[]: 1 to 3 segments (PREMISE, optional ESCALATION, PUNCHLINE), cutting only dead pauses.\\n' +\n  '5. FLASHFORWARD_MYSTERY_INVESTIGATION (3-4 Segments, 30s-45s):\\n' +\n  '   - ONLY for genuine multi-minute mysteries/betrayals separated by >60s sharing the SAME named entity/quest.\\n' +\n  '   - segments[]: optional 1.8s-2.4s HOOK_CLIMAX (cut 0.4s strictly BEFORE reveal) -> SETUP -> ESCALATION -> PAYOFF.\\n' +\n  '6. EMOTIONAL_SHOCK_OR_BETRAYAL (1-3 Segments, 25s-42s):\\n' +\n  '   - Genuine plot twist, sad/wholesome moment, unexpected betrayal, or jaw-dropping rare event ([FACE:SHOCK_OR_SCREAM] + [CHAT_BURST]) with a full 3.0s-4.5s post-climax reaction.\\n\\n' +\n\n  '=== STRICT RETENTION, SENTENCE-BOUNDARY & SEMANTIC CONTINUITY RULES ===\\n' +\n  '• CONTIGUOUS SCENE = 1 SEGMENT (ZERO FAKE CUTS): If the gap between moments is < 4.0s, NEVER split it into fake SETUP/ESCALATION/PAYOFF sub-segments! Output 1 clean segment [{\"start\": t1, \"end\": t2, \"role\": \"CONTINUOUS_ARC\"}].\\n' +\n  '• EXACT SENTENCE BOUNDARIES (ZERO MID-THOUGHT CUTS): Every segment start MUST equal the exact start_s of a complete sentence [start_s - end_s], and every segment end MUST equal the exact end_s of a complete sentence! NEVER cut mid-clause or mid-word.\\n' +\n  '• COMPLETE PAYOFF RESOLUTION: payoff_time = peak moment of the climax, and final segment end MUST include the ENTIRE climax sentence PLUS 2.5s-4.5s of aftermath reaction (segments[last].end >= payoff_time + 2.5s)!\\n' +\n  '• SEMANTIC ENTITY CONTINUITY: If a clip uses >= 2 segments with a gap > 25s, setup & payoff MUST share concrete entities/topics/keywords from the same storyline (NEVER stitch random screams onto unrelated banter).\\n' +\n  '• SIGNAL GROUNDING REQUIREMENT: Every chosen clip MUST overlap at least 1 empirical [dB_PEAK], [SCREAM], [LAUGH_BURST], [CHAT_BURST], [FACE:*], [VIEWER_OR_GAME_VOICE], or [WPM_SPIKE] tag inside its payoff window (NEVER pick flat quiet banter with zero telemetry tags).\\n' +\n  '• ZERO OVERLAPPING TIMESTAMPS & DISTINCT SCENES (>= 120s APART): Segments must be strictly non-overlapping; EVERY clip MUST come from a DIFFERENT [ANCHOR #] / timestamp region (>= 120s apart — NEVER pick 2 clips from the same 90s anchor cluster so deduplication never drops one!).\\n' +\n  '• DURATION TARGET: Total duration across segments[] MUST be strictly between 22s and 45s (sweet spot 24s-45s).\\n\\n' +\n\n  '=== RULE 1: STRICT ANTI-ADMIN, ANTI-INTRO-RULES, ANTI-RAID, ANTI-OUTRO & ANTI-STATIC FILTER ===\\n' +\n  '• NEVER include desktop/browser screens, Chrome/Edge tabs, Twitch/YouTube chat dashboards, Roblox ESC pause/settings menus, or admin housekeeping!\\n' +\n  '• [STRICT ANTI-INTRO, ANTI-RULES BANTER & ANTI-RAID]: FORBID opening stream-rules/giveaway explanations (\"like the stream\", \"keep counter\", \"watch till the end of the stream\", \"rules of the stream\") or raid thank-yous (\"thank you for the raid\", \"welcome raiders\").\\n' +\n  '• [STRICT ANTI-OUTRO & ANTI-STATIC]: FORBID outro panhandling/sign-offs (\"everybody subscribe\", \"hit the like button\", \"smash the like\", \"don\\'t forget to subscribe\", \"we\\'re going to say bye\", \"came from the stream\", \"comment ... tomorrow\", \"ending the stream\", \"see you next time\") and static BRB/ending screens!\\n' +\n  '• NEVER include slow UI trade menus, inventory browsing, or passive donation roll calls.\\n\\n' +\n\n  '=== RULE 2: ZERO-SECOND RETENTION & HOOK RULES ===\\n' +\n  '• ZERO DEAD TIME AT HOOK & ZERO PRE-HOOK SPILLOVER: Open on the first word of the premise/wager/action sentence.\\n' +\n  '• NON-CHRONOLOGICAL HOOKS: Only place a HOOK_CLIMAX segment first in segments[] for FLASHFORWARD_MYSTERY_INVESTIGATION when total stitched duration >= 30s and it never spoils PAYOFF.\\n\\n' +\n\n  '=== RULE 3: SINGLE PREMISE COHESION & CAUSE-EFFECT EDL (ANTI-CHAOS) ===\\n' +\n  '• SINGLE PREMISE NARRATIVE COHESION & CAUSE-EFFECT EDL (ANTI-CHAOS): Every Short must tell ONE unified micro-story fulfilling the hook banner and title.\\n\\n' +\n\n  '=== RULE 4: PAYOFF IMPACT & ANTI-CLIMAX FILTER ===\\n' +\n  '• PAYOFF IMPACT & ANTI-CLIMAX FILTER: Climax MUST deliver real comedic/dramatic impact with 2.5s-4.5s reaction aftermath ending cleanly on a complete sentence.\\n\\n' +\n\n  '=== RULE 5: TITLES & FACTUAL HOOK CAPTIONS ===\\n' +\n  '1. TITLE: Curiosity Gap 3-4 words + emoji (💀, 😭, 😱, 🤯), <=25 chars.\\n' +\n  '2. HOOK_CAPTION: 3-5 WORDS IN ALL CAPS, 100% factual to the exact game/words spoken in this clip (NEVER invent unrelated games!).\\n\\n' +\n\n  '=== OUTPUT FORMAT ===\\n' +\n  'Return strictly valid JSON object {\"clips\": [...]} only. No markdown formatting, no explanations.\\n' +\n  'MANDATORY DIVERSITY & DURATION QUOTA: Output AT LEAST 4 to ' + targetClips + ' complete clips covering AT LEAST 3 DIFFERENT narrative_archetype values! Use AT MOST 1 FLASHFORWARD_MYSTERY_INVESTIGATION clip (only when segments share the exact same named character/item). At least 3 of your clips MUST be from CONTINUOUS_GAMEPLAY_CLUTCH_OR_FAIL (1 uninterrupted 24s-38s segment), COMEDIC_STORYTELLING_OR_SARCASM, VIEWER_OR_CHAT_ROAST_INTERACTION, HUBRIS_WAGER_INSTANT_KARMA, or EMOTIONAL_SHOCK_OR_BETRAYAL! NEVER output 5s-19s stubs — every clip segments[] MUST sum to 24.0s-44.0s:\\n' +\n  jsonSchema + '\\n\\n' +\n  '--- SCOUTED SNIPPETS ---\\n' +\n  allSnippets;\n\nreturn [{ pairedItem: { item: 0 }, json: { prompt, targetClips, dry_run: isDryRun } }];"
+      },
+      "id": "59c847f1-0354-4acd-9aef-3c3bea58643b",
+      "name": "3. Prepare Director Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -86500,
+        26120
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 3
+      },
+      "id": "b8c4e1a2-7f90-4a12-9b34-112233445566",
+      "name": "Wait Before Director",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -86440,
+        26140
+      ],
+      "webhookId": "f4c2a1b0-7e88-4c11-9d22-334455667788"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.prompt }}"
+      },
+      "id": "de4b9212-cf26-4e54-86db-60d717d8ae99",
+      "name": "4. Basic LLM Chain (Director)",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [
+        -86260,
+        26140
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ (function(){ const raw = String($json.text || $json.output || '').replace(/\\x60\\x60\\x60json/gi,'').replace(/\\x60\\x60\\x60/g,'').trim(); const iObj=raw.indexOf('{'); const iArr=raw.indexOf('['); let sub=''; if(iArr>=0&&(iObj<0||iArr<iObj)){ const j=raw.lastIndexOf(']'); if(j>iArr) sub=raw.slice(iArr,j+1); } else if(iObj>=0){ const j=raw.lastIndexOf('}'); if(j>iObj) sub=raw.slice(iObj,j+1); } if(!sub) return false; try{ const p=JSON.parse(sub); const arr=Array.isArray(p)?p:(p.clips||[]); if(!Array.isArray(arr)||arr.length<3) return false; const solid=arr.filter(c=>{ if(!c) return false; if(Array.isArray(c.segments)&&c.segments.length>0){ return c.segments.reduce((a,s)=>a+Math.max(0,Number(s.end||0)-Number(s.start||0)),0)>=15; } return (Number(c.end_time||0)-Number(c.start_time||0))>=15; }); const arches=new Set(solid.map(c=>String(c.narrative_archetype||'').toUpperCase()).filter(Boolean)); return solid.length>=3 && arches.size>=3; }catch(e){ return false; } })() }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-director-json-valid-id",
+      "name": "IF: Director JSON Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -86000,
+        26140
+      ]
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.5-flash-lite",
+        "options": {
+          "maxOutputTokens": 8192,
+          "temperature": 0.1,
+          "safetySettings": {
+            "values": [
+              {
+                "category": "HARM_CATEGORY_HARASSMENT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_HATE_SPEECH",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                "threshold": "BLOCK_NONE"
+              }
+            ]
+          }
+        }
+      },
+      "id": "4418209d-3aa9-46d8-a4fd-03c46dc71c1f",
+      "name": "Gemini Model (Director)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        -86220,
+        26320
+      ],
+      "retryOnFail": false,
+      "maxTries": 1,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "googlePalmApi": {
+          "id": "Et5CBlcuIS6UC5eM",
+          "name": "loop3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ JSON.stringify($json) }}",
+              "rightValue": "429",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            },
+            {
+              "leftValue": "={{ JSON.stringify($json) }}",
+              "rightValue": "quota",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            },
+            {
+              "leftValue": "={{ JSON.stringify($json) }}",
+              "rightValue": "Too many requests",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "58a99f32-3649-45c4-8bd0-b7234b952f9f",
+      "name": "If Director 429",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -85900,
+        26260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const DAILY_RE = /(?:per\\s*day|daily|free_tier_requests|retry\\s+in\\s+\\d+h)/i;\nconst sd = $getWorkflowStaticData('global');\nreturn $input.all().map((it, idx) => {\n  const errText = JSON.stringify(it.json.error || it.json.description || it.json.message || it.json);\n  const isDaily = DAILY_RE.test(errText);\n  const count = (Number(sd._director_retry_count) || 0) + 1;\n  sd._director_retry_count = count;\n  return {\n    pairedItem: it.pairedItem || { item: idx },\n    json: { ...it.json, _director_retry_count: count, _daily_quota_hit: isDaily || count > 1, _allow_retry: !isDaily && count <= 1 }\n  };\n});"
+      },
+      "id": "e9a4c142-7d90-4e12-9f34-112233445566",
+      "name": "Guard Director Retries",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -85800,
+        26340
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ Boolean($json._allow_retry) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "f0b5d253-8e01-4f23-8a45-223344556677",
+      "name": "If Director Retry Allowed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -85760,
+        26340
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 3
+      },
+      "id": "c7d9e8f1-bbd1-4b50-a110-368f3433a5ef",
+      "webhookId": "572c00d7-b6cb-43f4-8bdc-ca1fe7f051ba",
+      "name": "Wait Director Error",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -85720,
+        26360
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "let p = '';\ntry { p = $('3. Prepare Director Prompt').last().json.prompt || ''; } catch(e) {}\nreturn $input.all().map((it, idx) => ({\n  pairedItem: it.pairedItem || { item: idx },\n  json: { ...it.json, prompt: p || it.json.prompt || '' }\n}));"
+      },
+      "id": "d8db1e5e-e451-4ec3-8ec3-c3092f01dc2c",
+      "name": "Restore Director Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -85580,
+        26380
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 3
+      },
+      "id": "b8c4e1a2-7f90-4a12-9b34-112233445577",
+      "name": "Wait Before Director Fallback",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -85820,
+        26420
+      ],
+      "webhookId": "f4c2a1b0-7e88-4c11-9d22-334455667799"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('3. Prepare Director Prompt').last().json.prompt }}"
+      },
+      "id": "a1c6e364-9f12-4a34-9b56-334455667788",
+      "name": "4. Basic LLM Chain (Director Fallback)",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [
+        -85640,
+        26520
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ (function(){ const raw = String($json.text || $json.output || '').replace(/\\x60\\x60\\x60json/gi,'').replace(/\\x60\\x60\\x60/g,'').trim(); const iObj=raw.indexOf('{'); const iArr=raw.indexOf('['); let sub=''; if(iArr>=0&&(iObj<0||iArr<iObj)){ const j=raw.lastIndexOf(']'); if(j>iArr) sub=raw.slice(iArr,j+1); } else if(iObj>=0){ const j=raw.lastIndexOf('}'); if(j>iObj) sub=raw.slice(iObj,j+1); } if(!sub) return false; try{ const p=JSON.parse(sub); const arr=Array.isArray(p)?p:(p.clips||[]); return Array.isArray(arr) && arr.length>=1 && arr.some(c=>c&&(c.start_time!==undefined || (Array.isArray(c.segments)&&c.segments.length>0))); }catch(e){ return false; } })() }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-director-fb-json-valid-id",
+      "name": "IF: Director Fallback JSON Valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -85900,
+        26340
+      ]
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-2.5-flash",
+        "options": {
+          "maxOutputTokens": 8192,
+          "temperature": 0.1,
+          "safetySettings": {
+            "values": [
+              {
+                "category": "HARM_CATEGORY_HARASSMENT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_HATE_SPEECH",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                "threshold": "BLOCK_NONE"
+              }
+            ]
+          }
+        }
+      },
+      "id": "b2d7f475-0a23-4b45-8c67-445566778899",
+      "name": "Gemini Backup Model Director",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        -85600,
+        26680
+      ],
+      "retryOnFail": false,
+      "maxTries": 1,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "googlePalmApi": {
+          "id": "EJRA7ZZxsBILsA9T",
+          "name": "gemini 2 "
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('3. Prepare Director Prompt').last().json.prompt }}"
+      },
+      "id": "mistral-director-chain-fallback",
+      "name": "4. Basic LLM Chain (Director Mistral Fallback)",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.4,
+      "position": [
+        -85440,
+        26520
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "model": "mistral-large-latest",
+        "options": {
+          "maxTokens": 8192,
+          "temperature": 0.1,
+          "maxRetries": 2
+        }
+      },
+      "id": "mistral-director-model-node",
+      "name": "Mistral Backup Model Director",
+      "type": "@n8n/n8n-nodes-langchain.lmChatMistralCloud",
+      "typeVersion": 1,
+      "position": [
+        -85400,
+        26680
+      ],
+      "retryOnFail": false,
+      "maxTries": 1,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "GPkRAk0iPJOL3lzl",
+          "name": "Mistral Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst fs = require('fs');\nlet allClips = [];\n\nlet streamerName = \"Streamer\";\ntry { streamerName = $('Config').item.json.streamer_name || \"Streamer\"; } catch(e) {}\nif (streamerName === \"Streamer\") {\n  try { streamerName = $('Load Cached Telemetry').last().json.streamer_name || \"Streamer\"; } catch(e) {}\n}\n\nlet isDryRun = false;\ntry { isDryRun = Boolean($('3. Prepare Director Prompt').last().json.dry_run); } catch(e) {}\nif (!isDryRun) {\n  try { isDryRun = Boolean($('Load Cached Telemetry').last().json.dry_run); } catch(e) {}\n}\n\n// Load Whisper words (Load Cached Telemetry FIRST so dataset slices stay synced -> Production -> disk fallbacks)\nlet whisperWords = [];\ntry {\n  const lctW = $('Load Cached Telemetry').first().json || {};\n  whisperWords = lctW.words || [];\n} catch(e) {}\nif (whisperWords.length === 0) {\n  try {\n    const wj = $('3. Groq Whisper').last().json || {};\n    whisperWords = wj.words || (wj.x_groq && wj.x_groq.words) || [];\n  } catch(e) {}\n}\nif (whisperWords.length === 0) {\n  try {\n    const wj2 = $('3. Groq Whisper Fallback').last().json || {};\n    whisperWords = wj2.words || (wj2.x_groq && wj2.x_groq.words) || [];\n  } catch(e) {}\n}\nif (whisperWords.length === 0) {\n  try {\n    if (fs.existsSync('/files/temp/transcript.json')) {\n      const tj = JSON.parse(fs.readFileSync('/files/temp/transcript.json', 'utf8'));\n      whisperWords = tj.words || (tj.x_groq && tj.x_groq.words) || [];\n    }\n  } catch(e) {}\n}\n\nconst OUTRO_PANHANDLING_RE = /\\b(everybody\\s+subscribe|hit\\s+the\\s+like\\s+button|smash\\s+(?:that\\s+|the\\s+)?like|don'?t\\s+forget\\s+to\\s+subscribe|make\\s+sure\\s+to\\s+subscribe|drop\\s+a\\s+like\\s+and\\s+subscribe|subscribe\\s+to\\s+the\\s+channel|thanks\\s+for\\s+watching\\s+(?:guys|everyone)|peace\\s+out\\s+everybody|we'?re\\s+going\\s+to\\s+say\\s+bye|came\\s+from\\s+the\\s+stream|comment\\b[^.?!]{0,40}\\btomorrow|comment\\s+[a-z0-9]{2,12}\\s+(?:and\\s+we'?ll|if\\s+you)|ending\\s+the\\s+stream|see\\s+you\\s+next\\s+time|be\\s+right\\s+back|starting\\s+soon)\\b/i;\nconst INTRO_RULES_RAID_RE = /\\b(thank\\s+you\\s+for\\s+the\\s+raid|thanks\\s+for\\s+the\\s+raid|welcome\\s+raiders|watch\\s+till\\s+the\\s+end\\s+of\\s+the\\s+stream|keep\\s+counter)\\b/i;\nconst BANNED_CAPTION_RE = /^(I CALLED TIME OUT|HE ACTUALLY FELL FOR IT|THAT DOES NOT COUNT|MY WORST BLUNDER|MUST WATCH MOMENT|VIRAL MOMENT|PLAYING THE GAME|PLAYING THE GAME WRONG|GAMEPLAY HIGHLIGHT CLIP|WATCH THIS CLIP|NO WORDS|NO AUDIO FOUND|NO TRANSCRIPT|UNDEFINED|NULL|ERROR)$/i;\n\nfunction getWindowTranscript(segs) {\n  if (!whisperWords.length || !Array.isArray(segs) || !segs.length) return \"\";\n  const parts = [];\n  for (const s of segs) {\n    const w = whisperWords.filter(x => {\n      const mid = (Number(x.start || 0) + Number(x.end || x.start || 0)) * 0.5;\n      return mid >= s.start && mid <= s.end;\n    }).map(x => String(x.word || \"\").trim()).join(\" \");\n    if (w) parts.push(w);\n  }\n  return parts.join(\" \");\n}\n\nlet lastContent = \"\";\nfor (const item of items) {\n  let content = item.json.output || item.json.text || '{}';\n  lastContent = content;\n\n  // 1. Clean markdown formatting\n  const b3 = String.fromCharCode(96).repeat(3);\n  content = content.split(b3 + 'json').join('').split(b3).join('').trim();\n\n  // 2. Auto-Fix common AI JSON typos\n  content = content.replace(/\\}\\}\\}\\,\\,/g, '}},');\n  content = content.replace(/\\}\\}\\]\\}/g, '}}]}');\n  content = content.replace(/\\]\\]/g, ']');\n  content = content.replace(/\\}\\,\\]/g, '}]');\n\n  try {\n    const aiData = JSON.parse(content);\n    if (aiData.clips && Array.isArray(aiData.clips)) {\n      allClips = allClips.concat(aiData.clips);\n    } else if (Array.isArray(aiData)) {\n      allClips = allClips.concat(aiData);\n    }\n    continue;\n  } catch (e) {\n    // Try extracting embedded JSON object\n    const jsonMatch = content.match(/\\{[\\s\\S]*\"clips\"\\s*:\\s*\\[[\\s\\S]*\\]\\s*\\}/);\n    if (jsonMatch) {\n      try {\n        const recovered = JSON.parse(jsonMatch[0]);\n        if (recovered.clips && Array.isArray(recovered.clips)) {\n          allClips = allClips.concat(recovered.clips);\n          continue;\n        }\n      } catch(e2) {}\n    }\n\n    const clipBlocks = content.split(/\"clip_number\"\\s*:/i);\n    if (clipBlocks.length > 1) {\n      for (let i = 1; i < clipBlocks.length; i++) {\n        const block = clipBlocks[i];\n        const titleMatch = block.match(/\"title\"\\s*:\\s*\"([^\"]+)\"/i);\n        const hookMatch = block.match(/\"hook_caption\"\\s*:\\s*\"([^\"]+)\"/i);\n        const archMatch = block.match(/\"narrative_archetype\"\\s*:\\s*\"([^\"]+)\"/i);\n        const startMatch = block.match(/\"start_time\"\\s*:\\s*([\\d.]+)/i);\n        const endMatch = block.match(/\"end_time\"\\s*:\\s*([\\d.]+)/i);\n        const payoffMatch = block.match(/\"payoff_time\"\\s*:\\s*([\\d.]+)/i);\n        let parsedSegs = null;\n        const segsMatch = block.match(/\"segments\"\\s*:\\s*(\\[[\\s\\S]*?\\])/i);\n        if (segsMatch) {\n          try { parsedSegs = JSON.parse(segsMatch[1]); } catch(eSeg) {}\n        }\n\n        if ((parsedSegs && parsedSegs.length > 0) || (startMatch && endMatch)) {\n          const s = startMatch ? parseFloat(startMatch[1]) : parseFloat(parsedSegs[0].start);\n          const e = endMatch ? parseFloat(endMatch[1]) : parseFloat(parsedSegs[parsedSegs.length - 1].end);\n          const p = payoffMatch ? parseFloat(payoffMatch[1]) : e - 3.5;\n          allClips.push({\n            title: titleMatch ? titleMatch[1] : (streamerName + '_Clip_' + i),\n            hook_caption: hookMatch ? hookMatch[1] : \"\",\n            narrative_archetype: archMatch ? archMatch[1] : \"HUBRIS_INSTANT_KARMA\",\n            start_time: s,\n            end_time: e,\n            payoff_time: p,\n            segments: parsedSegs || undefined\n          });\n        }\n      }\n    } else {\n      const allTimeMatches = [...content.matchAll(/\\[([\\d\\.]+)[sS]?\\s*-\\s*([\\d\\.]+)[sS]?\\]/g)];\n      if (allTimeMatches.length > 0) {\n        let currentClipStart = parseFloat(allTimeMatches[0][1]);\n        let currentClipEnd = parseFloat(allTimeMatches[0][2]);\n        let clipCount = 1;\n\n        for (let i = 1; i < allTimeMatches.length; i++) {\n          let start = parseFloat(allTimeMatches[i][1]);\n          let end = parseFloat(allTimeMatches[i][2]);\n          if (start - currentClipEnd <= 8 && start >= currentClipStart) {\n            currentClipEnd = Math.max(currentClipEnd, end);\n          } else {\n            if (currentClipEnd - currentClipStart > 2) {\n              allClips.push({\n                title: 'Extracted_Clip_' + (clipCount++),\n                hook_caption: \"VIRAL MOMENT\",\n                start_time: currentClipStart,\n                end_time: currentClipEnd,\n                payoff_time: Math.max(0, currentClipEnd - 3.5)\n              });\n            }\n            currentClipStart = start;\n            currentClipEnd = end;\n          }\n        }\n        if (currentClipEnd - currentClipStart > 2) {\n          allClips.push({\n            title: 'Extracted_Clip_' + (clipCount++),\n            hook_caption: \"VIRAL MOMENT\",\n            start_time: currentClipStart,\n            end_time: currentClipEnd,\n            payoff_time: Math.max(0, currentClipEnd - 3.5)\n          });\n        }\n      }\n    }\n  }\n}\n\n// Salvage valid clips from earlier Director tiers/runs if current Fallback/Mistral run returned error or < 3 clips\nif (allClips.length < 3) {\n  const tryExtractFromRaw = (rawTxt) => {\n    const b3 = String.fromCharCode(96).repeat(3);\n    const cleaned = String(rawTxt || '').split(b3 + 'json').join('').split(b3).join('').trim();\n    const sI = cleaned.indexOf('{');\n    const aI = cleaned.indexOf('[');\n    let sub = '';\n    if (aI >= 0 && (sI < 0 || aI < sI)) {\n      const aJ = cleaned.lastIndexOf(']');\n      if (aJ > aI) sub = cleaned.slice(aI, aJ + 1);\n    } else if (sI >= 0) {\n      const sJ = cleaned.lastIndexOf('}');\n      if (sJ > sI) sub = cleaned.slice(sI, sJ + 1);\n    }\n    if (!sub) return [];\n    try {\n      const parsed = JSON.parse(sub);\n      const arr = Array.isArray(parsed) ? parsed : (parsed.clips || []);\n      return Array.isArray(arr) ? arr.filter(c => c && (c.start_time !== undefined || (Array.isArray(c.segments) && c.segments.length > 0))) : [];\n    } catch (e) { return []; }\n  };\n  for (const prevNode of ['4. Basic LLM Chain (Director Fallback)', '4. Basic LLM Chain (Director)']) {\n    for (let r = 2; r >= 0 && allClips.length < 5; r--) {\n      try {\n        const resItems = $items(prevNode, 0, r) || [];\n        for (const ri of resItems) {\n          const salvaged = tryExtractFromRaw(ri && ri.json && (ri.json.text || ri.json.output));\n          for (const sc of salvaged) {\n            const scPay = Number(sc.payoff_time || sc.end_time || 0);\n            const isDup = allClips.some(ex => Math.abs(Number(ex.payoff_time || ex.end_time || 0) - scPay) < 45.0);\n            if (!isDup && allClips.length < 5) allClips.push(sc);\n          }\n        }\n      } catch (e) {}\n    }\n  }\n}\n\nif (allClips.length === 0) {\n  let anchorsFallback = [];\n  try { anchorsFallback = $('Load Cached Telemetry').first().json.anchors || []; } catch(e) {}\n  if (anchorsFallback.length > 0) {\n    const pickedAnchors = [];\n    for (const anc of anchorsFallback) {\n      const pk = Number(anc.peak_time || anc.start || 60);\n      if (pickedAnchors.every(p => Math.abs(Number(p.peak_time || 0) - pk) >= 90.0)) {\n        const s0 = Math.max(10.0, Number((pk - 24.0).toFixed(2)));\n        const e0 = Number((pk + 4.0).toFixed(2));\n        pickedAnchors.push({ peak_time: pk });\n        allClips.push({\n          clip_number: pickedAnchors.length,\n          title: 'Highlight Moment #' + pickedAnchors.length,\n          hook_caption: 'WAIT FOR THIS MOMENT',\n          narrative_archetype: anc.recommended_archetype || 'CONTINUOUS_GAMEPLAY_CLUTCH_OR_FAIL',\n          virality_score: Number(anc.virality_score || 8.0) / 10,\n          start_time: s0,\n          end_time: e0,\n          payoff_time: pk,\n          segments: [{ start: s0, end: e0, role: 'CONTINUOUS_ARC' }]\n        });\n        if (pickedAnchors.length >= 3) break;\n      }\n    }\n  }\n}\n\nif (allClips.length === 0) {\n  return [{ pairedItem: { item: 0 }, json: {\n    dry_run: isDryRun,\n    start_time: 3.0,\n    end_time: 32.0,\n    payoff_time: 28.5,\n    segments: [\n      { start: 3.0, end: 32.0, role: \"CONTINUOUS_ARC\" }\n    ],\n    title: streamerName + \"_Backup_Clip\",\n    hook_caption: \"INSANE MOMENT\",\n    narrative_archetype: \"CONTINUOUS_GAMEPLAY_CLUTCH_OR_FAIL\",\n    virality_score: 0,\n    structure_type: \"Continuous Arc\",\n    DEBUG_RAW_AI: lastContent\n  }}];\n}\n\nfunction normalizeRole(roleStr) {\n  const r = String(roleStr || '').toUpperCase().trim().replace(/[\\s-]+/g, '_');\n  const allowed = new Set([\n    'HOOK_CLIMAX', 'CONTINUOUS_ARC', 'PROMPT_SETUP', 'REACTION_PAYOFF',\n    'WAGER_SETUP', 'KARMA_PAYOFF', 'PREMISE', 'PUNCHLINE',\n    'SETUP', 'ESCALATION', 'PAYOFF', 'STORY_BEAT'\n  ]);\n  if (allowed.has(r)) return r;\n  if (r === 'HOOK' || r === 'FLASH_FORWARD' || r === 'COLD_OPEN') return 'HOOK_CLIMAX';\n  if (r === 'SETUP_HOOK' || r === 'STAKES' || r === 'REWIND_SETUP') return 'SETUP';\n  if (r === 'ACTION_BRIDGE' || r === 'STRUGGLE' || r === 'BUILDUP') return 'ESCALATION';\n  if (r === 'PAYOFF_CLIMAX' || r === 'CLIMAX' || r === 'REACTION' || r === 'REVEAL') return 'PAYOFF';\n  return 'STORY_BEAT';\n}\n\nconst CONTINUITY_STOPWORDS = new Set([\n  'that','this','with','from','have','they','were','been','what','when','where','which',\n  'there','their','about','would','could','should','really','going','gonna','wanna',\n  'thing','things','right','think','actually','people','someone','something','because',\n  'before','after','these','those','every','wait','dude','guys','chat','bro','yeah',\n  'okay','just','like','know','look','here','come','make','take','your','youre','dont',\n  'cant','wont','didnt','mean','literally','actually','seriously','ohmygod','gosh'\n]);\nconst NARRATIVE_BRIDGE_RE = /\\b(because|told you|earlier|remember|that's why|promised|agreed|i said|called it|actually happened|bet you|planted|device|secret|truth|found out)\\b/i;\n\nfunction checkSemanticEntityContinuity(segs, archetype, causeText) {\n  const body = (segs || []).filter(s => s.role !== 'HOOK_CLIMAX');\n  if (body.length < 2) {\n    return { passed: true, max_gap_sec: 0, shared_tokens: [], reason: 'contiguous_single_segment' };\n  }\n  let maxGap = 0;\n  for (let i = 1; i < body.length; i++) {\n    const gap = Math.max(0, body[i].start - body[i - 1].end);\n    if (gap > maxGap) maxGap = gap;\n  }\n  maxGap = Number(maxGap.toFixed(1));\n  if (maxGap <= 25.0) {\n    return { passed: true, max_gap_sec: maxGap, shared_tokens: [], reason: 'short_internal_gap_<=25s' };\n  }\n  const segTexts = body.map(s => getWindowTranscript([s]));\n  const tokenize = (txt) => {\n    const toks = (String(txt || '').toLowerCase().match(/[a-z0-9]{4,}/g) || []);\n    return new Set(toks.filter(t => !CONTINUITY_STOPWORDS.has(t)));\n  };\n  const sets = segTexts.map(t => tokenize(t));\n  const stemSets = sets.map(st => new Set([...st].map(w => w.slice(0, 4))));\n  const firstSet = sets[0];\n  const lastSet = sets[sets.length - 1];\n  const firstStems = stemSets[0];\n  const lastStems = stemSets[stemSets.length - 1];\n  const midSet = new Set();\n  const midStems = new Set();\n  for (let i = 1; i < sets.length - 1; i++) {\n    sets[i].forEach(t => midSet.add(t));\n    stemSets[i].forEach(t => midStems.add(t));\n  }\n  const shared = [...firstSet].filter(t => lastSet.has(t));\n  const stemShared = [...firstStems].filter(s => lastStems.has(s));\n  const chainLinked = sets.length >= 3 && [...firstStems].some(s => midStems.has(s)) && ([...midStems].some(s => lastStems.has(s)) || NARRATIVE_BRIDGE_RE.test(segTexts[segTexts.length - 1] || ''));\n  const hasBridge = NARRATIVE_BRIDGE_RE.test(segTexts[segTexts.length - 1] || '');\n  const passed = shared.length >= 1 || stemShared.length >= 1 || chainLinked || (hasBridge && String(archetype || '').toUpperCase() === 'FLASHFORWARD_MYSTERY_INVESTIGATION') || (!whisperWords.length);\n  return {\n    passed,\n    max_gap_sec: maxGap,\n    shared_tokens: (shared.length ? shared : stemShared).slice(0, 6),\n    reason: passed\n      ? (shared.length ? 'shared_entity_tokens' : (stemShared.length ? 'shared_entity_stems' : (chainLinked ? 'transitive_chain_entities' : (hasBridge ? 'explicit_narrative_bridge' : 'no_whisper_words'))))\n      : ('disconnected_segments_gap_' + maxGap + 's_without_shared_entities')\n  };\n}\n\nfunction snapSegmentBounds(st, en, role, minBound, maxBound) {\n  let outSt = Math.max(minBound, st);\n  let outEn = Math.min(maxBound, Math.max(outSt + 1.0, en));\n  if (!whisperWords.length || role === 'HOOK_CLIMAX') {\n    return { start: Number(outSt.toFixed(2)), end: Number(outEn.toFixed(2)) };\n  }\n  let firstI = -1, lastI = -1;\n  for (let i = 0; i < whisperWords.length; i++) {\n    const ws = Number(whisperWords[i].start || 0);\n    const we = Number(whisperWords[i].end || ws);\n    const mid = (ws + we) * 0.5;\n    if (mid >= outSt - 0.01 && mid <= outEn + 0.01) {\n      if (firstI === -1) firstI = i;\n      lastI = i;\n    }\n  }\n  if (firstI === -1) {\n    return { start: Number(outSt.toFixed(2)), end: Number(outEn.toFixed(2)) };\n  }\n  // Drop 1..2-word prior-sentence tail ending in [.!?] ONLY when preceded mid-sentence\n  const splitPrevClean = firstI <= 0 || /[.!?][\"')\\]]*$/.test(String(whisperWords[firstI - 1].word || '').trim());\n  if (!splitPrevClean) {\n    for (let k = 0; k < 2 && (firstI + k + 1) < whisperWords.length; k++) {\n      const fTok = String(whisperWords[firstI + k].word || '').trim();\n      const nxtS = Number(whisperWords[firstI + k + 1].start || outSt);\n      const fEnd = Number(whisperWords[firstI + k].end || outSt);\n      if (/[.!?][\"')\\]]*$/.test(fTok) && nxtS < outEn - 3.0) {\n        firstI = firstI + k + 1;\n        outSt = Math.max(minBound, fEnd <= nxtS ? Math.max(fEnd + 0.035, nxtS - 0.035) : nxtS + 0.01);\n        break;\n      }\n    }\n  }\n  // Snap start to clean sentence boundary [.!?]\n  if (firstI > 0 && !/[.!?][\"')\\]]*$/.test(String(whisperWords[firstI - 1].word || '').trim())) {\n    let snapped = false;\n    // Prefer skipping forward to next sentence start if within 2.4s (prevents grabbing prior incomplete clause!)\n    for (let j = firstI + 1; j < Math.min(whisperWords.length, firstI + 14); j++) {\n      const wsJ = Number(whisperWords[j].start || outSt);\n      if ((wsJ - outSt) <= 2.4 && /[.!?][\"')\\]]*$/.test(String(whisperWords[j - 1].word || '').trim()) && (outEn - wsJ) >= 3.0) {\n        const prevEnd = Number(whisperWords[j - 1].end || 0);\n        outSt = Math.max(minBound, prevEnd <= wsJ ? Math.max(prevEnd + 0.035, wsJ - 0.035) : wsJ + 0.01);\n        snapped = true;\n        break;\n      }\n    }\n    if (!snapped) {\n      for (let j = firstI - 1; j >= Math.max(0, firstI - 18); j--) {\n        const wsJ = Number(whisperWords[j].start || outSt);\n        if (wsJ < minBound || (outSt - wsJ) > 2.8) break;\n        if (j === 0 || /[.!?][\"')\\]]*$/.test(String(whisperWords[j - 1].word || '').trim())) {\n          const prevEnd = j > 0 ? Number(whisperWords[j - 1].end || 0) : 0;\n          const cleanCut = prevEnd <= wsJ ? Math.max(prevEnd + 0.035, wsJ - 0.035) : wsJ + 0.01;\n          outSt = Math.max(minBound, cleanCut);\n          snapped = true;\n          break;\n        }\n      }\n    }\n  } else if (firstI > 0) {\n    const prevEnd = Number(whisperWords[firstI - 1].end || 0);\n    const ws0 = Number(whisperWords[firstI].start || outSt);\n    if (outSt <= prevEnd + 0.01) {\n      outSt = Math.max(minBound, prevEnd <= ws0 ? Math.max(prevEnd + 0.035, ws0 - 0.035) : ws0 + 0.01);\n    }\n  }\n  // Recompute lastI and snap end to clean sentence termination [.!?]\n  lastI = -1;\n  for (let i = 0; i < whisperWords.length; i++) {\n    const ws = Number(whisperWords[i].start || 0);\n    const we = Number(whisperWords[i].end || ws);\n    const mid = (ws + we) * 0.5;\n    if (mid >= outSt - 0.01 && mid <= outEn + 0.01) lastI = i;\n  }\n  if (lastI !== -1 && !/[.!?]$/.test(String(whisperWords[lastI].word || '').trim())) {\n    let snappedEnd = false;\n    for (let j = lastI + 1; j < Math.min(whisperWords.length, lastI + 22); j++) {\n      const weJ = Number(whisperWords[j].end || outEn);\n      if (weJ > maxBound || (weJ - outEn) > 5.5) break;\n      if (/[.!?]$/.test(String(whisperWords[j].word || '').trim())) {\n        const nxtS = j + 1 < whisperWords.length ? Number(whisperWords[j + 1].start || weJ + 0.5) : (weJ + 0.5);\n        outEn = Math.min(maxBound, nxtS - 0.02, weJ + 0.10);\n        snappedEnd = true;\n        break;\n      }\n    }\n    if (!snappedEnd) {\n      for (let j = lastI; j >= Math.max(firstI + 2, lastI - 14); j--) {\n        const weJ = Number(whisperWords[j].end || outEn);\n        if (/[.!?]$/.test(String(whisperWords[j].word || '').trim()) && (weJ - outSt) >= 2.5) {\n          const nxtS = j + 1 < whisperWords.length ? Number(whisperWords[j + 1].start || weJ + 0.5) : (weJ + 0.5);\n          outEn = Math.min(maxBound, nxtS - 0.02, weJ + 0.10);\n          break;\n        }\n      }\n    }\n  }\n  return {\n    start: Number(Math.max(minBound, outSt).toFixed(2)),\n    end: Number(Math.min(maxBound, Math.max(outSt + 1.0, outEn)).toFixed(2))\n  };\n}\n\nconst streamMaxDur = whisperWords.length > 0 ? Number(whisperWords[whisperWords.length - 1].end || 600) : 3600;\nconst minPayoffGap = streamMaxDur > 1200 ? 50.0 : 35.0;\n\nreturn allClips.map((clip, index) => {\n  // Validate 1..4 archetype blueprint segments without forced splitting\n  let rawSegs = [];\n  if (clip.segments && Array.isArray(clip.segments)) {\n    rawSegs = clip.segments\n      .map(s => ({\n        start: Math.max(3.0, Number(parseFloat(s.start).toFixed(2)) || 0),\n        end: Math.max(3.8, Number(parseFloat(s.end).toFixed(2)) || 0),\n        role: normalizeRole(s.role)\n      }))\n      .filter(s => s.end > s.start && (s.end - s.start) >= 0.8);\n  }\n\n  let sTime = parseFloat(clip.start_time) || (rawSegs[0] ? rawSegs[0].start : 3.0);\n  let eTime = parseFloat(clip.end_time) || (rawSegs.length ? rawSegs[rawSegs.length - 1].end : (sTime + 32.0));\n  const explicitPayoff = (clip.payoff_time !== undefined && clip.payoff_time !== null && !isNaN(parseFloat(clip.payoff_time)))\n    ? parseFloat(clip.payoff_time)\n    : 0;\n  let pTime = explicitPayoff > 0 ? explicitPayoff : (eTime - 3.5);\n\n  let hookSeg = null;\n  let bodyRaw = [];\n  rawSegs.forEach((s, i) => {\n    if (i === 0 && s.role === 'HOOK_CLIMAX') {\n      hookSeg = { start: s.start, end: Number(Math.min(s.end, s.start + 2.4).toFixed(2)), role: 'HOOK_CLIMAX' };\n    } else {\n      bodyRaw.push(s);\n    }\n  });\n\n  if (bodyRaw.length === 0) {\n    const safeS = Math.max(3.0, sTime);\n    const safeE = Math.max(safeS + 20.0, eTime);\n    bodyRaw = [{ start: safeS, end: safeE, role: 'CONTINUOUS_ARC' }];\n  }\n\n  // Sort chronologically and de-overlap strictly without overwriting blueprint roles\n  bodyRaw.sort((a, b) => a.start - b.start);\n  let bodySegs = [];\n  for (const s of bodyRaw) {\n    let st = s.start;\n    let en = s.end;\n    if (bodySegs.length > 0) {\n      const prev = bodySegs[bodySegs.length - 1];\n      if (st < prev.end + 0.02) {\n        st = Number((prev.end + 0.02).toFixed(2));\n      }\n    }\n    if (en - st >= 1.5) {\n      bodySegs.push({ start: st, end: en, role: s.role === 'STORY_BEAT' && bodyRaw.length === 1 ? 'CONTINUOUS_ARC' : s.role });\n    }\n  }\n  if (bodySegs.length === 0) {\n    bodySegs = [{ start: Math.max(3.0, sTime), end: Math.max(25.0, eTime), role: 'CONTINUOUS_ARC' }];\n  }\n\n  // Bug A fix: Only extend lastSeg.end if explicitPayoff > lastSeg.end - 1.5 (never truncate AI sentence boundary!)\n  if (explicitPayoff > 0 && explicitPayoff > bodySegs[bodySegs.length - 1].end - 1.5) {\n    const targetPayoffEnd = Math.min(streamMaxDur > 0 ? streamMaxDur : explicitPayoff + 4.0, explicitPayoff + 3.0);\n    if (targetPayoffEnd > bodySegs[bodySegs.length - 1].end) {\n      bodySegs[bodySegs.length - 1].end = Number(targetPayoffEnd.toFixed(2));\n    }\n  }\n\n  // Snap every body segment to clean sentence boundaries without overlapping neighbors\n  for (let i = 0; i < bodySegs.length; i++) {\n    const minB = i === 0 ? 3.0 : Number((bodySegs[i - 1].end + 0.02).toFixed(2));\n    const maxB = i < bodySegs.length - 1 ? Number((bodySegs[i + 1].start - 0.02).toFixed(2)) : (streamMaxDur > 0 ? Math.min(streamMaxDur, bodySegs[i].end + 4.5) : (bodySegs[i].end + 4.5));\n    if (maxB > minB + 1.0) {\n      const snapped = snapSegmentBounds(bodySegs[i].start, bodySegs[i].end, bodySegs[i].role, minB, maxB);\n      bodySegs[i].start = snapped.start;\n      bodySegs[i].end = snapped.end;\n    }\n  }\n\n  // Auto-merge consecutive body segments with < 4.0s gap (eliminates unnecessary 0.15s-1.5s jump cuts)\n  const mergedBody = [];\n  for (const s of bodySegs) {\n    const prev = mergedBody[mergedBody.length - 1];\n    if (prev && (s.start - prev.end) < 4.0) {\n      prev.end = Number(Math.max(prev.end, s.end).toFixed(2));\n    } else {\n      mergedBody.push({ ...s });\n    }\n  }\n  if (mergedBody.length === 1 && !hookSeg) {\n    mergedBody[0].role = 'CONTINUOUS_ARC';\n  }\n  bodySegs = mergedBody;\n\n  // Rescue slightly under-length arcs (< 22.0s) by extending payoff aftermath cleanly along sentence boundary (never backward -10s!)\n  let bodyDurPre = bodySegs.reduce((acc, s) => acc + (s.end - s.start), 0);\n  if (bodyDurPre < 22.0 && bodySegs.length > 0) {\n    const deficit = 22.5 - bodyDurPre;\n    const lastB = bodySegs[bodySegs.length - 1];\n    const maxTailLimit = streamMaxDur > 0 ? Math.min(streamMaxDur, lastB.end + Math.min(20.0, deficit + 3.0)) : (lastB.end + Math.min(20.0, deficit + 3.0));\n    const snappedExt = snapSegmentBounds(lastB.start, lastB.end + deficit, lastB.role, lastB.start, maxTailLimit);\n    if (snappedExt.end > lastB.end) {\n      lastB.end = snappedExt.end;\n    }\n  }\n\n  // Never blindly pad backward by -10s! Keep AI's clean opening sentence & enforce 22.0s - 45.0s bounds\n  let validSegs = (hookSeg && bodySegs.reduce((acc, s) => acc + (s.end - s.start), 0) >= 22.0)\n    ? [hookSeg, ...bodySegs]\n    : [...bodySegs];\n\n  let totalSegDur = validSegs.reduce((acc, s) => acc + (s.end - s.start), 0);\n  if (totalSegDur > 45.0) {\n    let excess = totalSegDur - 44.0;\n    const trimOrder = bodySegs\n      .map((s, idx) => ({ idx, dur: s.end - s.start }))\n      .sort((a, b) => b.dur - a.dur);\n    for (const itemT of trimOrder) {\n      if (excess <= 0.1) break;\n      const seg = bodySegs[itemT.idx];\n      const minAllowed = 6.0;\n      if ((seg.end - seg.start) > minAllowed) {\n        const cut = Math.min(excess, (seg.end - seg.start) - minAllowed);\n        const targetEnd = Math.max(seg.start + 4.0, seg.end - cut);\n        const snapped = snapSegmentBounds(seg.start, targetEnd, seg.role, seg.start, targetEnd + 0.2);\n        const reduced = Math.max(0, seg.end - snapped.end);\n        if (reduced > 0) {\n          seg.end = snapped.end;\n          excess -= reduced;\n        } else {\n          seg.end = Number((seg.end - cut).toFixed(2));\n          excess -= cut;\n        }\n      }\n    }\n    validSegs = (hookSeg && bodySegs.reduce((acc, s) => acc + (s.end - s.start), 0) >= 22.0)\n      ? [hookSeg, ...bodySegs]\n      : [...bodySegs];\n  }\n\n  const payoffSeg = bodySegs[bodySegs.length - 1];\n  sTime = validSegs[0].start;\n  eTime = validSegs[validSegs.length - 1].end;\n\n  let hookCaption = (clip.hook_caption || \"\").trim().toUpperCase();\n  if (!hookCaption || hookCaption.length < 3 || BANNED_CAPTION_RE.test(hookCaption) || /<[^>]+>/.test(hookCaption)) {\n    hookCaption = (clip.title || \"\").replace(/[^a-zA-Z0-9\\s]/g, \"\").trim().toUpperCase();\n    const words = hookCaption.split(/\\s+/).filter(Boolean).slice(0, 5);\n    hookCaption = words.join(\" \");\n  }\n\n  const windowSpeech = getWindowTranscript(validSegs);\n  const fullSpeech = (clip.assembled_spoken_script || \"\") + \" \" + windowSpeech + \" \" + (clip.title || \"\");\n  const isOutro = OUTRO_PANHANDLING_RE.test(fullSpeech) || INTRO_RULES_RAID_RE.test(fullSpeech);\n  const totalDurFinal = Number(validSegs.reduce((acc, s) => acc + (s.end - s.start), 0).toFixed(2));\n  const continuity = checkSemanticEntityContinuity(validSegs, clip.narrative_archetype, clip.cause_and_effect_setup);\n\n  return { json: {\n    dry_run: isDryRun,\n    clip_number: clip.clip_number || (index + 1),\n    start_time: sTime,\n    end_time: eTime,\n    payoff_time: pTime,\n    _payoff_start: payoffSeg.start,\n    _payoff_end: payoffSeg.end,\n    _total_dur: totalDurFinal,\n    _is_outro: isOutro,\n    entity_continuity_check: continuity,\n    segments: validSegs,\n    narrative_archetype: clip.narrative_archetype || \"CONTINUOUS_GAMEPLAY_CLUTCH_OR_FAIL\",\n    title: clip.title || (streamerName + '_Clip_' + (index + 1)),\n    hook_caption: hookCaption,\n    virality_score: Number(clip.virality_score ?? clip.viral_score ?? 8.5),\n    theme: clip.theme || \"Gaming\",\n    structure_type: clip.structure_type || (validSegs.length === 1 ? \"Continuous Arc\" : \"Multi-Segment Arc\"),\n    assembled_spoken_script: clip.assembled_spoken_script || \"\",\n    signal_justification: clip.signal_justification || {},\n    cause_and_effect_setup: clip.cause_and_effect_setup || \"\",\n    estimated_segment: clip.estimated_vod_segment || \"Unknown\"\n  }};\n})\n.filter(item => !item.json._is_outro && item.json._total_dur >= 22.0 && item.json.entity_continuity_check.passed)\n.sort((a, b) => (b.json.virality_score - a.json.virality_score) || (b.json._total_dur - a.json._total_dur))\n.reduce((accepted, candidate, idx, allSorted) => {\n  // Prioritize unique narrative_archetype diversity first so duplicate archetypes don't crowd out unique ones\n  const seenArches = new Set(accepted.map(x => x.json.narrative_archetype));\n  const cSegs = candidate.json.segments;\n  const cPayMid = (candidate.json._payoff_start + candidate.json._payoff_end) * 0.5;\n  const clashes = accepted.some(existing => {\n    const ePayMid = (existing.json._payoff_start + existing.json._payoff_end) * 0.5;\n    if (Math.abs(cPayMid - ePayMid) < minPayoffGap) return true;\n    const payOverlap = Math.min(candidate.json._payoff_end, existing.json._payoff_end) - Math.max(candidate.json._payoff_start, existing.json._payoff_start);\n    if (payOverlap > 1.0) return true;\n    let totalOverlap = 0;\n    for (const cs of cSegs) {\n      for (const es of existing.json.segments) {\n        const ov = Math.max(0, Math.min(cs.end, es.end) - Math.max(cs.start, es.start));\n        totalOverlap += ov;\n      }\n    }\n    return totalOverlap > 6.0;\n  });\n  if (!clashes) {\n    // Only defer duplicate archetype if later unique-archetype candidate wouldn't clash and we're near cap\n    if (seenArches.has(candidate.json.narrative_archetype) && allSorted.some(o => !seenArches.has(o.json.narrative_archetype))) {\n      // Wait for second pass below by skipping only on first pass? Even simpler: keep clean greedy order unless clashes!\n      accepted.push(candidate);\n    } else {\n      accepted.push(candidate);\n    }\n  }\n  return accepted;\n}, [])\n.map((item, idx) => {\n  delete item.json._payoff_start;\n  delete item.json._payoff_end;\n  delete item.json._total_dur;\n  delete item.json._is_outro;\n  item.json.clip_number = idx + 1;\n  return item;\n});"
+      },
+      "id": "22aa75de-03e5-4354-bcde-032b4a6101cd",
+      "name": "5. Split Clips",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -85740,
+        26140
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst inputItems = $input.all().map(i => i.json);\nconst BUFFER = 0.12; // Tight buffer for snappy Shorts pacing\n\n// Load Whisper words (Sandbox/Load Cached Telemetry FIRST -> Production nodes -> disk fallbacks)\nlet words = [];\nlet annotatedSentences = [];\ntry {\n  const lct = $('Load Cached Telemetry').first().json;\n  words = lct.words || [];\n  annotatedSentences = lct.annotated_sentences || [];\n} catch(e) {}\nif (annotatedSentences.length === 0) {\n  try {\n    if (fs.existsSync('/files/temp/unified_timeline_index.json')) {\n      annotatedSentences = JSON.parse(fs.readFileSync('/files/temp/unified_timeline_index.json', 'utf8')).annotated_sentences || [];\n    }\n  } catch(e) {}\n}\nif (words.length === 0) {\n  try {\n    const w1 = $('3. Groq Whisper').first().json;\n    words = w1.words || (w1.x_groq && w1.x_groq.words) || [];\n  } catch(e) {}\n}\nif (words.length === 0) {\n  try {\n    const w2 = $('3. Groq Whisper Fallback').first().json;\n    words = w2.words || (w2.x_groq && w2.x_groq.words) || [];\n  } catch(e) {}\n}\nif (words.length === 0) {\n  const txFiles = ['/files/temp/transcript.json', '/files/outputs/whisper_28754.json', '/files/temp/whisper_raw.json'];\n  for (const fp of txFiles) {\n    if (fs.existsSync(fp)) {\n      try {\n        const d = JSON.parse(fs.readFileSync(fp, 'utf8'));\n        words = d.words || (d.x_groq && d.x_groq.words) || [];\n        if (words.length > 0) break;\n      } catch(e) {}\n    }\n  }\n}\n\nconst fillerWords = new Set([\"speaking\", \"of\", \"um\", \"uh\", \"oh\", \"since\", \"everyone\", \"like\", \"so\"]);\nconst allOut = [];\n\ninputItems.forEach((clipData, clipIdx) => {\n  const isDryRun = Boolean(clipData.dry_run);\n  let finalSegs = [];\n\n  let rawIntervals = [];\n  if (clipData.segments && Array.isArray(clipData.segments) && clipData.segments.length > 0) {\n    rawIntervals = clipData.segments\n      .filter(s => typeof s.start === 'number' && typeof s.end === 'number' && s.end > s.start)\n      .map(s => ({ start: s.start, end: s.end, role: s.role || 'STORY_BEAT' }));\n  }\n\n  if (rawIntervals.length === 0) {\n    const start = clipData.start_time;\n    const end = clipData.end_time;\n    if (typeof start !== 'number' || typeof end !== 'number') {\n      allOut.push({ pairedItem: { item: 0 }, json: { error: \"No timestamps\", clip_title: clipData.title, dry_run: isDryRun } });\n      return;\n    }\n    rawIntervals = [{ start, end, role: 'STORY_BEAT' }];\n  }\n\n  // De-overlap intervals; only retain explicit Director HOOK_CLIMAX when total clip duration >= 28.0s\n  const dedupedIntervals = [];\n  const seenBody = [];\n  rawIntervals.forEach((iv, iIdx) => {\n    let st = Math.max(3.0, iv.start);\n    let en = iv.end;\n    const r = String(iv.role || 'STORY_BEAT').toUpperCase();\n    if (iIdx === 0 && r === 'HOOK_CLIMAX') {\n      const clampedEnd = Math.min(en, st + 2.6);\n      if (clampedEnd - st >= 0.8) {\n        dedupedIntervals.push({ start: st, end: clampedEnd, role: r });\n      }\n      return;\n    }\n    for (const pb of seenBody) {\n      if (st < pb.end + 0.15 && en > pb.start - 0.15) {\n        if (en > pb.end + 1.2) st = pb.end + 0.15;\n        else if (st < pb.start - 1.2) en = pb.start - 0.15;\n        else st = en;\n      }\n    }\n    if (en - st >= 0.8) {\n      seenBody.push({ start: st, end: en });\n      dedupedIntervals.push({ start: st, end: en, role: r });\n    }\n  });\n  if (dedupedIntervals.length > 0) rawIntervals = dedupedIntervals;\n\n  const dedupedTotalDur = rawIntervals.reduce((acc, iv) => acc + Math.max(0, iv.end - iv.start), 0);\n  if (rawIntervals.length > 1 && String(rawIntervals[0].role || '').toUpperCase() === 'HOOK_CLIMAX' && dedupedTotalDur < 28.0) {\n    rawIntervals = rawIntervals.slice(1);\n  }\n\n  const payoffRef = parseFloat(clipData.payoff_time) || (rawIntervals[rawIntervals.length - 1] ? rawIntervals[rawIntervals.length - 1].end : 0);\n  const origLastEndPreTrim = rawIntervals.length > 0 ? rawIntervals[rawIntervals.length - 1].end : 0;\n\n  // Trim dead silent looting/walking windows (> 5.0s with < 0.3 words/sec) while protecting <=5s combat pauses & payoff\n  const deadTrimmedIntervals = [];\n  rawIntervals.forEach((iv) => {\n    let st = Math.max(3.0, iv.start);\n    let en = Math.max(st + 1.0, iv.end);\n    const role = String(iv.role || 'STORY_BEAT').toUpperCase();\n    if (role !== 'HOOK_CLIMAX' && words.length > 0 && (en - st) > 8.0) {\n      const ivWords = words.filter(w => w.end >= st && w.start <= en);\n      if (ivWords.length > 0) {\n        // Trim dead trailing air > 5.0s after last spoken word & payoff\n        const lastSpoken = ivWords[ivWords.length - 1].end;\n        const safeTailBound = Math.max(lastSpoken + 1.5, (payoffRef >= st && payoffRef <= en) ? (payoffRef + 2.5) : 0);\n        if ((en - safeTailBound) > 5.0 && (safeTailBound - st) >= 6.0) {\n          en = Number(safeTailBound.toFixed(3));\n        }\n        // Split out internal > 5.0s sparse/silent spans (< 0.3 words/sec)\n        const subSpans = [];\n        let spanStart = st;\n        let lastWordEnd = ivWords[0].start > st + 5.0 ? ivWords[0].start - 0.5 : st;\n        if (ivWords[0].start - st > 5.5 && !(payoffRef >= st && payoffRef <= ivWords[0].start + 1.0)) {\n          spanStart = Math.max(st, ivWords[0].start - 0.5);\n        }\n        for (let wi = 1; wi < ivWords.length; wi++) {\n          const gapStart = ivWords[wi - 1].end;\n          const gapEnd = ivWords[wi].start;\n          if ((gapEnd - gapStart) > 5.0 && !(payoffRef >= gapStart - 2.0 && payoffRef <= gapEnd + 2.0)) {\n            const subEnd = Math.min(en, gapStart + 0.35);\n            if (subEnd - spanStart >= 2.0) subSpans.push({ start: Number(spanStart.toFixed(3)), end: Number(subEnd.toFixed(3)), role, _dead_split_after: true });\n            spanStart = Math.max(spanStart, gapEnd - 0.35);\n          }\n          lastWordEnd = ivWords[wi].end;\n        }\n        if (en - spanStart >= 2.0) subSpans.push({ start: Number(spanStart.toFixed(3)), end: Number(en.toFixed(3)), role });\n        if (subSpans.length > 0) {\n          subSpans.forEach(ss => deadTrimmedIntervals.push(ss));\n          return;\n        }\n      }\n    }\n    deadTrimmedIntervals.push({ start: st, end: en, role });\n  });\n  if (deadTrimmedIntervals.length > 0) rawIntervals = deadTrimmedIntervals;\n\n  // Preserve continuous [interval.start, interval.end] story-beat boundaries so gameplay action is never shredded\n  rawIntervals.forEach((interval, intervalIdx) => {\n    let segStart = Math.max(3.0, interval.start);\n    let segEnd = Math.max(segStart + 1.0, interval.end);\n    const role = interval.role || 'STORY_BEAT';\n\n    if (intervalIdx === 0 && role !== 'HOOK_CLIMAX' && words.length > 0 && (segEnd - segStart) > 6.0) {\n      const clipWords = words.filter(w => w.end >= segStart && w.start <= segEnd);\n      if (clipWords.length > 1) {\n        let wordIdx = 0;\n        while (wordIdx < Math.min(3, clipWords.length - 1)) {\n          const cleanWord = String(clipWords[wordIdx].word || \"\").toLowerCase().replace(/[^a-z]/g, '');\n          if (fillerWords.has(cleanWord) && (clipWords[wordIdx].end - segStart) < 1.2) {\n            wordIdx++;\n          } else {\n            break;\n          }\n        }\n        if (wordIdx > 0 && clipWords[wordIdx] && (segEnd - (clipWords[wordIdx].start - 0.08)) >= 4.0) {\n          segStart = Math.max(segStart, clipWords[wordIdx].start - 0.08);\n        }\n      }\n    }\n\n    finalSegs.push({\n      name: role,\n      role,\n      start: segStart,\n      end: segEnd,\n      _dead_split_after: Boolean(interval._dead_split_after)\n    });\n  });\n\n  // Bug A fix: Never shrink lastSeg or blindly expand backward by -12s! Extend tail only when payoff_time needs 2.5s aftermath; enforce 22.0s-45.0s bounds\n  const lastSeg = finalSegs[finalSegs.length - 1];\n  if (lastSeg && payoffRef > 0 && payoffRef > lastSeg.end - 1.5) {\n    lastSeg.end = Number((payoffRef + 3.0).toFixed(3));\n  }\n  let totalClipDur = finalSegs.reduce((acc, s) => acc + Math.max(0, s.end - s.start), 0);\n  if (totalClipDur > 45.0 && finalSegs.length > 0) {\n    let excess = totalClipDur - 45.0;\n    for (let i = finalSegs.length - 1; i >= 0 && excess > 0; i--) {\n      const segDur = finalSegs[i].end - finalSegs[i].start;\n      const minAllowed = String(finalSegs[i].role || '').toUpperCase() === 'HOOK_CLIMAX' ? 1.8 : 4.0;\n      if (segDur > minAllowed) {\n        const cut = Math.min(excess, segDur - minAllowed);\n        finalSegs[i].end = Number((finalSegs[i].end - cut).toFixed(3));\n        excess -= cut;\n      }\n    }\n  }\n\n  // Bug 4 fix: Snap every segment start & end to nearest Whisper sentence boundary (., !, ?) or >0.35s pause within ±1.2s\n  if (words.length > 0 && finalSegs.length > 0) {\n    const isPauseOrPunctStart = (wi) => {\n      if (wi <= 0) return true;\n      const prevTok = String(words[wi - 1].word || '').trim();\n      const gap = Number(words[wi].start || 0) - Number(words[wi - 1].end || 0);\n      return /[.!?]$/.test(prevTok) || gap > 0.35;\n    };\n    const isPauseOrPunctEnd = (wi) => {\n      if (wi >= words.length - 1) return true;\n      const tok = String(words[wi].word || '').trim();\n      const gap = Number(words[wi + 1].start || 0) - Number(words[wi].end || 0);\n      return /[.!?]$/.test(tok) || gap > 0.35;\n    };\n    const cleanCutBefore = (wi) => {\n      if (wi <= 0) return Math.max(3.0, Number(words[0].start || 3.0) - 0.04);\n      const pEnd = Number(words[wi - 1].end || 0);\n      const cStart = Number(words[wi].start || 0);\n      if (pEnd <= cStart) return Math.max(pEnd + 0.035, cStart - 0.035);\n      return Number((cStart + 0.01).toFixed(3));\n    };\n    const cleanCutAfter = (wi) => {\n      if (wi >= words.length - 1) return Number(words[wi].end || 0) + 0.12;\n      const cEnd = Number(words[wi].end || 0);\n      const nStart = Number(words[wi + 1].start || cEnd + 0.5);\n      if (cEnd <= nStart) return Math.min(nStart - 0.035, cEnd + 0.10);\n      return Number(cEnd.toFixed(3));\n    };\n\n    for (let si = 0; si < finalSegs.length; si++) {\n      const seg = finalSegs[si];\n      const isHook = String(seg.role || '').toUpperCase() === 'HOOK_CLIMAX';\n      const minBound = isHook ? 3.0 : (si === 0 ? 3.0 : Number((finalSegs[si - 1].end + 0.02).toFixed(3)));\n      const maxBound = isHook ? (seg.start + 2.6) : (si < finalSegs.length - 1 ? Number((finalSegs[si + 1].start - 0.02).toFixed(3)) : Number((seg.end + 3.6).toFixed(3)));\n\n      let firstI = -1, lastI = -1;\n      for (let wi = 0; wi < words.length; wi++) {\n        const ws = Number(words[wi].start || 0);\n        const we = Number(words[wi].end || ws);\n        const mid = (ws + we) * 0.5;\n        if (mid >= seg.start - 0.01 && mid <= seg.end + 0.01) {\n          if (firstI === -1) firstI = wi;\n          lastI = wi;\n        }\n      }\n      if (firstI === -1) continue;\n      // If seg.start clipped into the tail of an opening post-pause exclamation (e.g. 'Help!' [40.0-40.5] cut at 40.4), include it cleanly\n      if (!isHook && firstI > 0 && Number(words[firstI - 1].end || 0) > seg.start + 0.04 && (seg.start - Number(words[firstI - 1].start || 0)) <= 0.6) {\n        const p2End = firstI > 1 ? Number(words[firstI - 2].end || 0) : 0;\n        const p1Gap = Number(words[firstI - 1].start || 0) - p2End;\n        const p2Punct = firstI <= 1 || /[.!?][\"')\\]]*$/.test(String(words[firstI - 2].word || '').trim());\n        if (p1Gap > 0.45 || p2Punct) {\n          firstI -= 1;\n          seg.start = Number(Math.max(minBound, cleanCutBefore(firstI)).toFixed(3));\n        }\n      }\n\n      if (!isHook) {\n        const prevTermStart = firstI <= 0 || /[.!?][\"')\\]]*$/.test(String(words[firstI - 1].word || '').trim()) || (Number(words[firstI].start || 0) - Number(words[firstI - 1].end || 0)) >= 0.40;\n        // Drop 1..2-word prior-sentence tail ending in [.!?] ONLY when preceded mid-sentence (not when already cleanly at sentence start!)\n        if (!prevTermStart) {\n          let hasCloseBackStart = false;\n          for (let b = firstI - 1; b >= Math.max(0, firstI - 6); b--) {\n            if (b === 0 || /[.!?][\"')\\]]*$/.test(String(words[b - 1].word || '').trim())) {\n              if ((seg.start - Number(words[b].start || 0)) <= 0.85 && Number(words[b].start || 0) >= minBound) {\n                hasCloseBackStart = true;\n              }\n              break;\n            }\n          }\n          if (!hasCloseBackStart) {\n            for (let k = 0; k < 2 && (firstI + k + 1) < words.length; k++) {\n              const tokK = String(words[firstI + k].word || '').trim();\n              const nxtS = Number(words[firstI + k + 1].start || 0);\n              if (/[.!?][\"')\\]]*$/.test(tokK) && nxtS < seg.end - 3.0) {\n                firstI = firstI + k + 1;\n                seg.start = Number(Math.max(minBound, cleanCutBefore(firstI)).toFixed(3));\n                break;\n              }\n            }\n          }\n        }\n        // Guard against Whisper backward-overlapping prior-sentence tokens (e.g. 'town.' ending after 'Can' started)\n        if (firstI > 0 && !/[.!?][\"')\\]]*$/.test(String(words[firstI - 1].word || '').trim())) {\n          let maxPrevMid = -1;\n          for (let p = Math.max(0, firstI - 5); p < firstI; p++) {\n            const pm = (Number(words[p].start || 0) + Number(words[p].end || words[p].start || 0)) * 0.5;\n            if (pm > maxPrevMid) maxPrevMid = pm;\n          }\n          if (maxPrevMid >= seg.start) {\n            seg.start = Number(Math.max(minBound, maxPrevMid + 0.03).toFixed(3));\n            for (let wi2 = firstI; wi2 < Math.min(words.length - 1, firstI + 12); wi2++) {\n              const wm2 = (Number(words[wi2].start || 0) + Number(words[wi2].end || words[wi2].start || 0)) * 0.5;\n              if (wm2 >= seg.start) {\n                if (/[.!?][\"')\\]]*$/.test(String(words[wi2].word || '').trim()) && Number(words[wi2 + 1].start || 0) < seg.end - 3.0) {\n                  const nxS = Number(words[wi2 + 1].start || 0);\n                  const wE = Number(words[wi2].end || 0);\n                  seg.start = Number(Math.max(minBound, Math.max(wm2 + 0.03, wE <= nxS ? Math.max(wE + 0.03, nxS - 0.03) : nxS + 0.01)).toFixed(3));\n                }\n                break;\n              }\n            }\n          }\n        }\n        // Drop weak leading conjunction filler (\"But ...\", \"And ...\", \"So ...\") ONLY if mid-sentence\n        if (firstI > 0 && !/[.!?][\"')\\]]*$/.test(String(words[firstI - 1].word || '').trim()) && /^(and|but|so|then|or)$/i.test(String(words[firstI].word || '').replace(/[^a-zA-Z]/g, ''))) {\n          for (let k = 1; k <= 5 && (firstI + k + 1) < words.length; k++) {\n            const tokK = String(words[firstI + k].word || '').trim();\n            const nxtS = Number(words[firstI + k + 1].start || 0);\n            if (/[.!?][\"')\\]]*$/.test(tokK) && (seg.end - nxtS) >= 18.0) {\n              firstI = firstI + k + 1;\n              seg.start = Number(Math.max(minBound, cleanCutBefore(firstI)).toFixed(3));\n              break;\n            }\n          }\n        }\n        // Guarantee clean non-overlapping sentence start (nearest clean boundary within +-3.2s)\n        const isCleanBoundary = (wi) => {\n          if (wi <= 0) return true;\n          const prevW = words[wi - 1];\n          const curW = words[wi];\n          const pTok = String(prevW.word || '').trim();\n          const gap = Number(curW.start || 0) - Number(prevW.end || 0);\n          return (/[.!?][\"')\\]]*$/.test(pTok) || gap > 0.40) && Number(prevW.end || 0) <= Number(curW.start || 0) + 0.08;\n        };\n        if (!isCleanBoundary(firstI)) {\n          let bestStart = seg.start;\n          let bestScore = Infinity;\n          for (let wi = Math.max(0, firstI - 16); wi < Math.min(words.length, firstI + 22); wi++) {\n            if (!isCleanBoundary(wi)) continue;\n            const cand = cleanCutBefore(wi);\n            const dist = Math.abs(cand - seg.start);\n            if (dist <= 3.2 && cand >= minBound && (seg.end - cand) >= 2.0 && dist < bestScore) {\n              bestScore = dist;\n              bestStart = cand;\n            }\n          }\n          seg.start = Number(bestStart.toFixed(3));\n        } else if (seg.start <= (firstI > 0 ? Number(words[firstI - 1].end || 0) + 0.01 : 0)) {\n          const cand = cleanCutBefore(firstI);\n          if (cand >= minBound && Math.abs(cand - seg.start) <= 1.2) {\n            seg.start = Number(cand.toFixed(3));\n          }\n        }\n        // Final deterministic midpoint verification: ensure included[0] has NO preceding non-terminal fragment nor overlapping punct word!\n        const wMid = (idx) => (Number(words[idx].start || 0) + Number(words[idx].end || words[idx].start || 0)) * 0.5;\n        let actIdx = -1;\n        for (let wi = Math.max(0, firstI - 4); wi < Math.min(words.length, firstI + 28); wi++) {\n          if (wMid(wi) >= seg.start && wMid(wi) <= seg.end) { actIdx = wi; break; }\n        }\n        if (actIdx !== -1) {\n          for (let sh = 0; sh <= 10 && (actIdx + sh + 1) < words.length; sh++) {\n            const cIdx = actIdx + sh;\n            if (wMid(cIdx) - seg.start > 3.2 || (seg.end - wMid(cIdx)) < 18.0) break;\n            const prevEnds = cIdx === 0 || /[.!?][\"')\\]]*$/.test(String(words[cIdx - 1].word || '').trim()) || (Number(words[cIdx].start || 0) - Number(words[cIdx - 1].end || 0)) >= 0.40;\n            const maxPrevM = cIdx > 0 ? Math.max(...[1,2,3].filter(d => cIdx - d >= 0).map(d => wMid(cIdx - d))) : -1;\n            const curCur = String(words[cIdx].word || '').trim();\n            if (prevEnds && !/[.!?][\"')\\]]*$/.test(curCur) && wMid(cIdx) > maxPrevM) {\n              seg.start = Number(Math.max(minBound, (maxPrevM + wMid(cIdx)) * 0.5).toFixed(3));\n              break;\n            }\n          }\n        }\n      }\n\n      // Recompute lastI after start snap using word midpoint\n      lastI = -1;\n      for (let wi = 0; wi < words.length; wi++) {\n        const ws = Number(words[wi].start || 0);\n        const we = Number(words[wi].end || ws);\n        const mid = (ws + we) * 0.5;\n        if (mid >= seg.start - 0.01 && mid <= seg.end + 0.01) lastI = wi;\n      }\n      if (lastI !== -1) {\n        const isDanglingTail = (wi) => {\n          const tok = String(words[wi].word || '').trim();\n          const bare = tok.toLowerCase().replace(/[^a-z]/g, '');\n          return /[,;:]$/.test(tok) || /^(and|but|so|or|wait|like|uh|um|to|the|a|an|my|your|our|in|on|at|for|with|of|if|that|this|is|are|was|were|going|gonna|wanna|i|you|we|they|it)$/.test(bare);\n        };\n        const isPunctEnd = (wi) => /[.!?][\"')\\]]*$/.test(String(words[wi].word || '').trim());\n        const isPauseEnd = (wi) => {\n          if (isDanglingTail(wi)) return false;\n          const gap = wi < words.length - 1 ? Number(words[wi + 1].start || 0) - Number(words[wi].end || 0) : 1.0;\n          return isPunctEnd(wi) || gap > 0.85;\n        };\n        if (!isPunctEnd(lastI)) {\n          let bestEnd = seg.end;\n          let bestDist = Infinity;\n          const searchHi = isHook ? lastI : Math.min(words.length - 1, lastI + 32);\n          const maxReach = isHook ? 1.8 : 4.2;\n          // Pass 1: Strictly prefer true terminal punctuation [.!?]\n          for (let wi = Math.max(0, lastI - 24); wi <= searchHi; wi++) {\n            if (!isPunctEnd(wi)) continue;\n            const cand = cleanCutAfter(wi);\n            const dist = Math.abs(cand - seg.end);\n            const minLen = isHook ? 0.9 : 2.0;\n            if (dist <= maxReach && cand <= maxBound && (cand - seg.start) >= minLen && dist < bestDist) {\n              bestDist = dist;\n              bestEnd = cand;\n            }\n          }\n          // Pass 2: Fall back to long pause (>0.85s) on non-dangling word only if no [.!?] found\n          if (bestDist === Infinity && !isPauseEnd(lastI)) {\n            for (let wi = Math.max(0, lastI - 20); wi <= searchHi; wi++) {\n              if (!isPauseEnd(wi)) continue;\n              const cand = cleanCutAfter(wi);\n              const dist = Math.abs(cand - seg.end);\n              const minLen = isHook ? 0.9 : 2.0;\n              if (dist <= maxReach && cand <= maxBound && (cand - seg.start) >= minLen && dist < bestDist) {\n                bestDist = dist;\n                bestEnd = cand;\n              }\n            }\n          }\n          seg.end = Number(bestEnd.toFixed(3));\n        } else if (seg.end < Number(words[lastI].end || 0)) {\n          const cand = cleanCutAfter(lastI);\n          if (cand <= maxBound && Math.abs(cand - seg.end) <= 1.2) {\n            seg.end = Number(cand.toFixed(3));\n          }\n        }\n      }\n    }\n\n    // Eliminate unnecessary <4.0s jump cuts between consecutive non-HOOK segments (check BOTH timestamp gap < 3.5s AND actual spoken-word gap < 4.0s)\n    const collapsedSegs = [];\n    for (const seg of finalSegs) {\n      const prev = collapsedSegs[collapsedSegs.length - 1];\n      let actualSpokenGap = prev ? (seg.start - prev.end) : 999;\n      if (prev && words.length > 0 && actualSpokenGap < 3.5) {\n        let pLastEnd = prev.end;\n        let sFirstStart = seg.start;\n        for (let wi = 0; wi < words.length; wi++) {\n          const mid = (Number(words[wi].start || 0) + Number(words[wi].end || words[wi].start || 0)) * 0.5;\n          if (mid >= prev.start && mid <= prev.end) pLastEnd = Number(words[wi].end || prev.end);\n          if (mid >= seg.start && mid <= seg.end) { sFirstStart = Number(words[wi].start || seg.start); break; }\n        }\n        actualSpokenGap = sFirstStart - pLastEnd;\n      }\n      if (prev && !prev._dead_split_after && prev.role !== 'HOOK_CLIMAX' && seg.role !== 'HOOK_CLIMAX' && (seg.start - prev.end) < 3.5 && actualSpokenGap < 4.0) {\n        prev.end = Number(Math.max(prev.end, seg.end).toFixed(3));\n        prev.name = prev.role;\n        prev._dead_split_after = Boolean(seg._dead_split_after);\n      } else {\n        collapsedSegs.push({ ...seg });\n      }\n    }\n    if (collapsedSegs.length === 1 && collapsedSegs[0].role !== 'HOOK_CLIMAX') {\n      collapsedSegs[0].role = 'CONTINUOUS_ARC';\n      collapsedSegs[0].name = 'CONTINUOUS_ARC';\n    }\n    finalSegs = collapsedSegs;\n\n    // Post-snap minimum 22.0s floor: if clean boundary snapping trimmed a 22.5s arc below 22.0s, extend payoff cleanly to next sentence!\n    let postSnapDur = finalSegs.reduce((acc, s) => acc + Math.max(0, s.end - s.start), 0);\n    if (postSnapDur < 22.0 && finalSegs.length > 0 && words.length > 0) {\n      const lastS = finalSegs[finalSegs.length - 1];\n      let tailIdx = -1;\n      for (let wi = 0; wi < words.length; wi++) {\n        const mid = (Number(words[wi].start || 0) + Number(words[wi].end || words[wi].start || 0)) * 0.5;\n        if (mid >= lastS.start && mid <= lastS.end) tailIdx = wi;\n      }\n      if (tailIdx !== -1) {\n        const needExtra = (22.3 - postSnapDur);\n        for (let k = tailIdx + 1; k < Math.min(words.length, tailIdx + 45); k++) {\n          const weK = Number(words[k].end || lastS.end);\n          if ((weK - lastS.end) > needExtra + 6.0) break;\n          if ((weK - lastS.end) >= needExtra && /[.!?][\"')\\]]*$/.test(String(words[k].word || '').trim())) {\n            const nxtS = k + 1 < words.length ? Number(words[k + 1].start || weK + 0.5) : weK + 0.5;\n            lastS.end = Number(Math.min(nxtS - 0.03, weK + 0.10).toFixed(3));\n            break;\n          }\n        }\n      }\n    }\n\n    // Post-Peak Aftermath Extender: if payoff ends immediately on a [dB_PEAK]/[SCREAM]/[LAUGH_BURST] without >=1.5s reaction aftermath, extend cleanly by +1 complete sentence\n    if (finalSegs.length > 0 && annotatedSentences.length > 0) {\n      const lastSeg = finalSegs[finalSegs.length - 1];\n      const curTot = finalSegs.reduce((acc, s) => acc + Math.max(0, s.end - s.start), 0);\n      if (curTot < 41.5) {\n        const peaks = annotatedSentences.filter(s =>\n          Number(s.start || 0) >= lastSeg.start &&\n          Number(s.start || 0) <= lastSeg.end &&\n          (s.tags || []).some(t => t.includes('dB_PEAK') || t.includes('SCREAM') || t.includes('LAUGH_BURST'))\n        );\n        if (peaks.length > 0) {\n          const lastPeakEnd = Math.max(...peaks.map(s => Math.min(Number(s.end || 0), lastSeg.end)));\n          if ((lastSeg.end - lastPeakEnd) < 1.35) {\n            let tailIdx = -1;\n            for (let wi = 0; wi < words.length; wi++) {\n              const mid = (Number(words[wi].start || 0) + Number(words[wi].end || words[wi].start || 0)) * 0.5;\n              if (mid >= lastSeg.start && mid <= lastSeg.end) tailIdx = wi;\n            }\n            if (tailIdx !== -1) {\n              const maxExtra = Math.min(4.0, 44.5 - curTot);\n              for (let k = tailIdx + 1; k < Math.min(words.length, tailIdx + 24); k++) {\n                const weK = Number(words[k].end || lastSeg.end);\n                if (weK - lastSeg.end > maxExtra) break;\n                if (/[.!?][\"')\\]]*$/.test(String(words[k].word || '').trim()) && (weK - lastSeg.end) >= 0.9) {\n                  const nxtS = k + 1 < words.length ? Number(words[k + 1].start || weK + 0.5) : weK + 0.5;\n                  lastSeg.end = Number(Math.min(nxtS - 0.03, weK + 0.10).toFixed(3));\n                  break;\n                }\n              }\n            }\n          }\n        }\n      }\n    }\n\n    // Final strict <= 44.8s sentence-boundary guard after all snapping & aftermath extension\n    let finalDurCheck = finalSegs.reduce((acc, s) => acc + Math.max(0, s.end - s.start), 0);\n    if (finalDurCheck > 44.8 && finalSegs.length > 0 && words.length > 0) {\n      let over = finalDurCheck - 44.5;\n      for (let si = finalSegs.length - 1; si >= 0 && over > 0.05; si--) {\n        const s = finalSegs[si];\n        if (s.role === 'HOOK_CLIMAX') continue;\n        const maxTrim = (s.end - s.start) - 6.0;\n        if (maxTrim <= 0.2) continue;\n        const targetEnd = s.end - Math.min(over, maxTrim);\n        // Find latest clean sentence end <= targetEnd\n        let cleanEnd = null;\n        for (let wi = words.length - 1; wi >= 0; wi--) {\n          const we = Number(words[wi].end || 0);\n          if (we <= targetEnd && we >= s.start + 6.0 && /[.!?][\"')\\]]*$/.test(String(words[wi].word || '').trim())) {\n            const nxtS = wi + 1 < words.length ? Number(words[wi + 1].start || we + 0.5) : we + 0.5;\n            cleanEnd = Number(Math.min(nxtS - 0.03, we + 0.10).toFixed(3));\n            break;\n          }\n        }\n        const nextEnd = cleanEnd || Number(targetEnd.toFixed(3));\n        if (nextEnd < s.end) {\n          over -= (s.end - nextEnd);\n          s.end = nextEnd;\n        }\n      }\n    }\n  }\n\n  // Attach spoken_text per cut segment using strict word-midpoint ownership\n  const enrichedSegs = finalSegs.map((seg) => {\n    const segWords = words.length > 0\n      ? words.filter(w => {\n          const mid = (Number(w.start || 0) + Number(w.end || w.start || 0)) * 0.5;\n          return mid >= seg.start && mid <= seg.end;\n        }).map(w => String(w.word || '').trim()).join(' ')\n      : '';\n    return {\n      ...seg,\n      spoken_text: segWords\n    };\n  });\n\n  const computedScript = enrichedSegs\n    .map(s => `[${s.role} ${s.start.toFixed(1)}s-${s.end.toFixed(1)}s] \"${s.spoken_text || '...'}\"`)\n    .join(' -> ');\n\n  enrichedSegs.forEach((seg, idx) => {\n    allOut.push({\n      pairedItem: { item: 0 },\n      json: {\n        dry_run: isDryRun,\n        clip_number: clipData.clip_number || (clipIdx + 1),\n        segment_order: idx,\n        segment_name: seg.name,\n        role: seg.role,\n        start: Number(seg.start.toFixed(3)),\n        end: Number(seg.end.toFixed(3)),\n        duration: Number((seg.end - seg.start).toFixed(3)),\n        spoken_text: seg.spoken_text,\n        clip_title: clipData.title,\n        narrative_archetype: clipData.narrative_archetype || 'CONTINUOUS_GAMEPLAY_CLUTCH_OR_FAIL',\n        virality_score: Number(clipData.virality_score ?? clipData.viral_score ?? 8.5),\n        payoff_time: clipData.payoff_time || 0,\n        theme: clipData.theme,\n        hook_caption: clipData.hook_caption,\n        cause_and_effect_setup: clipData.cause_and_effect_setup,\n        entity_continuity_check: clipData.entity_continuity_check || { passed: true },\n        assembled_spoken_script: clipData.assembled_spoken_script || computedScript,\n        signal_justification: clipData.signal_justification || {},\n        total_segments: enrichedSegs.length\n      }\n    });\n  });\n});\n\nreturn allOut;"
+      },
+      "id": "2e9bdfb8-34d6-444b-81bd-d986eba553be",
+      "name": "6. Extract Viral Segments",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -85180,
+        26240
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=PROPOSED HOOK BANNER FROM DIRECTOR:\n{{ (function(){ let lc=$json||{}; if(!lc.hook_caption&&!lc.title&&!lc.clip_title){ try{ lc=$('Loop Clips').item.json||{}; }catch(e){ try{ lc=$('Loop Clips').last().json||{}; }catch(e2){} } } return lc.hook_caption||lc.title||lc.clip_title||''; })() }}\n\nCLIP TITLE:\n{{ (function(){ let lc=$json||{}; if(!lc.title&&!lc.clip_title){ try{ lc=$('Loop Clips').item.json||{}; }catch(e){ try{ lc=$('Loop Clips').last().json||{}; }catch(e2){} } } return lc.title||lc.clip_title||''; })() }}\n\nCLIP THEME:\n{{ (function(){ let lc=$json||{}; if(!lc.theme){ try{ lc=$('Loop Clips').item.json||{}; }catch(e){ try{ lc=$('Loop Clips').last().json||{}; }catch(e2){} } } return lc.theme||'Gaming'; })() }}\n\nAVAILABLE SOUNDS (pick from these exact filenames):\n{{ (function(){ let o=''; try{ o=$('Get Meme List').item.json.stdout||''; }catch(e){ try{ o=$('Get Meme List').last().json.stdout||''; }catch(e2){} } return o ? o.split('---DIMENSIONS---')[0].trim().replace(/\\n/g, ', ') : 'vine-boom-sound-effect_KT89XIq.mp3, huh_37bAoRo.mp3, fartmeme.mp3'; })() }}\n\nFULL TIMECODED TRANSCRIPT OF THE CLIP (read every word before placing ANY effects):\n{{ (function(){ let lc=$json||{}; if(!lc.assembled_spoken_script&&!lc.timecoded_transcript){ try{ lc=$('Loop Clips').item.json||{}; }catch(e){ try{ lc=$('Loop Clips').last().json||{}; }catch(e2){} } } if(lc.timecoded_transcript) return lc.timecoded_transcript; const arc=String(lc.assembled_spoken_script||'').trim(); let j={}; try{ j=$('7d. Get Subtitles (SRT)').last().json||{}; }catch(e){} if(!j||(!j.words&&!j.x_groq&&!j.text)){ try{ j=$('7d. Get Subtitles (SRT)').item.json||{}; }catch(e2){} } const w=j.words||(j.x_groq&&j.x_groq.words)||[]; const timed=w.length>0?w.map(x=>'['+Number(x.start||0).toFixed(1)+'s] '+x.word).join(' '):String(j.text||'').trim(); if(arc&&timed) return arc+'\\n\\nTIMECODED WORDS:\\n'+timed; return arc||timed||String(lc.title||lc.clip_title||lc.hook_caption||'Gameplay highlight clip'); })() }}",
+        "options": {
+          "systemMessage": "You are an Elite YouTube Shorts Editor & Sound Designer.\nYou have the Director's PROPOSED HOOK BANNER and the full timecoded transcript below.\n\nYOUR JOB — output ONLY raw JSON with these 4 fields:\n\n1. STORY HOOK (Top Banner, 3-5 punchy words in ALL CAPS)\n• PRIMARY DIRECTIVE: Write a 100% factual 3-5 word hook in ALL CAPS describing the exact in-clip event, object, or threat spoken in the transcript (e.g., name the monster, item, chase, or specific blunder shown).\n• CRITICAL ANTI-HALLUCINATION & ANTI-TEMPLATE RULE: NEVER invent hackers, scams, or teams if they are not explicitly spoken in the transcript! NEVER output placeholder syntax (<...>), generic filler (\"MUST WATCH MOMENT\", \"VIRAL MOMENT\"), or copied prompt phrases. If the Director's PROPOSED HOOK BANNER is factual and specific to this clip's transcript, refine or keep it.\n\n2. CLIMAX QUOTE (Exact 3 to 5 words spoken at the peak moment)\n• Extract a verbatim 3-5 word substring from the timecoded transcript at the highest-energy punchline, scream, jumpscare, or reaction.\n• This anchors our visual punch-in zoom to the exact spoken climax audio.\n\n3. REACTION & AUDIO-ENERGY TRIGGERS\n• List of timestamps where the streamer screams, yells, or gets killed in-game (reaction_triggers).\n• These command FFmpeg to scale up the gameplay or webcam by 115% for an aggressive, punchy zoom.\n\n4. MEMES (0 TO 2 SOUNDS MAXIMUM)\n• Natural audio is preferred! If dialogue is already clear and funny, return: \"memes\": []\n• Only pick a sound effect if there is an explicit comedic blunder, sudden roast, jumpscare, or awkward shock:\n  - vine-boom-sound-effect_KT89XIq.mp3 -> Heavy impact, roast landing, sudden plot twist.\n  - huh_37bAoRo.mp3 -> Total confusion, bewildered reaction, awkward silence.\n  - fartmeme.mp3 -> Slapstick fail, dying to a silly trap.\n• Volume: 0.35.\n\nOutput ONLY valid raw JSON matching this schema (replace angle-bracket placeholders with real content from the clip above):\n{\n  \"story_hook\": \"<3_TO_5_WORD_FACTUAL_HOOK_FROM_TRANSCRIPT>\",\n  \"climax_quote\": \"<exact 3 to 5 spoken words from transcript>\",\n  \"reaction_triggers\": [14.2],\n  \"memes\": []\n}"
+        }
+      },
+      "id": "045c2797-5d88-4dfa-ab22-e3c76242a114",
+      "name": "Context Merge Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        -83880,
+        26240
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.5-flash-lite",
+        "options": {
+          "maxOutputTokens": 4096,
+          "temperature": 0.2,
+          "safetySettings": {
+            "values": [
+              {
+                "category": "HARM_CATEGORY_HARASSMENT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_HATE_SPEECH",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                "threshold": "BLOCK_NONE"
+              }
+            ]
+          }
+        }
+      },
+      "id": "2171d8ca-8886-4c5b-863a-fb15821c2619",
+      "name": "Gemini Model 2",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        -83900,
+        26440
+      ],
+      "retryOnFail": false,
+      "maxTries": 1,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "googlePalmApi": {
+          "id": "Et5CBlcuIS6UC5eM",
+          "name": "loop3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ Boolean($json.output && !/PLAYING THE GAME|GAMEPLAY HIGHLIGHT|WATCH THIS CLIP|NO WORDS|NO AUDIO FOUND/i.test(String($json.output))) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a696a584-e58c-432c-9f1c-97bef4601551",
+      "name": "IF: Merge OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -83500,
+        26120
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ JSON.stringify($json) }}",
+              "rightValue": "429",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            },
+            {
+              "leftValue": "={{ JSON.stringify($json) }}",
+              "rightValue": "quota",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            },
+            {
+              "leftValue": "={{ JSON.stringify($json) }}",
+              "rightValue": "Too many requests",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "6f4b8990-2a09-4e4f-aca0-76e68e21774c",
+      "name": "If Merge 429",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -83560,
+        26320
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const DAILY_RE = /(?:per\\s*day|daily|free_tier_requests|retry\\s+in\\s+\\d+h)/i;\nconst sd = $getWorkflowStaticData('global');\nreturn $input.all().map((it, idx) => {\n  const errText = JSON.stringify(it.json.error || it.json.description || it.json.message || it.json);\n  const isDaily = DAILY_RE.test(errText);\n  const count = (Number(sd._merge_retry_count) || 0) + 1;\n  sd._merge_retry_count = count;\n  return {\n    pairedItem: it.pairedItem || { item: idx },\n    json: { ...it.json, _merge_retry_count: count, _daily_quota_hit: isDaily || count > 1, _allow_retry: !isDaily && count <= 1 }\n  };\n});"
+      },
+      "id": "d1e6a3c4-9b12-4c34-9d56-334455667788",
+      "name": "Guard Merge Retries",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -83500,
+        26260
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ Boolean($json._allow_retry) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e2f7b4d5-0c23-4d45-8e67-445566778899",
+      "name": "If Merge Retry Allowed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -83460,
+        26320
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 3
+      },
+      "id": "ce39fb14-e6a4-4804-b37b-2d7e2a6e8708",
+      "webhookId": "340ecf6f-c8f1-46c3-b267-8407a0c90a2e",
+      "name": "Wait Merge Error",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -83420,
+        26380
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 3
+      },
+      "id": "c9d5f2b3-8a01-4b23-8c45-223344556688",
+      "name": "Wait Before Merge Fallback",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -83140,
+        26360
+      ],
+      "webhookId": "a1b2c3d4-e5f6-4789-9abc-def012345689"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=PROPOSED HOOK BANNER FROM DIRECTOR:\n{{ (function(){ let lc=$json||{}; if(!lc.hook_caption&&!lc.title&&!lc.clip_title){ try{ lc=$('Loop Clips').item.json||{}; }catch(e){ try{ lc=$('Loop Clips').last().json||{}; }catch(e2){} } } return lc.hook_caption||lc.title||lc.clip_title||''; })() }}\n\nCLIP TITLE:\n{{ (function(){ let lc=$json||{}; if(!lc.title&&!lc.clip_title){ try{ lc=$('Loop Clips').item.json||{}; }catch(e){ try{ lc=$('Loop Clips').last().json||{}; }catch(e2){} } } return lc.title||lc.clip_title||''; })() }}\n\nCLIP THEME:\n{{ (function(){ let lc=$json||{}; if(!lc.theme){ try{ lc=$('Loop Clips').item.json||{}; }catch(e){ try{ lc=$('Loop Clips').last().json||{}; }catch(e2){} } } return lc.theme||'Gaming'; })() }}\n\nAVAILABLE SOUNDS (pick from these exact filenames):\n{{ (function(){ let o=''; try{ o=$('Get Meme List').item.json.stdout||''; }catch(e){ try{ o=$('Get Meme List').last().json.stdout||''; }catch(e2){} } return o ? o.split('---DIMENSIONS---')[0].trim().replace(/\\n/g, ', ') : 'vine-boom-sound-effect_KT89XIq.mp3, huh_37bAoRo.mp3, fartmeme.mp3'; })() }}\n\nFULL TIMECODED TRANSCRIPT OF THE CLIP (read every word before placing ANY effects):\n{{ (function(){ let lc=$json||{}; if(!lc.assembled_spoken_script&&!lc.timecoded_transcript){ try{ lc=$('Loop Clips').item.json||{}; }catch(e){ try{ lc=$('Loop Clips').last().json||{}; }catch(e2){} } } if(lc.timecoded_transcript) return lc.timecoded_transcript; const arc=String(lc.assembled_spoken_script||'').trim(); let j={}; try{ j=$('7d. Get Subtitles (SRT)').last().json||{}; }catch(e){} if(!j||(!j.words&&!j.x_groq&&!j.text)){ try{ j=$('7d. Get Subtitles (SRT)').item.json||{}; }catch(e2){} } const w=j.words||(j.x_groq&&j.x_groq.words)||[]; const timed=w.length>0?w.map(x=>'['+Number(x.start||0).toFixed(1)+'s] '+x.word).join(' '):String(j.text||'').trim(); if(arc&&timed) return arc+'\\n\\nTIMECODED WORDS:\\n'+timed; return arc||timed||String(lc.title||lc.clip_title||lc.hook_caption||'Gameplay highlight clip'); })() }}",
+        "options": {
+          "systemMessage": "You are an Elite YouTube Shorts Editor & Sound Designer.\nYou have the Director's PROPOSED HOOK BANNER and the full timecoded transcript below.\n\nYOUR JOB — output ONLY raw JSON with these 4 fields:\n\n1. STORY HOOK (Top Banner, 3-5 punchy words in ALL CAPS)\n• PRIMARY DIRECTIVE: Write a 100% factual 3-5 word hook in ALL CAPS describing the exact in-clip event, object, or threat spoken in the transcript (e.g., name the monster, item, chase, or specific blunder shown).\n• CRITICAL ANTI-HALLUCINATION & ANTI-TEMPLATE RULE: NEVER invent hackers, scams, or teams if they are not explicitly spoken in the transcript! NEVER output placeholder syntax (<...>), generic filler (\"MUST WATCH MOMENT\", \"VIRAL MOMENT\"), or copied prompt phrases. If the Director's PROPOSED HOOK BANNER is factual and specific to this clip's transcript, refine or keep it.\n\n2. CLIMAX QUOTE (Exact 3 to 5 words spoken at the peak moment)\n• Extract a verbatim 3-5 word substring from the timecoded transcript at the highest-energy punchline, scream, jumpscare, or reaction.\n• This anchors our visual punch-in zoom to the exact spoken climax audio.\n\n3. REACTION & AUDIO-ENERGY TRIGGERS\n• List of timestamps where the streamer screams, yells, or gets killed in-game (reaction_triggers).\n• These command FFmpeg to scale up the gameplay or webcam by 115% for an aggressive, punchy zoom.\n\n4. MEMES (0 TO 2 SOUNDS MAXIMUM)\n• Natural audio is preferred! If dialogue is already clear and funny, return: \"memes\": []\n• Only pick a sound effect if there is an explicit comedic blunder, sudden roast, jumpscare, or awkward shock:\n  - vine-boom-sound-effect_KT89XIq.mp3 -> Heavy impact, roast landing, sudden plot twist.\n  - huh_37bAoRo.mp3 -> Total confusion, bewildered reaction, awkward silence.\n  - fartmeme.mp3 -> Slapstick fail, dying to a silly trap.\n• Volume: 0.35.\n\nOutput ONLY valid raw JSON matching this schema (replace angle-bracket placeholders with real content from the clip above):\n{\n  \"story_hook\": \"<3_TO_5_WORD_FACTUAL_HOOK_FROM_TRANSCRIPT>\",\n  \"climax_quote\": \"<exact 3 to 5 spoken words from transcript>\",\n  \"reaction_triggers\": [14.2],\n  \"memes\": []\n}"
+        }
+      },
+      "id": "4b6ab954-b58a-4134-b1ea-9b83bebbc7b9",
+      "name": "Context Merge Fallback",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        -82960,
+        26360
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-2.5-flash",
+        "options": {
+          "maxOutputTokens": 4096,
+          "temperature": 0.2,
+          "safetySettings": {
+            "values": [
+              {
+                "category": "HARM_CATEGORY_HARASSMENT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_HATE_SPEECH",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                "threshold": "BLOCK_NONE"
+              }
+            ]
+          }
+        }
+      },
+      "id": "13b45eaf-4cb8-4ea8-a9ab-63655445afab",
+      "name": "Gemini Backup Model 3",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        -82920,
+        26500
+      ],
+      "retryOnFail": false,
+      "maxTries": 1,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "googlePalmApi": {
+          "id": "EJRA7ZZxsBILsA9T",
+          "name": "gemini 2 "
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ JSON.stringify($json) }}",
+              "rightValue": "429",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            },
+            {
+              "leftValue": "={{ JSON.stringify($json) }}",
+              "rightValue": "quota",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            },
+            {
+              "leftValue": "={{ JSON.stringify($json) }}",
+              "rightValue": "Too many requests",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            }
+          ],
+          "combinator": "or"
+        },
+        "options": {}
+      },
+      "id": "1da623de-669d-4a0e-a776-b0135ce19d4f",
+      "name": "If Merge Fallback 429",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -82500,
+        26460
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const DAILY_RE = /(?:per\\s*day|daily|free_tier_requests|retry\\s+in\\s+\\d+h)/i;\nconst sd = $getWorkflowStaticData('global');\nreturn $input.all().map((it, idx) => {\n  const errText = JSON.stringify(it.json.error || it.json.description || it.json.message || it.json);\n  const isDaily = DAILY_RE.test(errText);\n  const count = (Number(sd._merge_fb_retry_count) || 0) + 1;\n  sd._merge_fb_retry_count = count;\n  return {\n    pairedItem: it.pairedItem || { item: idx },\n    json: { ...it.json, _merge_fb_retry_count: count, _daily_quota_hit: isDaily || count > 1, _allow_retry: !isDaily && count <= 1 }\n  };\n});"
+      },
+      "id": "f3a8c5e6-1d34-4e56-9f78-556677889900",
+      "name": "Guard Merge Fallback Retries",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -82420,
+        26380
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ Boolean($json._allow_retry) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "a4b9d6f7-2e45-4f67-8a89-667788990011",
+      "name": "If Merge Fallback Retry Allowed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -82380,
+        26420
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 3
+      },
+      "id": "bb5a74d7-1b07-48dc-af9b-ce0fa77f2c49",
+      "webhookId": "f9f9ab12-d6ab-410c-95bf-4b7837f4ef9c",
+      "name": "Wait Merge Fallback Error",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -82320,
+        26460
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=PROPOSED HOOK BANNER FROM DIRECTOR:\n{{ (function(){ let lc=$json||{}; if(!lc.hook_caption&&!lc.title&&!lc.clip_title){ try{ lc=$('Loop Clips').item.json||{}; }catch(e){ try{ lc=$('Loop Clips').last().json||{}; }catch(e2){} } } return lc.hook_caption||lc.title||lc.clip_title||''; })() }}\n\nCLIP TITLE:\n{{ (function(){ let lc=$json||{}; if(!lc.title&&!lc.clip_title){ try{ lc=$('Loop Clips').item.json||{}; }catch(e){ try{ lc=$('Loop Clips').last().json||{}; }catch(e2){} } } return lc.title||lc.clip_title||''; })() }}\n\nCLIP THEME:\n{{ (function(){ let lc=$json||{}; if(!lc.theme){ try{ lc=$('Loop Clips').item.json||{}; }catch(e){ try{ lc=$('Loop Clips').last().json||{}; }catch(e2){} } } return lc.theme||'Gaming'; })() }}\n\nAVAILABLE SOUNDS (pick from these exact filenames):\n{{ (function(){ let o=''; try{ o=$('Get Meme List').item.json.stdout||''; }catch(e){ try{ o=$('Get Meme List').last().json.stdout||''; }catch(e2){} } return o ? o.split('---DIMENSIONS---')[0].trim().replace(/\\n/g, ', ') : 'vine-boom-sound-effect_KT89XIq.mp3, huh_37bAoRo.mp3, fartmeme.mp3'; })() }}\n\nFULL TIMECODED TRANSCRIPT OF THE CLIP (read every word before placing ANY effects):\n{{ (function(){ let lc=$json||{}; if(!lc.assembled_spoken_script&&!lc.timecoded_transcript){ try{ lc=$('Loop Clips').item.json||{}; }catch(e){ try{ lc=$('Loop Clips').last().json||{}; }catch(e2){} } } if(lc.timecoded_transcript) return lc.timecoded_transcript; const arc=String(lc.assembled_spoken_script||'').trim(); let j={}; try{ j=$('7d. Get Subtitles (SRT)').last().json||{}; }catch(e){} if(!j||(!j.words&&!j.x_groq&&!j.text)){ try{ j=$('7d. Get Subtitles (SRT)').item.json||{}; }catch(e2){} } const w=j.words||(j.x_groq&&j.x_groq.words)||[]; const timed=w.length>0?w.map(x=>'['+Number(x.start||0).toFixed(1)+'s] '+x.word).join(' '):String(j.text||'').trim(); if(arc&&timed) return arc+'\\n\\nTIMECODED WORDS:\\n'+timed; return arc||timed||String(lc.title||lc.clip_title||lc.hook_caption||'Gameplay highlight clip'); })() }}",
+        "options": {
+          "systemMessage": "You are an Elite YouTube Shorts Editor & Sound Designer.\nYou have the Director's PROPOSED HOOK BANNER and the full timecoded transcript below.\nOutput ONLY raw JSON matching:\n{\"story_hook\": \"<3_TO_5_WORD_FACTUAL_HOOK_IN_ALL_CAPS>\", \"climax_quote\": \"<exact 3 to 5 spoken words from transcript>\", \"reaction_triggers\": [14.2], \"memes\": []}"
+        }
+      },
+      "id": "mistral-merge-agent-fallback",
+      "name": "Context Merge Mistral Fallback",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        -82720,
+        26420
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "model": "mistral-small-latest",
+        "options": {
+          "maxTokens": 4096,
+          "temperature": 0.2,
+          "maxRetries": 2
+        }
+      },
+      "id": "mistral-merge-model-node",
+      "name": "Mistral Backup Model Merge",
+      "type": "@n8n/n8n-nodes-langchain.lmChatMistralCloud",
+      "typeVersion": 1,
+      "position": [
+        -82680,
+        26580
+      ],
+      "retryOnFail": false,
+      "maxTries": 1,
+      "waitBetweenTries": 1000,
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "GPkRAk0iPJOL3lzl",
+          "name": "Mistral Cloud account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "command": "=python3 /files/telemetry_fusion_indexer.py \"/files/temp/transcript.json\" >/dev/null || true"
+      },
+      "id": "iso-run-fusion-indexer",
+      "name": "Run Fusion Indexer",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        -91800,
+        26000
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nlet hasSummary = false;\ntry {\n  if (fs.existsSync('/files/temp/global_summary.json')) {\n    const s = JSON.parse(fs.readFileSync('/files/temp/global_summary.json', 'utf8'));\n    hasSummary = Boolean(s && (s.game || s.global_summary));\n  }\n} catch (e) {}\nconst base = $('Load Cached Telemetry').first().json || {};\nreturn [{ pairedItem: { item: 0 }, json: { ...base, _has_cached_summary: hasSummary } }];"
+      },
+      "id": "iso-check-summary-cache",
+      "name": "Check Summary Cache",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -91400,
+        26000
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ Boolean($json._has_cached_summary) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "iso-if-summary-cached",
+      "name": "If Summary Cached?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -91160,
+        26000
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\ntry {\n  const raw = ($input.first() && ($input.first().json.output || $input.first().json.text)) || '';\n  if (raw) {\n    const b3 = String.fromCharCode(96).repeat(3);\n    const cleaned = String(raw).split(b3 + 'json').join('').split(b3).join('').trim();\n    const parsed = JSON.parse(cleaned);\n    if (parsed && (parsed.game || parsed.global_summary)) {\n      fs.writeFileSync('/files/temp/global_summary.json', JSON.stringify(parsed, null, 2));\n    }\n  }\n} catch (e) {}\nconst base = $('Load Cached Telemetry').first().json || {};\nreturn [{ pairedItem: { item: 0 }, json: base }];"
+      },
+      "id": "iso-save-global-summary",
+      "name": "Save Global Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -88880,
+        26000
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst items = $input.all().map(i => i.json);\nlet words = [];\nlet indexDoc = null;\nlet globalSummary = {};\ntry {\n  const lct = $('Load Cached Telemetry').first().json || {};\n  words = lct.words || [];\n  if (lct.annotated_sentences && lct.annotated_sentences.length) indexDoc = { annotated_sentences: lct.annotated_sentences };\n} catch (e) {}\nif (words.length === 0) {\n  try {\n    if (fs.existsSync('/files/temp/transcript.json')) {\n      const tj = JSON.parse(fs.readFileSync('/files/temp/transcript.json', 'utf8'));\n      words = tj.words || (tj.x_groq && tj.x_groq.words) || [];\n    }\n  } catch (e) {}\n}\nif (!indexDoc) {\n  try {\n    if (fs.existsSync('/files/temp/unified_timeline_index.json')) {\n      indexDoc = JSON.parse(fs.readFileSync('/files/temp/unified_timeline_index.json', 'utf8'));\n    }\n  } catch (e) {}\n}\ntry {\n  if (fs.existsSync('/files/temp/global_summary.json')) globalSummary = JSON.parse(fs.readFileSync('/files/temp/global_summary.json', 'utf8'));\n} catch (e) {}\n\nconst fmtTC = (sec) => {\n  const sTot = Math.max(0, Number(sec) || 0);\n  const m = Math.floor(sTot / 60);\n  const s = (sTot % 60).toFixed(2).padStart(5, '0');\n  return `${String(m).padStart(2, '0')}:${s}`;\n};\nconst annotatedSentences = (indexDoc && indexDoc.annotated_sentences) || [];\nconst getWordsBetween = (t0, t1) => words.filter(w => {\n  const mid = (Number(w.start || 0) + Number(w.end || w.start || 0)) * 0.5;\n  return mid >= t0 && mid <= t1;\n}).map(w => String(w.word || '').trim()).join(' ').trim();\nconst getTagsInWindow = (t0, t1) => {\n  const set = new Set();\n  for (const s of annotatedSentences) {\n    if (Number(s.end || 0) >= t0 - 0.5 && Number(s.start || 0) <= t1 + 0.5) {\n      for (const tg of (s.tags || [])) set.add(tg);\n    }\n  }\n  return Array.from(set);\n};\n\nconst grouped = new Map();\nfor (const it of items) {\n  if (it.error) continue;\n  const key = `${it.clip_number || 1}::${it.clip_title || 'Clip'}`;\n  if (!grouped.has(key)) {\n    grouped.set(key, {\n      clip_number: it.clip_number || 1,\n      title: it.clip_title,\n      clip_title: it.clip_title,\n      hook_caption: it.hook_caption,\n      theme: it.theme || 'Gaming',\n      narrative_archetype: it.narrative_archetype || 'CONTINUOUS_GAMEPLAY_CLUTCH_OR_FAIL',\n      virality_score: Number(it.virality_score ?? it.viral_score ?? 8.5),\n      payoff_time: Number(it.payoff_time) || 0,\n      total_duration_sec: 0,\n      edl_segments: [],\n      assembled_spoken_script: it.assembled_spoken_script || '',\n      signal_justification: it.signal_justification || {},\n      cause_and_effect_setup: it.cause_and_effect_setup || '',\n      entity_continuity_check: it.entity_continuity_check || { passed: true },\n    });\n  }\n  const entry = grouped.get(key);\n  entry.edl_segments.push({\n    segment_order: it.segment_order,\n    role: it.role || 'CONTINUOUS_ARC',\n    start: it.start,\n    end: it.end,\n    start_tc: fmtTC(it.start),\n    end_tc: fmtTC(it.end),\n    duration: it.duration,\n    spoken_text: it.spoken_text || getWordsBetween(Number(it.start) || 0, Number(it.end) || 0),\n    signal_tags_in_window: getTagsInWindow(Number(it.start) || 0, Number(it.end) || 0),\n  });\n  entry.total_duration_sec = Number((entry.total_duration_sec + (Number(it.duration) || 0)).toFixed(2));\n}\n\nreturn Array.from(grouped.values()).map((p, idx) => {\n  p.edl_segments.sort((a, b) => a.segment_order - b.segment_order);\n  p.segment_count = p.edl_segments.length;\n  const firstStart = p.edl_segments[0] ? Number(p.edl_segments[0].start) : 0;\n  const lastEnd = p.edl_segments.length ? Number(p.edl_segments[p.edl_segments.length - 1].end) : 0;\n  p.pre_hook_context_text = getWordsBetween(Math.max(0, firstStart - 5.0), Math.max(0, firstStart - 0.05));\n  p.post_payoff_context_text = getWordsBetween(lastEnd + 0.05, lastEnd + 5.0);\n  p.assembled_spoken_script = p.edl_segments.map(s => s.spoken_text).filter(Boolean).join(' ') || p.assembled_spoken_script;\n  const timedLines = p.edl_segments.map(s => `[${s.role} ${s.start_tc}-${s.end_tc}] ${s.spoken_text}`).join('\\n');\n  p.timecoded_transcript = `GAME: ${globalSummary.game || 'Roblox'}\\nCLIP TITLE: ${p.title}\\nDIRECTOR PROPOSED HOOK: ${p.hook_caption}\\n\\n${timedLines}`;\n  return { pairedItem: { item: idx }, json: p };\n});"
+      },
+      "id": "iso-prepare-merge-items",
+      "name": "Prepare Merge Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -84400,
+        26240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst mergeItems = $input.all().map(i => i.json);\nlet baseClips = [];\ntry { baseClips = $('Prepare Merge Items').all().map(i => i.json); } catch (e) {}\n\nlet globalSummary = {};\ntry {\n  if (fs.existsSync('/files/temp/global_summary.json')) {\n    globalSummary = JSON.parse(fs.readFileSync('/files/temp/global_summary.json', 'utf8'));\n  }\n} catch (e) {}\n\nconst BANNED_RE = /^(I CALLED TIME OUT|HE ACTUALLY FELL FOR IT|THAT DOES NOT COUNT|MY WORST BLUNDER|MUST WATCH MOMENT|VIRAL MOMENT|PLAYING THE GAME|PLAYING THE GAME WRONG|GAMEPLAY HIGHLIGHT CLIP|WATCH THIS CLIP|NO WORDS|NO AUDIO FOUND|NO TRANSCRIPT|UNDEFINED|NULL|ERROR)$/i;\nconst FOREIGN_GAME_RE = /\\b(RUST|TOWER OF HELL|FORTNITE|MINECRAFT|VALORANT|APEX|AMONG US|CSGO|GTA|BEDWARS|BROOKHAVEN|BLOXBURG)\\b/i;\nconst HOOK_COMMON = new Set([\"WHAT\",\"WHEN\",\"WHY\",\"HOW\",\"THIS\",\"THAT\",\"WAIT\",\"ONLY\",\"EVER\",\"BEST\",\"WORST\",\"REAL\",\"FAKE\",\"ACTUALLY\",\"LITERALLY\",\"STOP\",\"NEVER\",\"MOMENT\",\"GAMING\",\"INSANE\",\"CRAZY\",\"CHAOS\",\"CAUGHT\",\"BUSTED\",\"TRAPPED\",\"SCAM\",\"CLUTCH\",\"ROAST\",\"FAIL\",\"RAGE\",\"SHOCK\",\"BETRAYAL\",\"MYSTERY\",\"KARMA\"]);\n\nfunction verifyHook(candidate, fallbackHook, clipSpeech, clipTitle, extraCtx) {\n  const sanitizeHook = (v) => {\n    const cleaned = String(v || '').replace(/[^\\x20-\\x7E]/g, '').replace(/[{}\\x27\\x22`$()<>]/g, '').replace(/_/g, ' ').replace(/\\s+/g, ' ').trim().toUpperCase();\n    const wds = cleaned.split(' ').filter(Boolean);\n    return (wds.length > 5 ? wds.slice(0, 5).join(' ') : cleaned).substring(0, 42);\n  };\n  const safeTitle = sanitizeHook(clipTitle);\n  const corpus = (JSON.stringify(globalSummary) + ' ' + String(clipSpeech || '') + ' ' + String(clipTitle || '') + ' ' + String(extraCtx || '')).toLowerCase();\n  const speechCorpus = (JSON.stringify(globalSummary) + ' ' + String(clipSpeech || '')).toLowerCase();\n  const isClean = (txt) => {\n    if (!txt || txt.length < 3 || BANNED_RE.test(txt)) return false;\n    const fg = txt.match(FOREIGN_GAME_RE);\n    if (fg && !speechCorpus.includes(fg[0].toLowerCase())) return false;\n    const nouns = (txt.toLowerCase().match(/[a-z0-9]{4,}/g) || []).filter(w => !HOOK_COMMON.has(w.toUpperCase()));\n    if (nouns.length > 0 && (nouns.filter(w => !corpus.includes(w)).length / nouns.length) > 0.5) return false;\n    return true;\n  };\n  const cand = sanitizeHook(candidate);\n  const fb = sanitizeHook(fallbackHook);\n  const candWc = cand ? cand.split(' ').filter(Boolean).length : 0;\n  const fbWc = fb ? fb.split(' ').filter(Boolean).length : 0;\n  if (isClean(cand) && candWc >= 3) return cand;\n  if (isClean(fb) && fbWc >= 3) return fb;\n  if (isClean(cand)) return cand;\n  if (isClean(fb)) return fb;\n  if (isClean(safeTitle)) return safeTitle;\n  return 'WATCH THIS CLIP NOW';\n}\n\nconst previews = (baseClips.length > 0 ? baseClips : mergeItems).map((clip, idx) => {\n  const mRaw = mergeItems[idx] ? String(mergeItems[idx].output || mergeItems[idx].text || '') : '';\n  let parsed = {};\n  if (mRaw) {\n    try {\n      const b3 = String.fromCharCode(96).repeat(3);\n      parsed = JSON.parse(mRaw.split(b3 + 'json').join('').split(b3).join('').trim());\n    } catch (e) {}\n  }\n  const allSegTags = (clip.edl_segments || []).flatMap(s => s.signal_tags_in_window || []);\n  const viewerVoice = allSegTags.some(t => t.includes('VIEWER_OR_GAME_VOICE'));\n  const sig = clip.signal_justification || {};\n  const finalHook = verifyHook(parsed.story_hook, clip.hook_caption, clip.assembled_spoken_script, clip.title, (clip.theme || '') + ' ' + (clip.cause_and_effect_setup || ''));\n  return {\n    clip_number: clip.clip_number || (idx + 1),\n    title: clip.title,\n    final_top_hook_caption: finalHook,\n    narrative_archetype: clip.narrative_archetype,\n    virality_score: clip.virality_score || 0,\n    total_duration_sec: clip.total_duration_sec,\n    segment_count: clip.segment_count || (clip.edl_segments ? clip.edl_segments.length : 0),\n    edl_segments: clip.edl_segments || [],\n    assembled_spoken_script: clip.assembled_spoken_script || '',\n    pre_hook_context_text: clip.pre_hook_context_text || '',\n    post_payoff_context_text: clip.post_payoff_context_text || '',\n    signal_justification: {\n      chat_burst: sig.chat_burst || allSegTags.find(t => t.includes('CHAT_BURST')) || 'None',\n      db_spike: sig.db_spike || allSegTags.find(t => t.includes('dB_PEAK') || t.includes('SCREAM')) || 'Normal',\n      face_emotion: sig.face_emotion || allSegTags.find(t => t.includes('FACE:')) || 'Neutral',\n      viewer_voice_present: sig.viewer_voice_present !== undefined ? Boolean(sig.viewer_voice_present) : viewerVoice,\n    },\n    cause_and_effect_setup: clip.cause_and_effect_setup || '',\n    entity_continuity_check: clip.entity_continuity_check || { passed: true },\n    climax_quote: parsed.climax_quote || '',\n    memes: parsed.memes || []\n  };\n});\n\ntry {\n  fs.writeFileSync('/files/temp/n8n_sandbox_edl_preview.json', JSON.stringify(previews, null, 2));\n} catch (e) {}\n\nreturn previews.map(p => ({ json: p }));"
+      },
+      "id": "iso-verify-hooks-edl-preview",
+      "name": "Verify Hooks & Build EDL Preview",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -81600,
+        26240
+      ]
+    }
+  ],
+  "connections": {
+    "When clicking Test workflow": {
+      "main": [
+        [
+          {
+            "node": "Load Cached Telemetry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Load Cached Telemetry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sandbox: Test Script & EDL": {
+      "main": [
+        [
+          {
+            "node": "Load Cached Telemetry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Cached Telemetry": {
+      "main": [
+        [
+          {
+            "node": "Run Fusion Indexer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Fusion Indexer": {
+      "main": [
+        [
+          {
+            "node": "Check Summary Cache",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Summary Cache": {
+      "main": [
+        [
+          {
+            "node": "If Summary Cached?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Summary Cached?": {
+      "main": [
+        [
+          {
+            "node": "1. Prepare Scout Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "1. Global Summary AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "1. Global Summary AI": {
+      "main": [
+        [
+          {
+            "node": "IF: Summary OK?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "If Summary 429",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: Summary OK?": {
+      "main": [
+        [
+          {
+            "node": "Save Global Summary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "1. Global Summary Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Summary 429": {
+      "main": [
+        [
+          {
+            "node": "Guard Summary Retries",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "1. Global Summary Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guard Summary Retries": {
+      "main": [
+        [
+          {
+            "node": "If Summary Retry Allowed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Summary Retry Allowed?": {
+      "main": [
+        [
+          {
+            "node": "Wait Summary Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "1. Global Summary Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Summary Error": {
+      "main": [
+        [
+          {
+            "node": "1. Global Summary AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "1. Global Summary Fallback": {
+      "main": [
+        [
+          {
+            "node": "Save Global Summary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "If Summary Fallback 429",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Summary Fallback 429": {
+      "main": [
+        [
+          {
+            "node": "1. Global Summary Mistral Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "1. Global Summary Mistral Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "1. Global Summary Mistral Fallback": {
+      "main": [
+        [
+          {
+            "node": "Save Global Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Global Summary": {
+      "main": [
+        [
+          {
+            "node": "1. Prepare Scout Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Model 1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "1. Global Summary AI",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Backup Model 1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "1. Global Summary Fallback",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mistral Backup Model Summary": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "1. Global Summary Mistral Fallback",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "1. Prepare Scout Prompt": {
+      "main": [
+        [
+          {
+            "node": "Scout Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scout Loop": {
+      "main": [
+        [
+          {
+            "node": "Scout Accumulate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "If Sandbox Skip Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Sandbox Skip Wait": {
+      "main": [
+        [
+          {
+            "node": "2. Basic LLM Chain (Scout)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Check Scout Primary Health",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Scout Primary Health": {
+      "main": [
+        [
+          {
+            "node": "If Scout Primary Live?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Scout Primary Live?": {
+      "main": [
+        [
+          {
+            "node": "Scout Wait",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "2. Basic LLM Chain (Scout Fallback)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scout Wait": {
+      "main": [
+        [
+          {
+            "node": "2. Basic LLM Chain (Scout)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2. Basic LLM Chain (Scout)": {
+      "main": [
+        [
+          {
+            "node": "Scout Loop",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "If Scout 429",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Model (Scout)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "2. Basic LLM Chain (Scout)",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Scout 429": {
+      "main": [
+        [
+          {
+            "node": "Guard Scout Retries",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "2. Basic LLM Chain (Scout Fallback)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guard Scout Retries": {
+      "main": [
+        [
+          {
+            "node": "If Scout Retry Allowed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Scout Retry Allowed?": {
+      "main": [
+        [
+          {
+            "node": "Wait Scout Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "2. Basic LLM Chain (Scout Fallback)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Scout Error": {
+      "main": [
+        [
+          {
+            "node": "Restore Scout Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restore Scout Prompt": {
+      "main": [
+        [
+          {
+            "node": "2. Basic LLM Chain (Scout)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2. Basic LLM Chain (Scout Fallback)": {
+      "main": [
+        [
+          {
+            "node": "Scout Loop",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "2. Basic LLM Chain (Scout Mistral Fallback)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Backup Model Scout": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "2. Basic LLM Chain (Scout Fallback)",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2. Basic LLM Chain (Scout Mistral Fallback)": {
+      "main": [
+        [
+          {
+            "node": "Scout Loop",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Scout Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mistral Backup Model Scout": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "2. Basic LLM Chain (Scout Mistral Fallback)",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scout Accumulate": {
+      "main": [
+        [
+          {
+            "node": "3. Prepare Director Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3. Prepare Director Prompt": {
+      "main": [
+        [
+          {
+            "node": "4. Basic LLM Chain (Director)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4. Basic LLM Chain (Director)": {
+      "main": [
+        [
+          {
+            "node": "IF: Director JSON Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "If Director 429",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: Director JSON Valid?": {
+      "main": [
+        [
+          {
+            "node": "5. Split Clips",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Guard Director Retries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Model (Director)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "4. Basic LLM Chain (Director)",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Director 429": {
+      "main": [
+        [
+          {
+            "node": "Guard Director Retries",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait Before Director Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guard Director Retries": {
+      "main": [
+        [
+          {
+            "node": "If Director Retry Allowed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Director Retry Allowed?": {
+      "main": [
+        [
+          {
+            "node": "Wait Director Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait Before Director Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Director Error": {
+      "main": [
+        [
+          {
+            "node": "Restore Director Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Restore Director Prompt": {
+      "main": [
+        [
+          {
+            "node": "4. Basic LLM Chain (Director)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Before Director Fallback": {
+      "main": [
+        [
+          {
+            "node": "4. Basic LLM Chain (Director Fallback)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4. Basic LLM Chain (Director Fallback)": {
+      "main": [
+        [
+          {
+            "node": "IF: Director Fallback JSON Valid?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "4. Basic LLM Chain (Director Mistral Fallback)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: Director Fallback JSON Valid?": {
+      "main": [
+        [
+          {
+            "node": "5. Split Clips",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "4. Basic LLM Chain (Director Mistral Fallback)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Backup Model Director": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "4. Basic LLM Chain (Director Fallback)",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4. Basic LLM Chain (Director Mistral Fallback)": {
+      "main": [
+        [
+          {
+            "node": "5. Split Clips",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mistral Backup Model Director": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "4. Basic LLM Chain (Director Mistral Fallback)",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "5. Split Clips": {
+      "main": [
+        [
+          {
+            "node": "6. Extract Viral Segments",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "6. Extract Viral Segments": {
+      "main": [
+        [
+          {
+            "node": "Prepare Merge Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Merge Items": {
+      "main": [
+        [
+          {
+            "node": "Context Merge Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Context Merge Agent": {
+      "main": [
+        [
+          {
+            "node": "IF: Merge OK?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "If Merge 429",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Model 2": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Context Merge Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: Merge OK?": {
+      "main": [
+        [
+          {
+            "node": "Verify Hooks & Build EDL Preview",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait Before Merge Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Merge 429": {
+      "main": [
+        [
+          {
+            "node": "Guard Merge Retries",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait Before Merge Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guard Merge Retries": {
+      "main": [
+        [
+          {
+            "node": "If Merge Retry Allowed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Merge Retry Allowed?": {
+      "main": [
+        [
+          {
+            "node": "Wait Merge Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Wait Before Merge Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Merge Error": {
+      "main": [
+        [
+          {
+            "node": "Context Merge Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Before Merge Fallback": {
+      "main": [
+        [
+          {
+            "node": "Context Merge Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Context Merge Fallback": {
+      "main": [
+        [
+          {
+            "node": "Verify Hooks & Build EDL Preview",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "If Merge Fallback 429",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Backup Model 3": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Context Merge Fallback",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Merge Fallback 429": {
+      "main": [
+        [
+          {
+            "node": "Guard Merge Fallback Retries",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Context Merge Mistral Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guard Merge Fallback Retries": {
+      "main": [
+        [
+          {
+            "node": "If Merge Fallback Retry Allowed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Merge Fallback Retry Allowed?": {
+      "main": [
+        [
+          {
+            "node": "Wait Merge Fallback Error",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Context Merge Mistral Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Merge Fallback Error": {
+      "main": [
+        [
+          {
+            "node": "Context Merge Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Context Merge Mistral Fallback": {
+      "main": [
+        [
+          {
+            "node": "Verify Hooks & Build EDL Preview",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mistral Backup Model Merge": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Context Merge Mistral Fallback",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

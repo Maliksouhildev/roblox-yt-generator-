@@ -325,14 +325,17 @@ class TestPipelineComprehensive(unittest.TestCase):
             self.assertEqual(res.returncode, 0, f"5. Split Clips runtime failed: {res.stderr}")
             out = json.loads(res.stdout.strip())
             self.assertEqual(len(out), 3, f"Expected all 3 distinct multi-segment clips preserved, got {len(out)}")
-            for item in out:
+            for idx_item, item in enumerate(out):
                 segs = item['json']['segments']
                 roles = [s['role'] for s in segs]
-                self.assertIn('SETUP', roles)
-                self.assertIn('ESCALATION', roles)
-                self.assertIn('PAYOFF', roles)
+                if len(segs) >= 3:
+                    self.assertIn('SETUP', roles)
+                    self.assertIn('ESCALATION', roles)
+                    self.assertIn('PAYOFF', roles)
+                else:
+                    self.assertEqual(roles, ['CONTINUOUS_ARC'])
                 tot = sum(s['end'] - s['start'] for s in segs)
-                self.assertGreaterEqual(tot, 29.0)
+                self.assertGreaterEqual(tot, 22.0)
                 self.assertLessEqual(tot, 45.5)
         finally:
             if os.path.exists(tpath):
@@ -675,6 +678,177 @@ class TestPipelineComprehensive(unittest.TestCase):
         finally:
             if os.path.exists(a_path):
                 os.remove(a_path)
+
+    def test_masterplan_bug_a_b_c_d_and_telemetry(self):
+        """Verify Masterplan Bug A (no payoff truncation/no blind backward padding/22s floor/outro), Bug B (1-seg continuous + entity continuity), Bug C (sandbox parity + hook anti-hallucination), Bug D (staticData guards), and Section 3 telemetry."""
+        # 1. Bug A & B in 5. Split Clips
+        split_js = self.nodes["5. Split Clips"]["parameters"]["jsCode"]
+        synth_words = []
+        # Create two disconnected scenes: 100..128 (Entity: Dragon Fruit) and 200..235 (Entity: Pizza Delivery)
+        for i in range(14):
+            t0 = 100.0 + i * 2.0
+            synth_words.append({"word": f"Dragon", "start": t0, "end": t0 + 0.4})
+            synth_words.append({"word": f"fruit", "start": t0 + 0.4, "end": t0 + 0.8})
+            synth_words.append({"word": f"wow.", "start": t0 + 0.8, "end": t0 + 1.4})
+        for i in range(18):
+            t0 = 200.0 + i * 2.0
+            synth_words.append({"word": f"Pizza", "start": t0, "end": t0 + 0.4})
+            synth_words.append({"word": f"box", "start": t0 + 0.4, "end": t0 + 0.8})
+            synth_words.append({"word": f"insane!", "start": t0 + 0.8, "end": t0 + 1.5})
+        # Also continuous scene 300..324 (24s >= 22s floor, < 30s) with explicitPayoff at start of climax (314.0) while segment ends at 324.0
+        for i in range(12):
+            t0 = 300.0 + i * 2.0
+            synth_words.append({"word": f"Obsidian", "start": t0, "end": t0 + 0.4})
+            synth_words.append({"word": f"sword", "start": t0 + 0.4, "end": t0 + 0.8})
+            synth_words.append({"word": f"clutch!", "start": t0 + 0.8, "end": t0 + 1.4})
+
+        director_mock = json.dumps({
+            "clips": [
+                {
+                    "title": "CONTINUOUS CLUTCH",
+                    "hook_caption": "OBSIDIAN SWORD CLUTCH",
+                    "archetype": "CONTINUOUS_GAMEPLAY_CLUTCH_OR_FAIL",
+                    "payoff_time": 314.0,
+                    "segments": [{"start": 300.0, "end": 324.0, "role": "CONTINUOUS_ARC"}],
+                    "viral_score": 9.2
+                },
+                {
+                    "title": "DISCONNECTED STITCH",
+                    "hook_caption": "DRAGON AND PIZZA",
+                    "archetype": "HUBRIS_WAGER_INSTANT_KARMA",
+                    "payoff_time": 230.0,
+                    "segments": [
+                        {"start": 100.0, "end": 112.0, "role": "SETUP"},
+                        {"start": 200.0, "end": 225.0, "role": "PAYOFF"}
+                    ],
+                    "viral_score": 8.0
+                },
+                {
+                    "title": "PANHANDLING OUTRO",
+                    "hook_caption": "THANK YOU FOR WATCHING",
+                    "archetype": "COMEDIC_STORYTELLING_OR_SARCASM",
+                    "payoff_time": 320.0,
+                    "segments": [{"start": 300.0, "end": 324.0, "role": "CONTINUOUS_ARC"}],
+                    "viral_score": 8.0
+                }
+            ]
+        })
+        harness_split = (
+            "const $input = { all: () => [{ json: { text: " + json.dumps(director_mock) + " } }] };\n"
+            "const $ = (name) => {\n"
+            "  if (name === 'Load Cached Telemetry') return { first: () => ({ json: {} }), last: () => ({ json: {} }) };\n"
+            "  if (name === '3. Groq Whisper' || name === '5. Format Transcript & Get Words' || name === 'Save Whisper Transcript') return { first: () => ({ json: { words: " + json.dumps(synth_words) + " } }), last: () => ({ json: { words: " + json.dumps(synth_words) + " } }) };\n"
+            "  if (name === '3. Prepare Director Prompt') return { first: () => ({ json: { stream_duration_sec: 1000.0, total_words: " + str(len(synth_words)) + ", video_fps: 30 } }) };\n"
+            "  return { first: () => ({ json: {} }), last: () => ({ json: {} }) };\n"
+            "};\n"
+            "function runSplit() {\n" + split_js + "\n}\n"
+            "console.log(JSON.stringify(runSplit()));\n"
+        )
+        with tempfile.NamedTemporaryFile('w', suffix='.js', delete=False, encoding='utf-8') as tf:
+            tf.write(harness_split)
+            s_path = tf.name
+        try:
+            res = subprocess.run(['node', s_path], capture_output=True, text=True)
+            self.assertEqual(res.returncode, 0, f"5. Split Clips runtime failed: {res.stderr}")
+            out_clips = json.loads(res.stdout.strip())
+            # Should keep CONTINUOUS CLUTCH (24s >= 22s, payoff tail at 324.0 NOT chopped to 316.5, 1 segment preserved!)
+            # Should drop DISCONNECTED STITCH (>25s gap with zero shared entities) and PANHANDLING OUTRO
+            self.assertEqual(len(out_clips), 1, f"Expected 1 clean continuous clip, got {out_clips}")
+            clip = out_clips[0]["json"]
+            self.assertEqual(len(clip["segments"]), 1, "Must NOT artificially split 1 continuous segment into 3 acts")
+            self.assertGreaterEqual(clip["segments"][0]["end"], 320.0, "Payoff tail must NOT be truncated around payoff_time=314.0")
+            self.assertGreaterEqual(clip["segments"][0]["start"], 299.5, "Must NOT apply blind -10s backward padding")
+        finally:
+            if os.path.exists(s_path):
+                os.remove(s_path)
+
+        # 2. Bug C: Prepare Scout Prompt Sandbox == Production parity
+        prep_js = self.nodes["1. Prepare Scout Prompt"]["parameters"]["jsCode"]
+        synth_sentences = [{"start": i * 4.0, "end": i * 4.0 + 3.5, "text": f"Line {i} battle"} for i in range(400)]
+        harness_parity = (
+            "const staticStore = {};\n"
+            "const $getWorkflowStaticData = () => staticStore;\n"
+            "const $ = () => ({ first: () => ({ json: {} }), last: () => ({ json: {} }) });\n"
+            "let $input = { all: () => [{ json: { dry_run: true, duration: 3600.0, annotated_sentences: " + json.dumps(synth_sentences) + " } }] };\n"
+            "function runPrep() {\n" + prep_js + "\n}\n"
+            "const dryRes = runPrep();\n"
+            "$input = { all: () => [{ json: { dry_run: false, duration: 3600.0, annotated_sentences: " + json.dumps(synth_sentences) + " } }] };\n"
+            "const prodRes = runPrep();\n"
+            "console.log(JSON.stringify({ dry: dryRes.length, prod: prodRes.length }));\n"
+        )
+        with tempfile.NamedTemporaryFile('w', suffix='.js', delete=False, encoding='utf-8') as tf:
+            tf.write(harness_parity)
+            p2_path = tf.name
+        try:
+            res = subprocess.run(['node', p2_path], capture_output=True, text=True)
+            self.assertEqual(res.returncode, 0, f"Prepare Scout parity failed: {res.stderr}")
+            parity = json.loads(res.stdout.strip())
+            self.assertEqual(parity["dry"], parity["prod"], "Sandbox and Production must produce identical Scout chunks")
+        finally:
+            if os.path.exists(p2_path):
+                os.remove(p2_path)
+
+        # 3. Bug C: DRY_RUN_SCRIPT_ONLY anti-hallucination & Section 5 preview output runtime test
+        dry_js = self.nodes["DRY_RUN_SCRIPT_ONLY"]["parameters"]["jsCode"]
+        harness_dry = (
+            "const fs = require('fs');\n"
+            "const $ = () => ({ first: () => ({ json: { words: [{word:'Roblox',start:10,end:11},{word:'scam',start:11,end:12}] } }) });\n"
+            "const $input = { all: () => [{ json: { clip_number: 1, clip_title: 'Roblox Scam Moment', hook_caption: 'PLAYING RUST WITH FANS', narrative_archetype: 'HUBRIS_WAGER_INSTANT_KARMA', segment_order: 1, role: 'CONTINUOUS_ARC', start: 10.0, end: 35.0, duration: 25.0, spoken_text: 'Roblox scam happened!', entity_continuity_check: { passed: true }, signal_justification: { viewer_voice_present: true } } }] };\n"
+            "function runDry() {\n" + dry_js + "\n}\n"
+            "console.log(JSON.stringify(runDry()));\n"
+        )
+        with tempfile.NamedTemporaryFile('w', suffix='.js', delete=False, encoding='utf-8') as tf:
+            tf.write(harness_dry)
+            d_path = tf.name
+        try:
+            res = subprocess.run(['node', d_path], capture_output=True, text=True)
+            self.assertEqual(res.returncode, 0, f"DRY_RUN_SCRIPT_ONLY failed: {res.stderr}")
+            out_dry = json.loads(res.stdout.strip())[0]["json"]
+            self.assertNotIn("RUST", out_dry["final_top_hook_caption"], "Must reject hallucinated foreign game RUST")
+            self.assertTrue(out_dry["signal_justification"]["viewer_voice_present"])
+            self.assertIn("entity_continuity_check", out_dry)
+            self.assertIn("pre_hook_context_text", out_dry)
+            self.assertIn("post_payoff_context_text", out_dry)
+        finally:
+            if os.path.exists(d_path):
+                os.remove(d_path)
+
+        # 4. Bug D: Guard Summary Retries staticData counter trips after 2 retries
+        guard_sum_js = self.nodes["Guard Summary Retries"]["parameters"]["jsCode"]
+        harness_gs = (
+            "const staticStore = {};\n"
+            "const $getWorkflowStaticData = () => staticStore;\n"
+            "let $input = { all: () => [{ json: { error: '429 Too Many Requests' } }] };\n"
+            "function runGS() {\n" + guard_sum_js + "\n}\n"
+            "const r1 = runGS();\n"
+            "const r2 = runGS();\n"
+            "const r3 = runGS();\n"
+            "console.log(JSON.stringify([r1[0].json._allow_retry, r2[0].json._allow_retry, r3[0].json._allow_retry]));\n"
+        )
+        with tempfile.NamedTemporaryFile('w', suffix='.js', delete=False, encoding='utf-8') as tf:
+            tf.write(harness_gs)
+            gs_path = tf.name
+        try:
+            res = subprocess.run(['node', gs_path], capture_output=True, text=True)
+            self.assertEqual(res.returncode, 0, f"Guard Summary Retries failed: {res.stderr}")
+            self.assertEqual(json.loads(res.stdout.strip()), [True, False, False])
+        finally:
+            if os.path.exists(gs_path):
+                os.remove(gs_path)
+
+        # 5. Section 3 Telemetry: telemetry_fusion_indexer strips Whisper hallucinations & defines viewer voice + lagged chat
+        sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'scripts')))
+        import telemetry_fusion_indexer as tfi
+        self.assertIn("strawberry elephant", tfi.HALLUCINATION_PHRASES)
+        self.assertIn("taco combinacion", tfi.HALLUCINATION_PHRASES)
+        self.assertTrue(tfi.is_hallucinated_sentence("strawberry elephant strawberry elephant"))
+        self.assertTrue(tfi.is_hallucinated_sentence("taco combinacion"))
+        self.assertFalse(tfi.is_hallucinated_sentence("Wait he actually fell into the void!"))
+        with open(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'scripts', 'telemetry_fusion_indexer.py')), encoding='utf-8') as tf_f:
+            tfi_src = tf_f.read()
+        self.assertIn("VIEWER_OR_GAME_VOICE", tfi_src)
+        self.assertIn("45.0", tfi_src)
+        self.assertIn("top_k=20", tfi_src)
 
 if __name__ == '__main__':
     unittest.main()

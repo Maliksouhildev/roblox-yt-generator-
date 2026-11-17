@@ -51,16 +51,18 @@ def format_timestamp(seconds: float) -> str:
     return f"{m:02d}:{s:02d}.{cs:02d}"
 
 
-# ── 1. Vocal Energy & Scream Spikes ─────────────────────────────────────────
+# ── 1. Vocal Energy, Pitch Dynamics & Scream Spikes ─────────────────────────
 def analyze_audio_spikes(audio_path: str, spike_offset: float = 8.0, return_meta: bool = False):
     if not audio_path or not os.path.exists(audio_path):
-        return ([], 0.0) if return_meta else []
+        if return_meta:
+            return [], 0.0, {"median_rms_db": -30.0, "std_rms_db": 6.0, "raw_bins": []}
+        return []
 
     sr = 8000
     cmd = [
         "ffmpeg", "-hide_banner", "-loglevel", "error",
         "-i", audio_path,
-        "-af", "highpass=f=200,lowpass=f=3500",
+        "-af", "highpass=f=120,lowpass=f=3800",
         "-ac", "1", "-ar", str(sr), "-f", "s16le", "pipe:1"
     ]
     try:
@@ -70,46 +72,109 @@ def analyze_audio_spikes(audio_path: str, spike_offset: float = 8.0, return_meta
         win = sr // 2  # 0.5s RMS bins
         n_bins = len(pcm) // win
         if n_bins <= 0:
-            return ([], audio_dur) if return_meta else []
+            if return_meta:
+                return [], audio_dur, {"median_rms_db": -30.0, "std_rms_db": 6.0, "raw_bins": []}
+            return []
 
         blocks = pcm[:n_bins * win].reshape(n_bins, win)
         rms = np.sqrt(np.mean(blocks * blocks, axis=1) + 1e-12)
         db = 20.0 * np.log10(rms)
         valid = db[db > -90.0]
         if len(valid) == 0:
-            return ([], audio_dur) if return_meta else []
+            if return_meta:
+                return [], audio_dur, {"median_rms_db": -30.0, "std_rms_db": 6.0, "raw_bins": []}
+            return []
 
         median_rms = float(np.median(valid))
+        mad_rms = float(np.median(np.abs(valid - median_rms))) * 1.4826
+        std_rms = max(2.5, mad_rms, float(np.std(valid)))
+
+        # Compute spectral centroid + sub-frame pitch/energy variance to reject monotone desk bumps
+        freqs = np.fft.rfftfreq(win, d=1.0 / sr)
+        hann = np.hanning(win).astype(np.float32)
+        spec_mag = np.abs(np.fft.rfft(blocks * hann, axis=1)) + 1e-9
+        spec_sum = np.sum(spec_mag, axis=1)
+        centroids = np.sum(spec_mag * freqs[None, :], axis=1) / spec_sum
+
+        # Sub-frame (50ms) pitch/energy variance inside each 0.5s bin
+        sub_blocks = blocks.reshape(n_bins, 10, win // 10)
+        sub_rms = np.sqrt(np.mean(sub_blocks * sub_blocks, axis=2) + 1e-12)
+        sub_db = 20.0 * np.log10(sub_rms)
+        pitch_var = np.std(sub_db, axis=1)
+
+        med_cent = float(np.median(centroids[db > -65.0])) if np.any(db > -65.0) else 800.0
+        z_db_arr = (db - median_rms) / std_rms
+
+        raw_bins = []
+        spikes = []
         spike_thresh = median_rms + spike_offset
-        spikes = [(round(i * 0.5, 2), round(float(db[i]), 1)) for i in range(n_bins) if db[i] >= spike_thresh]
+        for i in range(n_bins):
+            t_bin = round(i * 0.5, 2)
+            db_val = round(float(db[i]), 1)
+            z_val = round(float(z_db_arr[i]), 2)
+            c_val = round(float(centroids[i]), 1)
+            pv_val = round(float(pitch_var[i]), 2)
+            # Down-weight isolated single-bin monotone low-frequency mic thumps
+            is_thump = (c_val < max(260.0, med_cent * 0.45) and pv_val < 1.8)
+            raw_bins.append({
+                "t": t_bin,
+                "db": db_val,
+                "z_db": z_val if not is_thump else round(z_val * 0.35, 2),
+                "centroid": c_val,
+                "pitch_var": pv_val,
+            })
+            if not is_thump and (db[i] >= spike_thresh or z_db_arr[i] >= 2.2):
+                spikes.append((t_bin, db_val, z_val, c_val, pv_val))
 
         windows = []
         if spikes:
             w_start, w_end = spikes[0][0], spikes[0][0] + 1.5
-            for t, val in spikes[1:]:
+            w_max_z, w_max_db, w_max_pv = spikes[0][2], spikes[0][1], spikes[0][4]
+            for t, val, zv, cv, pv in spikes[1:]:
                 if t <= w_end + 1.0:
                     w_end = max(w_end, t + 1.5)
+                    w_max_z = max(w_max_z, zv)
+                    w_max_db = max(w_max_db, val)
+                    w_max_pv = max(w_max_pv, pv)
                 else:
-                    windows.append([w_start, w_end])
+                    windows.append([w_start, w_end, round(w_max_db - median_rms, 1), round(w_max_z, 2), round(w_max_pv, 2)])
                     w_start, w_end = t, t + 1.5
-            windows.append([w_start, w_end])
+                    w_max_z, w_max_db, w_max_pv = zv, val, pv
+            windows.append([w_start, w_end, round(w_max_db - median_rms, 1), round(w_max_z, 2), round(w_max_pv, 2)])
 
-        return (windows, audio_dur) if return_meta else windows
+        audio_meta = {
+            "median_rms_db": round(median_rms, 2),
+            "std_rms_db": round(std_rms, 2),
+            "median_centroid": round(med_cent, 1),
+            "raw_bins": raw_bins,
+        }
+        if return_meta:
+            return windows, audio_dur, audio_meta
+        return windows
     except Exception as e:
         print(f"[Multimodal Warning] Error running audio spike detection: {e}", file=sys.stderr)
-        return ([], 0.0) if return_meta else []
+        if return_meta:
+            return [], 0.0, {"median_rms_db": -30.0, "std_rms_db": 6.0, "raw_bins": []}
+        return []
 
 
 # ── 2. Face Reaction Analysis ───────────────────────────────────────────────
-def get_mouth_aspect_ratio(landmarks):
-    if landmarks is None or len(landmarks) < 10: return 0.0
+def get_face_kinematics(landmarks):
+    """Computes MAR, upper-face/eye openness ratio (EAR proxy), and face center from YuNet 5-point landmarks."""
+    if landmarks is None or len(landmarks) < 10:
+        return 0.0, 0.0, (0.0, 0.0)
+    reye = np.array([landmarks[0], landmarks[1]])
+    leye = np.array([landmarks[2], landmarks[3]])
+    nose = np.array([landmarks[4], landmarks[5]])
     rmc = np.array([landmarks[6], landmarks[7]])
     lmc = np.array([landmarks[8], landmarks[9]])
-    mouth_width = np.linalg.norm(rmc - lmc)
-    if mouth_width < 1.0: return 0.0
-    nose = np.array([landmarks[4], landmarks[5]])
+    inter_ocular = max(1.0, float(np.linalg.norm(leye - reye)))
+    mouth_width = max(1.0, float(np.linalg.norm(rmc - lmc)))
     mouth_center = (rmc + lmc) / 2.0
-    return float(np.linalg.norm(nose - mouth_center) / mouth_width)
+    mar = float(np.linalg.norm(nose - mouth_center) / mouth_width)
+    eye_mid = (reye + leye) / 2.0
+    ear_proxy = float(np.linalg.norm(nose - eye_mid) / inter_ocular)
+    return mar, ear_proxy, (float(nose[0]), float(nose[1]))
 
 
 def analyze_face_reactions(video_path: str, cam_config_path: str, sample_interval: float = 1.5, max_duration: float = None, max_wall_sec: float = 240.0):
@@ -204,6 +269,8 @@ def analyze_face_reactions(video_path: str, cam_config_path: str, sample_interva
     frame_idx = 0
     last_eval_t = -999.0
     t_start = time.time()
+    prev_nose = None
+    prev_mar = None
 
     try:
         while True:
@@ -223,6 +290,9 @@ def analyze_face_reactions(video_path: str, cam_config_path: str, sample_interva
             cam_crop = np.frombuffer(buf, dtype=np.uint8).reshape((out_h, out_w, 3))
             face_roi = None
             mar_score = 0.0
+            ear_score = 0.0
+            head_vel = 0.0
+            mouth_motion = 0.0
 
             if detector_yunet is not None:
                 faces = detector_yunet.detect(cam_crop)
@@ -234,7 +304,13 @@ def analyze_face_reactions(video_path: str, cam_config_path: str, sample_interva
                     fh = min(out_h - fy, fh)
                     if fw > 12 and fh > 12:
                         face_roi = cam_crop[fy:fy+fh, fx:fx+fw]
-                        mar_score = get_mouth_aspect_ratio(best_face[4:14])
+                        mar_score, ear_score, nose_pt = get_face_kinematics(best_face[4:14])
+                        if prev_nose is not None:
+                            head_vel = float(math.hypot(nose_pt[0] - prev_nose[0], nose_pt[1] - prev_nose[1]) / max(1.0, float(fw)))
+                        if prev_mar is not None:
+                            mouth_motion = float(abs(mar_score - prev_mar))
+                        prev_nose = nose_pt
+                        prev_mar = mar_score
 
             if face_roi is None or face_roi.shape[0] < 12 or face_roi.shape[1] < 12:
                 my = int(out_h * 0.15)
@@ -257,14 +333,21 @@ def analyze_face_reactions(video_path: str, cam_config_path: str, sample_interva
             surprise = float(probs[0][2])
             anger = float(probs[0][4])
 
-            intensity = max(joy * 100.0, surprise * 110.0, anger * 80.0)
+            intensity = max(joy * 100.0, surprise * 110.0, anger * 85.0)
             if mar_score > 0.48:
                 intensity = max(intensity, 75.0)
+            if head_vel > 0.15:
+                intensity = min(100.0, intensity + 12.0)
 
             records.append({
                 "time": round(curr_time, 2),
                 "joy": round(joy, 3),
                 "surprise": round(surprise, 3),
+                "anger": round(anger, 3),
+                "mar": round(mar_score, 3),
+                "ear": round(ear_score, 3),
+                "mouth_motion": round(mouth_motion, 4),
+                "head_vel": round(head_vel, 4),
                 "intensity": round(intensity, 1)
             })
     finally:
@@ -277,9 +360,27 @@ def analyze_face_reactions(video_path: str, cam_config_path: str, sample_interva
         proc.wait()
         t_err.join(timeout=2.0)
 
+    # Calibrate MAR / EAR / mouth_motion deltas relative to VOD neutral median
+    med_mar = float(np.median([r["mar"] for r in records if r["mar"] > 0])) if any(r["mar"] > 0 for r in records) else 0.42
+    med_ear = float(np.median([r["ear"] for r in records if r["ear"] > 0])) if any(r["ear"] > 0 for r in records) else 0.85
+    for r in records:
+        mar_delta = r["mar"] - med_mar if r["mar"] > 0 else 0.0
+        ear_delta = r["ear"] - med_ear if r["ear"] > 0 else 0.0
+        if (r["surprise"] >= 0.40 or mar_delta > 0.10 or (r["head_vel"] > 0.14 and ear_delta > 0.04)):
+            r["face_tag"] = "FACE:SHOCK_OR_SCREAM"
+        elif r["joy"] >= 0.45:
+            r["face_tag"] = "FACE:LAUGH"
+        elif r["anger"] >= 0.40:
+            r["face_tag"] = "FACE:RAGE"
+        elif r["mar"] > 0 and r["mouth_motion"] < 0.015 and r["intensity"] < 28.0:
+            r["face_tag"] = "FACE:DEADPAN_STARE"
+        else:
+            r["face_tag"] = "FACE:NEUTRAL"
+
     print(f"[Face Scan] Decoded {frame_idx} keyframes, scored {len(records)} samples in {time.time()-t_start:.2f}s", file=sys.stderr)
     return {
         "duration": video_duration or (pts_list[-1] if pts_list else 0.0),
+        "median_mar": round(med_mar, 3),
         "samples": records
     }
 
@@ -290,7 +391,7 @@ def run_fusion(
     audio_path: str,
     cam_config_path: str,
     output_path: str,
-    top_k: int = 18
+    top_k: int = 20
 ):
     print(f"[Multimodal Pipeline] Starting analysis for: {video_path}", file=sys.stderr)
 
@@ -342,7 +443,7 @@ def run_fusion(
     with ThreadPoolExecutor(max_workers=2) as pool:
         fut_audio = pool.submit(analyze_audio_spikes, audio_path, 8.0, True)
         fut_face = pool.submit(analyze_face_reactions, video_path, cam_config_path)
-        audio_spikes, audio_dur = fut_audio.result()
+        audio_spikes, audio_dur, audio_meta = fut_audio.result()
         face_res = fut_face.result()
 
     duration = 300.0
@@ -487,19 +588,52 @@ def run_fusion(
         if len(anchors) >= top_k:
             break
 
-    # Persist standardized telemetry cache files for <10s Script Sandbox iterations
+    # Persist standardized telemetry cache files for isolated EDL & Sandbox iterations
     try:
         os.makedirs("/files/temp", exist_ok=True)
-        ae_peaks = [{"start": round(float(sw[0]), 2), "end": round(float(sw[1]), 2), "mid": round((float(sw[0]) + float(sw[1])) / 2.0, 2), "jump_db": 10.0, "label": "dB_PEAK"} for sw in audio_spikes]
+        ae_peaks = [
+            {
+                "start": round(float(sw[0]), 2),
+                "end": round(float(sw[1]), 2),
+                "mid": round((float(sw[0]) + float(sw[1])) / 2.0, 2),
+                "jump_db": float(sw[2]) if len(sw) > 2 else 10.0,
+                "z_db": float(sw[3]) if len(sw) > 3 else 2.5,
+                "pitch_var": float(sw[4]) if len(sw) > 4 else 3.0,
+                "label": "SCREAM" if (len(sw) > 2 and float(sw[2]) >= 10.0) else "dB_PEAK",
+            }
+            for sw in audio_spikes
+        ]
         with open("/files/temp/audio_energy.json", "w", encoding="utf-8") as f:
-            json.dump({"peaks": ae_peaks, "count": len(ae_peaks)}, f, indent=2)
+            json.dump({
+                "peaks": ae_peaks,
+                "count": len(ae_peaks),
+                "median_rms_db": audio_meta.get("median_rms_db", -30.0),
+                "std_rms_db": audio_meta.get("std_rms_db", 6.0),
+                "raw_bins": audio_meta.get("raw_bins", []),
+            }, f, indent=2)
         if chat_res is not None:
             with open("/files/temp/chat_laughter_clusters.json", "w", encoding="utf-8") as f:
                 json.dump({"clusters": chat_res.get("top_clusters", []), "count": len(chat_res.get("top_clusters", []))}, f, indent=2)
         if face_res is not None:
-            f_ev = [{"start": s["time"], "end": s["time"] + 1.5, "dominant": ("joy" if s.get("joy", 0) >= s.get("surprise", 0) else "surprise"), "intensity": s["intensity"]} for s in face_res.get("samples", []) if s.get("intensity", 0) >= 65.0]
+            f_ev = [
+                {
+                    "start": s["time"],
+                    "end": s["time"] + 1.5,
+                    "dominant": ("shock" if s.get("face_tag") == "FACE:SHOCK_OR_SCREAM" else ("laugh" if s.get("face_tag") == "FACE:LAUGH" else ("rage" if s.get("face_tag") == "FACE:RAGE" else "reaction"))),
+                    "face_tag": s.get("face_tag", "FACE:NEUTRAL"),
+                    "intensity": s["intensity"],
+                    "mouth_motion": s.get("mouth_motion", 0.0),
+                    "head_vel": s.get("head_vel", 0.0),
+                }
+                for s in face_res.get("samples", [])
+                if s.get("intensity", 0) >= 55.0 or s.get("face_tag") == "FACE:DEADPAN_STARE"
+            ]
             with open("/files/temp/face_emotions.json", "w", encoding="utf-8") as f:
-                json.dump({"top_events": f_ev, "samples": face_res.get("samples", [])[:1500]}, f, indent=2)
+                json.dump({
+                    "median_mar": face_res.get("median_mar", 0.42),
+                    "top_events": f_ev,
+                    "samples": face_res.get("samples", []),
+                }, f, indent=2)
         from telemetry_fusion_indexer import build_unified_index
         live_tx = "/files/temp/transcript.json" if os.path.exists("/files/temp/transcript.json") else None
         build_unified_index(
