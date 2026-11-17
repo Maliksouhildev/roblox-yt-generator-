@@ -105,6 +105,18 @@ checks = [
     ("3. Prepare Director Prompt", "ZERO OVERLAPPING TIMESTAMPS", "Director non-overlapping EDL rule"),
     ("3. Prepare Director Prompt", "DISTINCT SCENES (>= 120s APART)", "Director >=120s scene distinctness rule"),
     ("6. Extract Viral Segments", "dedupedIntervals", "ExtractViral non-hook interval deduplication"),
+
+    # 13. Bug 1-4 Production Hardening checks
+    ("Context Merge Agent", "assembled_spoken_script", "ContextMerge reads Loop Clips assembled_spoken_script first"),
+    ("Context Merge Fallback", "assembled_spoken_script", "ContextMergeFallback reads Loop Clips assembled_spoken_script first"),
+    ("Create Subtitle Binary", "NO AUDIO FOUND", "CreateSubtitle BANNED_CAPTION_RE bans NO AUDIO FOUND / NO WORDS"),
+    ("Write Sidecar JSON", "NO AUDIO FOUND", "WriteSidecarJSON BANNED regex bans NO AUDIO FOUND / NO WORDS"),
+    ("Screen UI Vision Audit", "screen_ui_audit.py", "ScreenUIVisionAudit invokes 4-frame Gemini Vision audit"),
+    ("IF: Screen Clean?", "has_ui_obstruction !== true", "IfScreenClean skips obstructed browser/ESC menu clips"),
+    ("1. Prepare Scout Prompt", "keep counter", "Scout anti-intro rules & anti-raid filter"),
+    ("3. Prepare Director Prompt", "thank you for the raid", "Director anti-intro rules & anti-raid filter"),
+    ("5. Split Clips", "INTRO_RULES_RAID_RE", "SplitClips filters raid thank-yous & intro rules clips"),
+    ("6. Extract Viral Segments", "isPauseOrPunctStart", "ExtractViral +-1.2s Whisper sentence/pause boundary snapping"),
 ]
 
 all_passed = True

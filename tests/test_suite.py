@@ -407,6 +407,163 @@ class TestPipelineComprehensive(unittest.TestCase):
         audit = tss.audit_sandbox_edl({"previews": previews}, idx_doc, words=words)
         self.assertTrue(audit["all_passed"], f"Sandbox audit failed: {audit}")
 
+    def test_banned_captions_no_words_and_fallback_to_director_hook(self):
+        """Bug 1: NO WORDS / NO AUDIO FOUND / NO TRANSCRIPT / UNDEFINED / NULL / ERROR must fall back to Director hook."""
+        cs_code = self.nodes["Create Subtitle Binary"]["parameters"]["jsCode"]
+        harness = (
+            "const $input = { first: () => ({ json: {} }) };\n"
+            "const $ = () => ({ item: { json: {} }, last: () => ({ json: {} }) });\n"
+            + cs_code.split("const subInput =")[0]
+            + "\nconst results = ['NO WORDS','NO AUDIO FOUND','NO TRANSCRIPT','UNDEFINED','NULL','ERROR','He actually screamed!']"
+              ".map(s => sanitizeCaption(s, 'ESCAPING THE DOLLHOUSE'));\n"
+              "console.log(JSON.stringify(results));\n"
+        )
+        with tempfile.NamedTemporaryFile('w', suffix='.js', delete=False, encoding='utf-8') as tf:
+            tf.write(harness)
+            tpath = tf.name
+        try:
+            res = subprocess.run(['node', tpath], capture_output=True, text=True)
+            self.assertEqual(res.returncode, 0, f"sanitizeCaption harness failed: {res.stderr}")
+            out = json.loads(res.stdout.strip())
+            self.assertEqual(out[:6], ["ESCAPING THE DOLLHOUSE"] * 6)
+            self.assertEqual(out[6], "HE ACTUALLY SCREAMED!")
+        finally:
+            if os.path.exists(tpath):
+                os.remove(tpath)
+
+    def test_screen_ui_audit_parser_and_fail_open(self):
+        """Bug 2: screen_ui_audit.py parses Vision JSON obstruction verdicts and fails open on missing inputs."""
+        sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'scripts')))
+        import screen_ui_audit as sua
+
+        pos = sua.parse_audit_response('```json\n{"has_ui_obstruction": true, "bad_frames": [0, 2]}\n```')
+        self.assertTrue(pos["has_ui_obstruction"])
+        self.assertEqual(pos["bad_frames"], [0, 2])
+
+        neg = sua.parse_audit_response('{"has_ui_obstruction": false, "bad_frames": []}')
+        self.assertFalse(neg["has_ui_obstruction"])
+
+        missing = sua.audit_video("/nonexistent/path/concatenated_clip.mp4")
+        self.assertFalse(missing["has_ui_obstruction"])
+        self.assertEqual(missing.get("skipped"), "video_missing")
+
+    def test_extract_viral_segments_sentence_pause_snapping_runtime(self):
+        """Bug 4: 6. Extract Viral Segments snaps mid-clause cuts to Whisper sentence/pause boundaries within ±1.2s."""
+        ev_js = self.nodes["6. Extract Viral Segments"]["parameters"]["jsCode"]
+        words = [
+            {"word": "Wait,", "start": 10.0, "end": 10.3},
+            {"word": "why", "start": 10.35, "end": 10.6},
+            {"word": "do", "start": 10.65, "end": 10.8},
+            {"word": "I", "start": 10.85, "end": 11.0},
+            {"word": "hear", "start": 11.05, "end": 11.3},
+            {"word": "footsteps?", "start": 11.35, "end": 11.9},
+            {"word": "Run", "start": 12.4, "end": 12.7},
+            {"word": "right", "start": 12.75, "end": 13.0},
+            {"word": "now!", "start": 13.05, "end": 13.5},
+            {"word": "Oh", "start": 25.0, "end": 25.2},
+            {"word": "my", "start": 25.25, "end": 25.45},
+            {"word": "gosh,", "start": 25.5, "end": 25.8},
+            {"word": "why", "start": 25.85, "end": 26.05},
+            {"word": "am", "start": 26.1, "end": 26.25},
+            {"word": "I", "start": 26.3, "end": 26.45},
+            {"word": "trapped", "start": 26.5, "end": 26.9},
+            {"word": "here?!", "start": 26.95, "end": 27.4},
+            {"word": "Help!", "start": 40.0, "end": 40.5},
+            {"word": "It", "start": 40.55, "end": 40.7},
+            {"word": "got", "start": 40.75, "end": 41.0},
+            {"word": "me!", "start": 41.05, "end": 41.5},
+        ]
+        # Pad words so segment durations hit >= 30s cleanly
+        clip_in = {
+            "clip_number": 1,
+            "title": "Footsteps Behind Me 😱",
+            "hook_caption": "WAIT WHY FOOTSTEPS?!",
+            "payoff_time": 41.2,
+            "segments": [
+                {"start": 10.5, "end": 20.5, "role": "SETUP"},
+                {"start": 25.9, "end": 36.2, "role": "ESCALATION"},
+                {"start": 40.4, "end": 50.8, "role": "PAYOFF"},
+            ]
+        }
+        harness = (
+            "const $input = { all: () => [{ json: " + json.dumps(clip_in) + " }] };\n"
+            "const $ = (name) => name === '3. Groq Whisper' ? { first: () => ({ json: { words: " + json.dumps(words) + " } }) } : { first: () => ({ json: {} }), last: () => ({ json: {} }) };\n"
+            "function runNode() {\n" + ev_js + "\n}\n"
+            "console.log(JSON.stringify(runNode()));\n"
+        )
+        with tempfile.NamedTemporaryFile('w', suffix='.js', delete=False, encoding='utf-8') as tf:
+            tf.write(harness)
+            tpath = tf.name
+        try:
+            res = subprocess.run(['node', tpath], capture_output=True, text=True)
+            self.assertEqual(res.returncode, 0, f"6. Extract Viral Segments runtime failed: {res.stderr}")
+            out = json.loads(res.stdout.strip())
+            self.assertEqual(len(out), 3)
+            # SETUP started at 10.5 (mid-clause 'why do I') -> must snap back to 10.0 ('Wait, why do I hear footsteps?')
+            self.assertLessEqual(out[0]['json']['start'], 10.05)
+            self.assertTrue(out[0]['json']['spoken_text'].startswith("Wait,"))
+            # ESCALATION started at 25.9 (mid-clause 'am I trapped') -> must snap back to 25.0 ('Oh my gosh...')
+            self.assertLessEqual(out[1]['json']['start'], 25.05)
+            self.assertTrue(out[1]['json']['spoken_text'].startswith("Oh my gosh"))
+            # PAYOFF started at 40.4 -> must snap back before 'Help!' (<= 40.0)
+            self.assertLessEqual(out[2]['json']['start'], 40.05)
+            self.assertTrue(out[2]['json']['spoken_text'].startswith("Help!"))
+        finally:
+            if os.path.exists(tpath):
+                os.remove(tpath)
+
+    def test_split_clips_rejects_intro_rules_and_raid_thank_yous(self):
+        """Bug 3: 5. Split Clips filters out raid thank-yous and stream intro rules clips."""
+        split_js = self.nodes["5. Split Clips"]["parameters"]["jsCode"]
+        mock_payload = {
+            "clips": [
+                {
+                    "clip_number": 1,
+                    "narrative_archetype": "HUBRIS_INSTANT_KARMA",
+                    "title": "Stream Rules Intro 💀",
+                    "hook_caption": "KEEP COUNTER RULES",
+                    "virality_score": 95,
+                    "assembled_spoken_script": "Thank you for the raid guys! Make sure to watch till the end of the stream for the keep counter!",
+                    "segments": [
+                        {"start": 10.0, "end": 21.0, "role": "SETUP"},
+                        {"start": 22.0, "end": 33.0, "role": "ESCALATION"},
+                        {"start": 34.0, "end": 45.0, "role": "PAYOFF"}
+                    ]
+                },
+                {
+                    "clip_number": 2,
+                    "narrative_archetype": "DOUBLE_DOWN_ESCALATION",
+                    "title": "Dollhouse Jumpscare 😱",
+                    "hook_caption": "DOLLHOUSE MONSTER CHASE",
+                    "virality_score": 90,
+                    "assembled_spoken_script": "It is right behind us! Run up the stairs right now!",
+                    "segments": [
+                        {"start": 120.0, "end": 131.0, "role": "SETUP"},
+                        {"start": 132.0, "end": 143.0, "role": "ESCALATION"},
+                        {"start": 144.0, "end": 156.0, "role": "PAYOFF"}
+                    ]
+                }
+            ]
+        }
+        harness = (
+            "const $input = { all: () => [{ json: { output: " + json.dumps(json.dumps(mock_payload)) + " } }] };\n"
+            "const $ = () => ({ item: { json: {} }, last: () => ({ json: { dry_run: true, streamer_name: 'Kreek' } }), first: () => ({ json: {} }) });\n"
+            "function runNode() {\n" + split_js + "\n}\n"
+            "console.log(JSON.stringify(runNode()));\n"
+        )
+        with tempfile.NamedTemporaryFile('w', suffix='.js', delete=False, encoding='utf-8') as tf:
+            tf.write(harness)
+            tpath = tf.name
+        try:
+            res = subprocess.run(['node', tpath], capture_output=True, text=True)
+            self.assertEqual(res.returncode, 0, f"5. Split Clips runtime failed: {res.stderr}")
+            out = json.loads(res.stdout.strip())
+            self.assertEqual(len(out), 1)
+            self.assertEqual(out[0]['json']['title'], "Dollhouse Jumpscare 😱")
+        finally:
+            if os.path.exists(tpath):
+                os.remove(tpath)
+
     def test_dead_space_avatar_row_filter(self):
         """Virality Update: cam_detector.py detects static row of non-animated VTuber avatars in top third."""
         real_w, real_h = 1920, 1080

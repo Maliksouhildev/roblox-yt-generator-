@@ -796,6 +796,111 @@ inputItems.forEach((clipData, clipIdx) => {
     }
   }
 
+  // Bug 4 fix: Snap every segment start & end to nearest Whisper sentence boundary (., !, ?) or >0.35s pause within ±1.2s
+  if (words.length > 0 && finalSegs.length > 0) {
+    const isPauseOrPunctStart = (wi) => {
+      if (wi <= 0) return true;
+      const prevTok = String(words[wi - 1].word || '').trim();
+      const gap = Number(words[wi].start || 0) - Number(words[wi - 1].end || 0);
+      return /[.!?]$/.test(prevTok) || gap > 0.35;
+    };
+    const isPauseOrPunctEnd = (wi) => {
+      if (wi >= words.length - 1) return true;
+      const tok = String(words[wi].word || '').trim();
+      const gap = Number(words[wi + 1].start || 0) - Number(words[wi].end || 0);
+      return /[.!?]$/.test(tok) || gap > 0.35;
+    };
+    const cleanCutBefore = (wi) => {
+      if (wi <= 0) return Math.max(3.0, Number(words[0].start || 3.0) - 0.06);
+      const pStart = Number(words[wi - 1].start || 0);
+      const pEnd = Number(words[wi - 1].end || 0);
+      const cStart = Number(words[wi].start || 0);
+      const cEnd = Number(words[wi].end || cStart);
+      if (pEnd <= cStart) return Math.max(pEnd + 0.02, cStart - 0.06);
+      return Math.min(cStart - 0.02, (pStart + pEnd) * 0.25 + (cStart + cEnd) * 0.25);
+    };
+    const cleanCutAfter = (wi) => {
+      if (wi >= words.length - 1) return Number(words[wi].end || 0) + 0.10;
+      const cStart = Number(words[wi].start || 0);
+      const cEnd = Number(words[wi].end || 0);
+      const nStart = Number(words[wi + 1].start || cEnd + 0.5);
+      const nEnd = Number(words[wi + 1].end || nStart);
+      if (cEnd <= nStart) return Math.min(nStart - 0.02, cEnd + 0.10);
+      return Math.max(cEnd + 0.02, (cStart + cEnd) * 0.25 + (nStart + nEnd) * 0.25);
+    };
+
+    for (let si = 0; si < finalSegs.length; si++) {
+      const seg = finalSegs[si];
+      const isHook = String(seg.role || '').toUpperCase() === 'HOOK_CLIMAX';
+      const minBound = isHook ? 3.0 : (si === 0 ? 3.0 : Number((finalSegs[si - 1].end + 0.02).toFixed(3)));
+      const maxBound = isHook ? (seg.start + 2.6) : (si < finalSegs.length - 1 ? Number((finalSegs[si + 1].start - 0.02).toFixed(3)) : Number((seg.end + 1.2).toFixed(3)));
+
+      let firstI = -1, lastI = -1;
+      for (let wi = 0; wi < words.length; wi++) {
+        const ws = Number(words[wi].start || 0);
+        const we = Number(words[wi].end || ws);
+        if (we > seg.start + 0.04 && ws < seg.end - 0.04) {
+          if (firstI === -1) firstI = wi;
+          lastI = wi;
+        }
+      }
+      if (firstI === -1) continue;
+
+      if (!isHook) {
+        if (!isPauseOrPunctStart(firstI)) {
+          let bestStart = seg.start;
+          let bestDist = Infinity;
+          for (let wi = Math.max(0, firstI - 16); wi < Math.min(words.length, firstI + 16); wi++) {
+            if (!isPauseOrPunctStart(wi)) continue;
+            const cand = cleanCutBefore(wi);
+            const dist = Math.abs(cand - seg.start);
+            if (dist <= 1.2 && cand >= minBound && (seg.end - cand) >= 1.0 && dist < bestDist) {
+              bestDist = dist;
+              bestStart = cand;
+            }
+          }
+          seg.start = Number(bestStart.toFixed(3));
+        } else if (seg.start > Number(words[firstI].start || 0)) {
+          const cand = cleanCutBefore(firstI);
+          if (cand >= minBound && Math.abs(cand - seg.start) <= 1.2) {
+            seg.start = Number(cand.toFixed(3));
+          }
+        }
+      }
+
+      // Recompute lastI after start snap
+      lastI = -1;
+      for (let wi = 0; wi < words.length; wi++) {
+        const ws = Number(words[wi].start || 0);
+        const we = Number(words[wi].end || ws);
+        if (we > seg.start + 0.04 && ws < seg.end - 0.04) lastI = wi;
+      }
+      if (lastI !== -1) {
+        if (!isPauseOrPunctEnd(lastI)) {
+          let bestEnd = seg.end;
+          let bestDist = Infinity;
+          const searchHi = isHook ? lastI : Math.min(words.length - 1, lastI + 16);
+          for (let wi = Math.max(0, lastI - 16); wi <= searchHi; wi++) {
+            if (!isPauseOrPunctEnd(wi)) continue;
+            const cand = cleanCutAfter(wi);
+            const dist = Math.abs(cand - seg.end);
+            const minLen = isHook ? 0.9 : 1.0;
+            if (dist <= 1.2 && cand <= maxBound && (cand - seg.start) >= minLen && dist < bestDist) {
+              bestDist = dist;
+              bestEnd = cand;
+            }
+          }
+          seg.end = Number(bestEnd.toFixed(3));
+        } else if (seg.end < Number(words[lastI].end || 0)) {
+          const cand = cleanCutAfter(lastI);
+          if (cand <= maxBound && Math.abs(cand - seg.end) <= 1.2) {
+            seg.end = Number(cand.toFixed(3));
+          }
+        }
+      }
+    }
+  }
+
   // Attach spoken_text per cut segment and compute assembled script
   const enrichedSegs = finalSegs.map((seg) => {
     const segWords = words.length > 0
@@ -897,6 +1002,45 @@ return [{ pairedItem: { item: 0 }, json: { command: ffmpegCmd, clip_title: clipT
     })
     ExecuteCutConcat = {
         command: '={{ $json.command }}',
+    };
+
+    @node({
+        id: 'screen-ui-vision-audit-id',
+        name: 'Screen UI Vision Audit',
+        type: 'n8n-nodes-base.executeCommand',
+        version: 1,
+        position: [-84700, 26240],
+    })
+    ScreenUiVisionAudit = {
+        command: 'python3 /files/screen_ui_audit.py "/files/temp/concatenated_clip.mp4"',
+    };
+
+    @node({
+        id: 'if-screen-clean-id',
+        name: 'IF: Screen Clean?',
+        type: 'n8n-nodes-base.if',
+        version: 2.2,
+        position: [-84640, 26240],
+    })
+    IfScreenClean = {
+        conditions: {
+            options: {
+                caseSensitive: true,
+                typeValidation: 'strict',
+            },
+            conditions: [
+                {
+                    leftValue: '={{ (function(){ try { const raw = String($json.stdout || "{}").trim(); const m = raw.match(/\\{[\\s\\S]*\\}/); const d = m ? JSON.parse(m[0]) : {}; return d.has_ui_obstruction !== true; } catch(e) { return true; } })() }}',
+                    rightValue: true,
+                    operator: {
+                        type: 'boolean',
+                        operation: 'true',
+                    },
+                },
+            ],
+            combinator: 'and',
+        },
+        options: {},
     };
 
     @node({
@@ -1022,16 +1166,16 @@ function getLoopNodeJson(nodeName, fallbackJson) {
 }
 
 // ── Strict Caption & Placeholder Sanitizer ───────────────────────────────
-const BANNED_CAPTION_RE = /^(I CALLED TIME OUT|HE ACTUALLY FELL FOR IT|THAT DOES NOT COUNT|MY WORST BLUNDER|MUST WATCH MOMENT|VIRAL MOMENT)$/i;
+const BANNED_CAPTION_RE = /^(I CALLED TIME OUT|HE ACTUALLY FELL FOR IT|THAT DOES NOT COUNT|MY WORST BLUNDER|MUST WATCH MOMENT|VIRAL MOMENT|NO WORDS|NO AUDIO FOUND|NO TRANSCRIPT|UNDEFINED|NULL|ERROR)$/i;
 function sanitizeCaption(str, defaultFallback) {
-  const safeFallback = (defaultFallback && !BANNED_CAPTION_RE.test(String(defaultFallback).trim()) && !/<[^>]+>/.test(String(defaultFallback))) ? defaultFallback : "GAMING MOMENT";
+  const safeFallback = (defaultFallback && !BANNED_CAPTION_RE.test(String(defaultFallback).trim()) && !/\b(NO WORDS|NO AUDIO FOUND|NO TRANSCRIPT)\b/i.test(String(defaultFallback)) && !/<[^>]+>/.test(String(defaultFallback))) ? defaultFallback : "GAMING MOMENT";
   if (!str || typeof str !== 'string') return safeFallback;
   let clean = str.trim();
-  if (/[\$({]|<[^>]+>|item\.json|loop\s*clips|\{\{|\}\}|undefined|null/i.test(clean)) {
+  if (/[\$({]|<[^>]+>|item\.json|loop\s*clips|\{\{|\}\}|\b(undefined|null|error|no words|no audio found|no transcript)\b/i.test(clean)) {
     return safeFallback;
   }
   clean = clean.replace(/[{}\\x27\\x22\`$()<>]/g, '').replace(/_/g, ' ').trim().toUpperCase();
-  if (clean.length < 3 || BANNED_CAPTION_RE.test(clean) || /LOOP CLIPS|ITEM JSON/i.test(clean)) {
+  if (clean.length < 3 || BANNED_CAPTION_RE.test(clean) || /LOOP CLIPS|ITEM JSON|NO WORDS|NO AUDIO/i.test(clean)) {
     return safeFallback;
   }
   return clean.substring(0, 42);
@@ -1607,7 +1751,7 @@ AVAILABLE SOUNDS (pick from these exact filenames):
 {{ (function(){ let o=''; try{ o=$('Get Meme List').item.json.stdout||''; }catch(e){ try{ o=$('Get Meme List').last().json.stdout||''; }catch(e2){} } return o ? o.split('---DIMENSIONS---')[0].trim().replace(/\\n/g, ', ') : 'vine-boom-sound-effect_KT89XIq.mp3, huh_37bAoRo.mp3, fartmeme.mp3'; })() }}
 
 FULL TIMECODED TRANSCRIPT OF THE CLIP (read every word before placing ANY effects):
-{{ (function(){ let j={}; try{ j=$('7d. Get Subtitles (SRT)').item.json||{}; }catch(e){ try{ j=$('7d. Get Subtitles (SRT)').last().json||{}; }catch(e2){} } const w=j.words||(j.x_groq&&j.x_groq.words)||[]; return w.length>0?w.map(x=>'['+x.start.toFixed(1)+'s] '+x.word).join(' '):'NO WORDS'; })() }}`,
+{{ (function(){ let lc={}; try{ lc=$('Loop Clips').item.json||{}; }catch(e){ try{ lc=$('Loop Clips').last().json||{}; }catch(e2){} } const arc=String(lc.assembled_spoken_script||'').trim(); let j={}; try{ j=$('7d. Get Subtitles (SRT)').last().json||{}; }catch(e){} if(!j||(!j.words&&!j.x_groq&&!j.text)){ try{ j=$('7d. Get Subtitles (SRT)').item.json||{}; }catch(e2){} } const w=j.words||(j.x_groq&&j.x_groq.words)||[]; const timed=w.length>0?w.map(x=>'['+Number(x.start||0).toFixed(1)+'s] '+x.word).join(' '):String(j.text||'').trim(); if(arc&&timed) return arc+'\n\nTIMECODED WORDS:\n'+timed; return arc||timed||String(lc.title||lc.hook_caption||'Gameplay highlight clip'); })() }}`,
         options: {
             systemMessage: `You are an Elite YouTube Shorts Editor & Sound Designer.
 You have the Director's PROPOSED HOOK BANNER and the full timecoded transcript below.
@@ -1802,7 +1946,7 @@ AVAILABLE SOUNDS (pick from these exact filenames):
 {{ (function(){ let o=''; try{ o=$('Get Meme List').item.json.stdout||''; }catch(e){ try{ o=$('Get Meme List').last().json.stdout||''; }catch(e2){} } return o ? o.split('---DIMENSIONS---')[0].trim().replace(/\\n/g, ', ') : 'vine-boom-sound-effect_KT89XIq.mp3, huh_37bAoRo.mp3, fartmeme.mp3'; })() }}
 
 FULL TIMECODED TRANSCRIPT OF THE CLIP (read every word before placing ANY effects):
-{{ (function(){ let j={}; try{ j=$('7d. Get Subtitles (SRT)').item.json||{}; }catch(e){ try{ j=$('7d. Get Subtitles (SRT)').last().json||{}; }catch(e2){} } const w=j.words||(j.x_groq&&j.x_groq.words)||[]; return w.length>0?w.map(x=>'['+x.start.toFixed(1)+'s] '+x.word).join(' '):'NO WORDS'; })() }}`,
+{{ (function(){ let lc={}; try{ lc=$('Loop Clips').item.json||{}; }catch(e){ try{ lc=$('Loop Clips').last().json||{}; }catch(e2){} } const arc=String(lc.assembled_spoken_script||'').trim(); let j={}; try{ j=$('7d. Get Subtitles (SRT)').last().json||{}; }catch(e){} if(!j||(!j.words&&!j.x_groq&&!j.text)){ try{ j=$('7d. Get Subtitles (SRT)').item.json||{}; }catch(e2){} } const w=j.words||(j.x_groq&&j.x_groq.words)||[]; const timed=w.length>0?w.map(x=>'['+Number(x.start||0).toFixed(1)+'s] '+x.word).join(' '):String(j.text||'').trim(); if(arc&&timed) return arc+'\n\nTIMECODED WORDS:\n'+timed; return arc||timed||String(lc.title||lc.hook_caption||'Gameplay highlight clip'); })() }}`,
         options: {
             systemMessage: `You are an Elite YouTube Shorts Editor & Sound Designer.
 You have the Director's PROPOSED HOOK BANNER and the full timecoded transcript below.
@@ -2138,9 +2282,10 @@ for (let i = 0; i < numChunks; i++) {
   const prompt =
     'SYSTEM: You are an elite YouTube Shorts Viral Content Scout & Story Architect. Read the multimodal transcript index and construct 4-5 complete, multi-segment 30-45s story arcs across the stream.\n\n' +
     (multimodalHeader ? multimodalHeader + '\n' : '') +
-    '=== CRITICAL ANTI-ADMIN, ANTI-IDLE, ANTI-BROWSER & ANTI-OUTRO FILTER ===\n' +
-    'The streamer frequently Alt-Tabs out of Roblox into Chrome, Notepad, or OBS, or idles between matches. You MUST REJECT any segments containing:\n' +
+    '=== CRITICAL ANTI-ADMIN, ANTI-IDLE, ANTI-INTRO, ANTI-RULES & ANTI-OUTRO FILTER ===\n' +
+    'The streamer frequently Alt-Tabs out of Roblox into Chrome, Notepad, or OBS, explains stream rules at the start, or idles between matches. You MUST REJECT any segments containing:\n' +
     '• Typing player usernames into search bars, Chrome/browser tabs, YouTube Studio live chat popouts, Roblox website group/payout pages, Discord DMs, or settings.\n' +
+    '• [STRICT ANTI-INTRO, ANTI-RULES BANTER & ANTI-RAID]: FORBID selecting the streamer\'s opening stream-rules or giveaway explanations ("like the stream", "keep counter", "watch till the end of the stream", "rules of the stream") and FORBID raid thank-yous ("thank you for the raid", "welcome raiders"). Clips MUST feature actual in-game action, jumpscares, or comedic gameplay events!\n' +
     '• Outro panhandling or stream wrap-up banter ("everybody subscribe", "hit the like button", "smash that like", "see you next stream").\n' +
     '• Reading long lists of $3 donations or subscriber names while idling in menus ([STRICT ANTI-CONVERSATIONAL BANTER & DONATION AFTERMATH]).\n' +
     '• [STRICT ANTI-IDLE & ANTI-STATIC]: REJECT segments where the character is standing still in a lobby waiting for a match, reading chat idly, or staring at a wall!\n' +
@@ -2371,8 +2516,9 @@ const prompt =
   '• DISTINCT SCENES (>= 120s APART): Each clip MUST tell a distinct story arc with a distinct PAYOFF climax (for full 1h+ VODs >= 120s apart; on shorter highlights never duplicate the same PAYOFF). Reject superchat thank-yous and giveaway bot spam.\n' +
   '• RUTHLESS DEAD-AIR REMOVAL & 30-45s TARGET: Total stitched duration across all segments MUST be strictly between 30s and 45s (sweet spot 32s-42s).\n\n' +
 
-  '=== RULE 1: STRICT ANTI-ADMIN, ANTI-MENU, ANTI-OUTRO & ANTI-BROWSER FILTER ===\n' +
-  '• NEVER include desktop/browser screens, Chrome/Edge tabs, YouTube Studio, notepad, OBS, or admin housekeeping in any clip!\n' +
+  '=== RULE 1: STRICT ANTI-ADMIN, ANTI-MENU, ANTI-INTRO-RULES, ANTI-RAID & ANTI-BROWSER FILTER ===\n' +
+  '• NEVER include desktop/browser screens, Chrome/Edge tabs, Twitch/YouTube chat popout dashboards, Roblox ESC pause/settings menus, YouTube Studio, notepad, OBS, or admin housekeeping in any clip!\n' +
+  '• [STRICT ANTI-INTRO, ANTI-RULES BANTER & ANTI-RAID]: FORBID selecting opening stream-rules/giveaway explanations ("like the stream", "keep counter", "watch till the end of the stream", "rules of the stream") or raid thank-yous ("thank you for the raid", "welcome raiders"). Every Short MUST feature actual in-game action, jumpscares, or comedic gameplay events!\n' +
   '• NEVER include outro panhandling ("everybody subscribe", "hit the like button", "smash the like", "don\'t forget to subscribe") or end-of-stream sign-offs!\n' +
   '• NEVER include slow UI menus, trade request dialogues, inventory browsing, or passive donation roll calls.\n\n' +
 
@@ -2486,7 +2632,8 @@ if (whisperWords.length === 0) {
 }
 
 const OUTRO_PANHANDLING_RE = /\b(everybody\s+subscribe|hit\s+the\s+like\s+button|smash\s+(?:that\s+|the\s+)?like|don'?t\s+forget\s+to\s+subscribe|make\s+sure\s+to\s+subscribe|drop\s+a\s+like\s+and\s+subscribe|subscribe\s+to\s+the\s+channel|thanks\s+for\s+watching\s+(?:guys|everyone)|peace\s+out\s+everybody)\b/i;
-const BANNED_CAPTION_RE = /^(I CALLED TIME OUT|HE ACTUALLY FELL FOR IT|THAT DOES NOT COUNT|MY WORST BLUNDER|MUST WATCH MOMENT|VIRAL MOMENT)$/i;
+const INTRO_RULES_RAID_RE = /\b(thank\s+you\s+for\s+the\s+raid|thanks\s+for\s+the\s+raid|welcome\s+raiders|watch\s+till\s+the\s+end\s+of\s+the\s+stream|keep\s+counter)\b/i;
+const BANNED_CAPTION_RE = /^(I CALLED TIME OUT|HE ACTUALLY FELL FOR IT|THAT DOES NOT COUNT|MY WORST BLUNDER|MUST WATCH MOMENT|VIRAL MOMENT|NO WORDS|NO AUDIO FOUND|NO TRANSCRIPT|UNDEFINED|NULL|ERROR)$/i;
 
 function getWindowTranscript(segs) {
   if (!whisperWords.length || !Array.isArray(segs) || !segs.length) return "";
@@ -2937,7 +3084,7 @@ return allClips.map((clip, index) => {
 
   const windowSpeech = getWindowTranscript(validSegs);
   const fullSpeech = (clip.assembled_spoken_script || "") + " " + windowSpeech + " " + (clip.title || "");
-  const isOutro = OUTRO_PANHANDLING_RE.test(fullSpeech);
+  const isOutro = OUTRO_PANHANDLING_RE.test(fullSpeech) || INTRO_RULES_RAID_RE.test(fullSpeech);
   const totalDurFinal = Number(validSegs.reduce((acc, s) => acc + (s.end - s.start), 0).toFixed(2));
 
   return { json: {
@@ -3003,7 +3150,7 @@ return allClips.map((clip, index) => {
         position: [-81420, 26840],
     })
     WriteSidecarJson = {
-        command: `={{ (function(){ function getNode(name){ try{ const it=$(name).item; if(it&&it.json&&Object.keys(it.json).length) return it.json; }catch(e){} try{ const lt=$(name).last(); if(lt&&lt.json&&Object.keys(lt.json).length) return lt.json; }catch(e2){} return {}; } const loopItem = getNode('Loop Clips'); const title = (loopItem.title || 'clip').replace(/[\\/\\\\"'<>|&;:]/g, '_').trim(); const sidecarFile = '/files/outputs/' + title + '.json'; let summary = {}; try { const sNode = getNode('1. Global Summary AI'); summary = JSON.parse((sNode.output || '{}').replace(/\`\`\`json/gi,'').replace(/\`\`\`/g,'').trim()); } catch(e) {} const BANNED = /^(I CALLED TIME OUT|HE ACTUALLY FELL FOR IT|THAT DOES NOT COUNT|MY WORST BLUNDER|MUST WATCH MOMENT|VIRAL MOMENT)$/i; const fallbackCap = (loopItem.hook_caption && !BANNED.test(String(loopItem.hook_caption).trim()) && !/<[^>]+>/.test(String(loopItem.hook_caption))) ? String(loopItem.hook_caption).trim().toUpperCase() : title; let caption = fallbackCap; try { let raw = (getNode('Context Merge Agent').output || getNode('Context Merge Fallback').output || '{}').replace(/\`\`\`json/gi,'').replace(/\`\`\`/g,'').trim(); const parsed = JSON.parse(raw).story_hook || ''; if (parsed && !BANNED.test(parsed.trim()) && !/<[^>]+>/.test(parsed)) { caption = parsed.trim().toUpperCase(); } } catch(e) {} const meta = { viral_caption: caption, game: summary.game || 'Gaming', global_summary: summary.global_summary || '', vibe: summary.vibe || '', theme: loopItem.theme || '', key_themes: summary.key_themes || [] }; const jsonStr = JSON.stringify(meta); return \`cat <<'SIDECAR_EOF' > "\${sidecarFile}"
+        command: `={{ (function(){ function getNode(name){ try{ const it=$(name).item; if(it&&it.json&&Object.keys(it.json).length) return it.json; }catch(e){} try{ const lt=$(name).last(); if(lt&&lt.json&&Object.keys(lt.json).length) return lt.json; }catch(e2){} return {}; } const loopItem = getNode('Loop Clips'); const title = (loopItem.title || 'clip').replace(/[\\/\\\\"'<>|&;:]/g, '_').trim(); const sidecarFile = '/files/outputs/' + title + '.json'; let summary = {}; try { const sNode = getNode('1. Global Summary AI'); summary = JSON.parse((sNode.output || '{}').replace(/\`\`\`json/gi,'').replace(/\`\`\`/g,'').trim()); } catch(e) {} const BANNED = /^(I CALLED TIME OUT|HE ACTUALLY FELL FOR IT|THAT DOES NOT COUNT|MY WORST BLUNDER|MUST WATCH MOMENT|VIRAL MOMENT|NO WORDS|NO AUDIO FOUND|NO TRANSCRIPT|UNDEFINED|NULL|ERROR)$/i; const fallbackCap = (loopItem.hook_caption && !BANNED.test(String(loopItem.hook_caption).trim()) && !/\\b(NO WORDS|NO AUDIO FOUND|NO TRANSCRIPT)\\b/i.test(String(loopItem.hook_caption)) && !/<[^>]+>/.test(String(loopItem.hook_caption))) ? String(loopItem.hook_caption).trim().toUpperCase() : title; let caption = fallbackCap; try { let raw = (getNode('Context Merge Agent').output || getNode('Context Merge Fallback').output || '{}').replace(/\`\`\`json/gi,'').replace(/\`\`\`/g,'').trim(); const parsed = JSON.parse(raw).story_hook || ''; if (parsed && !BANNED.test(parsed.trim()) && !/\\b(NO WORDS|NO AUDIO FOUND|NO TRANSCRIPT|UNDEFINED|NULL|ERROR)\\b/i.test(parsed) && !/<[^>]+>/.test(parsed)) { caption = parsed.trim().toUpperCase(); } } catch(e) {} const meta = { viral_caption: caption, game: summary.game || 'Gaming', global_summary: summary.global_summary || '', vibe: summary.vibe || '', theme: loopItem.theme || '', key_themes: summary.key_themes || [] }; const jsonStr = JSON.stringify(meta); return \`cat <<'SIDECAR_EOF' > "\${sidecarFile}"
 \${jsonStr}
 SIDECAR_EOF\`; })() }}`,
     };
@@ -4192,7 +4339,10 @@ return previews.map(p => ({ json: p }));`,
         this.IsDryRunScriptSandbox.out(0).to(this.DryRunScriptOnly.in(0));
         this.IsDryRunScriptSandbox.out(1).to(this.CutConcatAllSegments.in(0));
         this.CutConcatAllSegments.out(0).to(this.ExecuteCutConcat.in(0));
-        this.ExecuteCutConcat.out(0).to(this._7bExtractClipAudio.in(0));
+        this.ExecuteCutConcat.out(0).to(this.ScreenUiVisionAudit.in(0));
+        this.ScreenUiVisionAudit.out(0).to(this.IfScreenClean.in(0));
+        this.IfScreenClean.out(0).to(this._7bExtractClipAudio.in(0));
+        this.IfScreenClean.out(1).to(this.LoopClips.in(0));
         this._7bExtractClipAudio.out(0).to(this._7cReadAudio.in(0));
         this._7cReadAudio.out(0).to(this._7dGetSubtitlesSrt.in(0));
         this._7dGetSubtitlesSrt.out(0).to(this.GetMemeList.in(0));
