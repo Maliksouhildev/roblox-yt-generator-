@@ -57,7 +57,9 @@ STOPWORDS = {
     "have", "they", "were", "been", "look", "here", "come", "make", "take",
     "happy", "crazy", "funny", "weird", "scared", "sorry", "today", "later",
     "started", "always", "never", "maybe", "pretty", "literally", "totally",
-    "other", "everybody", "everyone", "anything", "nothing", "getting", "playing"
+    "other", "everybody", "everyone", "anything", "nothing", "getting", "playing",
+    "kind", "need", "want", "together", "relaxing", "tell", "good", "time",
+    "little", "probably", "mean", "sure", "give", "said", "saying", "does", "didnt"
 }
 
 
@@ -191,23 +193,90 @@ def load_audio_energy(audio_energy_path=None, return_meta=False):
     return deduped
 
 
-def load_chat_clusters(chat_path=None):
+def _resolve_active_stream(stream_file=None):
+    if stream_file:
+        return os.path.basename(str(stream_file).strip())
+    for p in ("/files/temp/active_stream.txt",):
+        if os.path.exists(p):
+            try:
+                v = open(p, "r", encoding="utf-8").read().strip()
+                if v:
+                    return os.path.basename(v)
+            except Exception:
+                pass
+    try:
+        if os.path.exists("/files/inputs"):
+            for f in sorted(os.listdir("/files/inputs")):
+                if f.endswith(".processing.mp4"):
+                    return f
+    except Exception:
+        pass
+    return ""
+
+
+def _validate_cache_stream(doc, file_path, active_stream, require_header=False):
+    if not isinstance(doc, dict):
+        return False
+    cached = os.path.basename(str(doc.get("stream_file") or "").strip())
+    if active_stream:
+        if require_header and not cached:
+            try:
+                os.remove(file_path)
+            except Exception:
+                pass
+            return False
+        if cached and cached != active_stream:
+            try:
+                os.remove(file_path)
+            except Exception:
+                pass
+            return False
+    return True
+
+
+def _has_matching_live_chat(active_stream):
+    if not active_stream or not os.path.isdir("/files/inputs"):
+        return True  # Cannot verify when active_stream unknown
+    stem = re.sub(r"(\.processing)?\.mp4$", "", active_stream, flags=re.I)
+    prefix = re.sub(r"[^a-z0-9]", "", stem.lower())[:14]
+    for fn in os.listdir("/files/inputs"):
+        if fn.endswith((".live_chat.json", ".chat.json")):
+            f_pref = re.sub(r"[^a-z0-9]", "", fn.lower())[:14]
+            if prefix and (prefix in f_pref or f_pref in prefix):
+                return True
+    return False
+
+
+def load_chat_clusters(chat_path=None, active_stream=""):
+    default_chat_p = "/files/temp/chat_laughter_clusters.json"
     p = _first_existing([
         chat_path,
-        "/files/temp/chat_laughter_clusters.json",
+        default_chat_p,
         "/files/temp/chat_analysis.json",
         "/files/temp/test_zscore_out.json",
     ])
     clusters = []
     beats_by_t = {}
 
+    if active_stream and not _has_matching_live_chat(active_stream):
+        # No live_chat file exists for current VOD: purge stale cache files
+        for stale_p in (default_chat_p, "/files/temp/chat_analysis.json", "/files/temp/comedic_beats.json"):
+            if os.path.exists(stale_p):
+                try:
+                    os.remove(stale_p)
+                except Exception:
+                    pass
+        if not chat_path:
+            return []
+
     if os.path.exists("/files/temp/comedic_beats.json"):
         try:
             with open("/files/temp/comedic_beats.json", "r", encoding="utf-8") as f:
                 cb = json.load(f)
-            for b in cb.get("comedic_beats") or cb.get("beats") or []:
-                t = round(float(b.get("peak_laugh_time", 0.0)), 1)
-                beats_by_t[t] = b
+            if _validate_cache_stream(cb, "/files/temp/comedic_beats.json", active_stream, require_header=True):
+                for b in cb.get("comedic_beats") or cb.get("beats") or []:
+                    t = round(float(b.get("peak_laugh_time", 0.0)), 1)
+                    beats_by_t[t] = b
         except Exception:
             pass
 
@@ -215,6 +284,10 @@ def load_chat_clusters(chat_path=None):
         try:
             with open(p, "r", encoding="utf-8") as f:
                 cd = json.load(f)
+            if p == default_chat_p and not _validate_cache_stream(cd, p, active_stream, require_header=True):
+                return []
+            if not _validate_cache_stream(cd, p, active_stream, require_header=False):
+                return []
             raw = cd.get("clusters") or cd.get("top_clusters") or []
             for c in raw:
                 pt = float(c.get("peak_time", 0.0))
@@ -359,10 +432,12 @@ def build_unified_index(
     output_dir="/files/temp",
     top_k=20,
     save_cache=True,
+    stream_file=None,
 ):
+    active_stream = _resolve_active_stream(stream_file)
     whisper = load_whisper(transcript_path)
     audio_peaks, audio_meta = load_audio_energy(audio_energy_path, return_meta=True)
-    chat_clusters = load_chat_clusters(chat_path)
+    chat_clusters = load_chat_clusters(chat_path, active_stream=active_stream)
     face_events, face_samples = load_face_emotions(face_path, return_samples=True)
 
     sentences = build_sentences_with_cadence(whisper["words"])
@@ -373,10 +448,16 @@ def build_unified_index(
     raw_bin_times = [float(b.get("t", 0.0)) for b in raw_bins]
     streamer_med_db = audio_meta.get("median_rms_db")
 
-    # Estimate streamer speech RMS baseline from speech windows if median_rms_db is missing
-    if streamer_med_db is None and raw_bins:
-        vals = sorted(float(b.get("db", -30.0)) for b in raw_bins if float(b.get("db", -90.0)) > -70.0)
-        streamer_med_db = vals[len(vals) // 2] if vals else -28.0
+    # Estimate true per-stream mean and std RMS dB for unbiased Z-score peak classification
+    valid_dbs = [float(b.get("db", -30.0)) for b in raw_bins if float(b.get("db", -90.0)) > -70.0]
+    if streamer_med_db is None and valid_dbs:
+        vals = sorted(valid_dbs)
+        streamer_med_db = vals[len(vals) // 2]
+    stream_mean_db = (sum(valid_dbs) / len(valid_dbs)) if valid_dbs else (streamer_med_db if streamer_med_db is not None else -28.0)
+    stream_std_db = float(audio_meta.get("std_rms_db") or 6.0)
+    if len(valid_dbs) >= 10:
+        calc_std = math.sqrt(sum((x - stream_mean_db) ** 2 for x in valid_dbs) / len(valid_dbs))
+        stream_std_db = max(2.5, calc_std, stream_std_db)
 
     face_samples_sorted = sorted(face_samples, key=lambda x: float(x.get("time", 0.0)))
     face_sample_times = [float(s.get("time", 0.0)) for s in face_samples_sorted]
@@ -433,14 +514,20 @@ def build_unified_index(
         avg_db, max_z_db = _window_audio_stats(st, en)
         matched_audio = [a for a in audio_peaks if a["start"] <= en + 2.0 and a.get("end", a["start"] + 1.5) >= st - 2.0]
         if matched_audio:
-            best_a = max(matched_audio, key=lambda x: x.get("jump_db", 8.0))
-            jmp = float(best_a.get("jump_db", 8.0))
-            if jmp >= 10.0 or best_a.get("label") == "SCREAM":
-                tags.append(f"[SCREAM][dB_PEAK:+{jmp:.1f}dB]")
-            else:
-                tags.append(f"[dB_PEAK:+{jmp:.1f}dB]")
+            best_a = max(matched_audio, key=lambda x: float(x.get("z_db", x.get("jump_db", 0.0) / stream_std_db)))
+            jmp = float(best_a.get("jump_db", 0.0))
+            true_z = float(best_a.get("z_db") if best_a.get("z_db") is not None else ((avg_db - stream_mean_db) / stream_std_db if avg_db is not None else jmp / stream_std_db))
+            true_z = max(true_z, max_z_db)
+            if true_z >= 2.8:
+                tags.append(f"[SCREAM:Z={true_z:.1f}|+{jmp:.1f}dB]")
+            elif true_z >= 2.0 or jmp >= 6.5:
+                tags.append(f"[dB_PEAK:Z={true_z:.1f}|+{jmp:.1f}dB]")
+        elif max_z_db >= 2.8:
+            jmp_est = max_z_db * stream_std_db
+            tags.append(f"[SCREAM:Z={max_z_db:.1f}|+{jmp_est:.1f}dB]")
         elif max_z_db >= 2.0:
-            tags.append(f"[dB_PEAK:+{(max_z_db * (audio_meta.get('std_rms_db', 6.0))):.1f}dB]")
+            jmp_est = max_z_db * stream_std_db
+            tags.append(f"[dB_PEAK:Z={max_z_db:.1f}|+{jmp_est:.1f}dB]")
 
         # Viewer / In-game voice detection: speech present, but low raw RMS or zero webcam mouth motion
         is_viewer_voice = False
@@ -697,6 +784,7 @@ def build_unified_index(
 
     index_doc = {
         "status": "success",
+        "stream_file": active_stream,
         "source_whisper": whisper["source_path"],
         "stream_duration_sec": round(duration, 1),
         "total_sentences": len(sentences),
@@ -714,19 +802,21 @@ def build_unified_index(
         with open(os.path.join(output_dir, "unified_timeline_index.json"), "w", encoding="utf-8") as f:
             json.dump(index_doc, f, indent=2)
 
-        ae_out = {"peaks": audio_peaks, "count": len(audio_peaks)}
+        ae_out = {"stream_file": active_stream, "peaks": audio_peaks, "count": len(audio_peaks)}
         if audio_meta.get("median_rms_db") is not None:
             ae_out["median_rms_db"] = audio_meta["median_rms_db"]
-            ae_out["std_rms_db"] = audio_meta["std_rms_db"]
+            ae_out["mean_rms_db"] = round(stream_mean_db, 2)
+            ae_out["std_rms_db"] = round(stream_std_db, 2)
         if audio_meta.get("raw_bins"):
             ae_out["raw_bins"] = audio_meta["raw_bins"]
         with open(os.path.join(output_dir, "audio_energy.json"), "w", encoding="utf-8") as f:
             json.dump(ae_out, f, indent=2)
 
-        with open(os.path.join(output_dir, "chat_laughter_clusters.json"), "w", encoding="utf-8") as f:
-            json.dump({"clusters": chat_clusters, "count": len(chat_clusters)}, f, indent=2)
+        if chat_clusters:
+            with open(os.path.join(output_dir, "chat_laughter_clusters.json"), "w", encoding="utf-8") as f:
+                json.dump({"stream_file": active_stream, "clusters": chat_clusters, "count": len(chat_clusters)}, f, indent=2)
 
-        fe_out = {"top_events": face_events, "count": len(face_events)}
+        fe_out = {"stream_file": active_stream, "top_events": face_events, "count": len(face_events)}
         if face_samples:
             fe_out["samples"] = face_samples
         with open(os.path.join(output_dir, "face_emotions.json"), "w", encoding="utf-8") as f:

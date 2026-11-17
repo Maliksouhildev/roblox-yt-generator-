@@ -18,7 +18,32 @@ VALID_ARCHETYPES = {
     "COMEDIC_STORYTELLING_OR_SARCASM",
     "FLASHFORWARD_MYSTERY_INVESTIGATION",
     "EMOTIONAL_SHOCK_OR_BETRAYAL",
+    # GTA 6 Launch Playbook Archetypes
+    "OPEN_WORLD_CHAOS_OR_COP_CHASE",
+    "LEONIDA_NPC_ENCOUNTER_OR_ROAST",
+    "HOW_TO_TIP_OR_SECRET_DISCOVERY",
+    "HUBRIS_WAGER_WASTED_KARMA",
+    "COMEDIC_BANTER_OR_SARCASM",
+    "STORY_CUTSCENE_OR_TWIST_REACTION",
 }
+
+REVERSAL_ARCHETYPES = {
+    "HUBRIS_WAGER_INSTANT_KARMA",
+    "HUBRIS_WAGER_WASTED_KARMA",
+    "FLASHFORWARD_MYSTERY_INVESTIGATION",
+}
+
+REVERSAL_CUES_RE = re.compile(
+    r"\b(wasted|busted|failed|fail|died|dead|caught|broke|lost|gone|wrong|wait|what|how|why|"
+    r"actually|never\s*mind|oh\s*no|uh\s*oh|no\s*way|betray|lie|lied|fake|scam|twist|omg)\b",
+    re.I,
+)
+
+DANGLING_HOOK_END_RE = re.compile(
+    r"\b(TO|A|AN|THE|OF|IN|ON|AT|FOR|WITH|FROM|BY|AND|OR|BUT|IF|IS|ARE|WAS|WERE|"
+    r"DO|DOES|DID|NOT|WANT|GOING|HAVE|HAS|MY|YOUR|OUR|THEIR|THIS|THAT)$",
+    re.I,
+)
 
 BANNED_HOOKS_RE = re.compile(
     r"^(I CALLED TIME OUT|HE ACTUALLY FELL FOR IT|THAT DOES NOT COUNT|MY WORST BLUNDER|"
@@ -58,6 +83,8 @@ CONTINUITY_STOPWORDS = {
     "though", "time", "today", "told", "took", "true", "trying", "wait", "wanna",
     "want", "wanted", "watching", "well", "were", "what", "when", "where", "which",
     "while", "will", "with", "would", "yeah", "your", "guys",
+    "kind", "need", "want", "together", "relaxing", "tell", "good",
+    "probably", "mean", "sure", "give", "said", "saying", "does", "didnt",
 }
 
 FILLER_START_RE = re.compile(r"^(and|so|but|then|or|because|though|wait what)\b", re.I)
@@ -90,13 +117,24 @@ def extract_entities(text):
     return {t.strip("'") for t in toks if t.strip("'") not in CONTINUITY_STOPWORDS and len(t.strip("'")) >= 4}
 
 
-def score_clip(clip, words, w_starts, sentences, global_summary):
+def compute_entity_doc_freq(sentences):
+    df = {}
+    total = max(1, len(sentences or []))
+    for s in (sentences or []):
+        ents = extract_entities(s.get("text", ""))
+        for e in ents:
+            df[e] = df.get(e, 0) + 1
+    return df, total
+
+
+def score_clip(clip, words, w_starts, sentences, global_summary, entity_df=None, total_sents=1):
     segs = clip.get("edl_segments") or []
     hook = str(clip.get("final_top_hook_caption") or clip.get("hook_caption") or "").strip()
     arch = str(clip.get("narrative_archetype") or "").strip()
     script_text = str(clip.get("assembled_spoken_script") or "")
     pre_ctx = str(clip.get("pre_hook_context_text") or "").strip()
     post_ctx = str(clip.get("post_payoff_context_text") or "").strip()
+    cause_text = str(clip.get("cause_and_effect_setup") or "").strip()
     tot_dur = float(clip.get("total_duration_sec") or sum(float(s.get("duration", 0)) for s in segs))
 
     sub = {}
@@ -133,12 +171,17 @@ def score_clip(clip, words, w_starts, sentences, global_summary):
             s1 -= 5.0
             flags.append("FILLER_CONTINUATION_START")
             notes.append(f"Starts with filler '{sp0[:25]}' without clean break")
-        # Check prior-sentence trailing spillover fragment (only when preceded by non-terminal token or starts lowercase)
+        # Check prior-sentence trailing spillover fragment or short orphan ellipsis opener
         m_spill = re.match(r"^([^.!?]{1,26}[.!?])\s+\S+", sp0)
         if m_spill and len(m_spill.group(1).split()) <= 4 and (not ends_sent or bool(re.match(r"^[a-z]", sp0))):
             s1 -= 5.0
             flags.append("PRE_HOOK_SPILLOVER_WORDS")
             notes.append(f"Trailing prior-sentence fragment '{m_spill.group(1)}' leaked into hook")
+        m_ellipsis = re.match(r"^([^.!?]{1,38}(?:\.\.\.|…))\s+[A-Z]", sp0)
+        if m_ellipsis and 1 <= len(m_ellipsis.group(1).split()) <= 5:
+            s1 -= 5.0
+            flags.append("DANGLING_ELLIPSIS_OPENER")
+            notes.append(f"Orphan ellipsis fragment '{m_ellipsis.group(1)}' leaked at hook start")
     sub["pre_hook_clean"] = max(0.0, s1)
 
     # ── 2. Premature Payoff Cutoff / Incomplete Climax (20 pts) ────────────
@@ -189,7 +232,11 @@ def score_clip(clip, words, w_starts, sentences, global_summary):
 
     # ── 3. Frankenstein Bait-and-Switch / Entity Continuity (15 pts) ───────
     s3 = 15.0
-    if len(segs) >= 2:
+    if len(cause_text) < 15:
+        s3 = 0.0
+        flags.append("MISSING_CAUSE_AND_EFFECT_SETUP")
+        notes.append(f"cause_and_effect_setup missing or < 15 chars ('{cause_text}')")
+    elif len(segs) >= 2:
         ec = clip.get("entity_continuity_check") or {}
         if ec.get("passed") is False:
             s3 = 0.0
@@ -202,21 +249,29 @@ def score_clip(clip, words, w_starts, sentences, global_summary):
             )
             e_setup = extract_entities(segs[0].get("spoken_text", ""))
             e_payoff = extract_entities(segs[-1].get("spoken_text", ""))
-            # Also include entities from cause_and_effect_setup or middle segment
-            e_mid = set()
-            for ms in segs[1:-1]:
-                e_mid |= extract_entities(ms.get("spoken_text", ""))
-            shared = (e_setup & (e_payoff | e_mid))
-            # Allow transitive chain continuity (Seg0 <-> Mid <-> Payoff) or explicit bridge
-            chain_ok = bool(e_setup & e_mid) and bool((e_mid & e_payoff) or re.search(r"\b(planted|device|secret|truth|found out|because|told you)\b", segs[-1].get("spoken_text", ""), re.I))
-            if max_gap > 25.0 and len(shared) == 0 and not chain_ok and arch != "COMEDIC_STORYTELLING_OR_SARCASM":
-                # Check 4-char stemmed prefix overlap
-                p_setup = {w[:4] for w in e_setup}
-                p_payoff = {w[:4] for w in (e_payoff | e_mid)}
-                if not (p_setup & p_payoff):
+            shared = (e_setup & e_payoff)
+            if not shared:
+                p_setup = {w[:5] for w in e_setup if len(w) >= 5}
+                p_payoff = {w[:5] for w in e_payoff if len(w) >= 5}
+                shared = p_setup & p_payoff
+
+            if max_gap > 180.0:
+                s3 = 0.0
+                flags.append("FRANKENSTEIN_MISMATCH")
+                notes.append(f"Jump cut gap {max_gap:.1f}s exceeds 180.0s hard cap")
+            elif max_gap > 45.0:
+                rare_shared = [
+                    e for e in (e_setup & e_payoff)
+                    if entity_df and (entity_df.get(e, 0) / float(max(1, total_sents))) < 0.05
+                ]
+                if not rare_shared:
                     s3 = 0.0
                     flags.append("FRANKENSTEIN_MISMATCH")
-                    notes.append(f"Gap {max_gap:.1f}s >25s with 0 shared entities between setup ({sorted(list(e_setup))[:5]}) & payoff ({sorted(list(e_payoff))[:5]})")
+                    notes.append(f"Gap {max_gap:.1f}s >45s without <5% DF rare concrete entity overlap")
+            elif max_gap > 25.0 and len(shared) == 0:
+                s3 = 0.0
+                flags.append("FRANKENSTEIN_MISMATCH")
+                notes.append(f"Gap {max_gap:.1f}s >25s with 0 shared concrete entities between setup ({sorted(list(e_setup))[:5]}) & payoff ({sorted(list(e_payoff))[:5]})")
     sub["entity_continuity"] = max(0.0, s3)
 
     # ── 4. Hook Caption Hallucination & Specificity (10 pts) ───────────────
@@ -237,10 +292,18 @@ def score_clip(clip, words, w_starts, sentences, global_summary):
             if hook != hook.upper():
                 s4 -= 3.0
                 flags.append("HOOK_NOT_ALL_CAPS")
-            if wc < 3 or wc > 5:
+            if wc < 3 or wc > 6:
                 s4 -= 3.0
                 flags.append("HOOK_WORD_COUNT_OFF")
-                notes.append(f"Hook '{hook}' has {wc} words (target 3-5)")
+                notes.append(f"Hook '{hook}' has {wc} words (target 3-6)")
+            if len(hook) > 32:
+                s4 -= 2.0
+                flags.append("HOOK_TOO_LONG_CHARS")
+                notes.append(f"Hook '{hook}' is {len(hook)} chars (>32)")
+            if DANGLING_HOOK_END_RE.search(hook):
+                s4 -= 5.0
+                flags.append("DANGLING_HOOK_END")
+                notes.append(f"Hook '{hook}' ends on dangling function/auxiliary word")
             # Grounding check: at least 1 meaningful content noun/verb or theme match
             nouns = [w for w in re.findall(r"[a-z0-9]{4,}", hook.lower()) if w not in {"what", "when", "why", "this", "that", "actually", "literally", "really"}]
             if nouns and all(n[:4] not in full_corpus for n in nouns):
@@ -265,14 +328,23 @@ def score_clip(clip, words, w_starts, sentences, global_summary):
             if sen >= st0 - 0.5 and sst <= en0 + 0.5:
                 for tg in s.get("tags", []):
                     empirical_tags.add(tg)
-    has_signal = any(
-        any(k in t for k in ("dB_PEAK", "SCREAM", "LAUGH_BURST", "CHAT_BURST", "CHAT_LAG", "FACE:", "VIEWER_OR_GAME_VOICE", "VOICE_PITCH_BREAK", "WPM_SPIKE"))
-        for t in (set(all_tags) | empirical_tags)
+    combined_tags = set(all_tags) | empirical_tags
+    has_peak_signal = any(
+        any(k in t for k in ("dB_PEAK", "SCREAM", "LAUGH_BURST", "CHAT_BURST", "CHAT_QUESTION_CLUSTER", "CHAT_LAG"))
+        for t in combined_tags
     )
-    if not has_signal:
+    has_any_signal = has_peak_signal or any(
+        any(k in t for k in ("FACE:", "VIEWER_OR_GAME_VOICE", "VOICE_PITCH_BREAK", "WPM_SPIKE"))
+        for t in combined_tags
+    )
+    if not has_any_signal:
         s5 = 0.0
         flags.append("FLAT_NO_MULTIMODAL_SIGNAL")
         notes.append("Zero dB/chat/face/pitch/viewer signals found in playback window")
+    elif not has_peak_signal:
+        s5 = 0.0
+        flags.append("WEAK_OR_ABSENT_EMPIRICAL_PEAK")
+        notes.append("Clip window lacks an empirical high-intensity peak (dB_PEAK/SCREAM/LAUGH_BURST/CHAT_BURST)")
     elif not empirical_tags and not all_tags:
         s5 = 4.0
     sub["multimodal_grounding"] = max(0.0, s5)
@@ -286,6 +358,17 @@ def score_clip(clip, words, w_starts, sentences, global_summary):
                 s6_fit -= 2.5
                 flags.append("UNNECESSARY_JUMP_CUT")
                 notes.append(f"Gap between seg {i+1} & {i+2} is only {gap:.2f}s (<4s); should be 1 continuous segment")
+    elif arch in REVERSAL_ARCHETYPES and segs:
+        # Require explicit lexical state reversal before the final 3.0s if single segment
+        rev_end = max(float(segs[0].get("start", 0.0)), float(segs[-1].get("end", 0.0)) - 3.0)
+        pre_rev_words = " ".join(
+            str(w.get("word", "")).strip()
+            for w in words_in_window(words, w_starts, float(segs[0].get("start", 0.0)), rev_end)
+        )
+        if not REVERSAL_CUES_RE.search(pre_rev_words or script_text):
+            s6_fit -= 2.5
+            flags.append("NO_REVERSAL_PROOF")
+            notes.append(f"Archetype {arch} used 1 segment without explicit pre-climax state reversal")
     if arch not in VALID_ARCHETYPES:
         s6_fit = max(0.0, s6_fit - 2.5)
         flags.append("INVALID_ARCHETYPE")
@@ -384,7 +467,8 @@ def audit_preview(
             "clips": [],
         }
 
-    clip_reports = [score_clip(c, words, w_starts, sentences, global_summary) for c in previews]
+    entity_df, total_sents = compute_entity_doc_freq(sentences)
+    clip_reports = [score_clip(c, words, w_starts, sentences, global_summary, entity_df=entity_df, total_sents=total_sents) for c in previews]
     distinct_arches = sorted({c["archetype"] for c in clip_reports if c["archetype"] in VALID_ARCHETYPES})
 
     # 6 (Batch-level). Archetype Diversity (5 pts of 10): >=3 distinct archetypes -> 5, 2 -> 2.5, 1 -> 0

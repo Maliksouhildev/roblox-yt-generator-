@@ -86,6 +86,7 @@ def analyze_audio_spikes(audio_path: str, spike_offset: float = 8.0, return_meta
             return []
 
         median_rms = float(np.median(valid))
+        mean_rms = float(np.mean(valid))
         mad_rms = float(np.median(np.abs(valid - median_rms))) * 1.4826
         std_rms = max(2.5, mad_rms, float(np.std(valid)))
 
@@ -103,7 +104,7 @@ def analyze_audio_spikes(audio_path: str, spike_offset: float = 8.0, return_meta
         pitch_var = np.std(sub_db, axis=1)
 
         med_cent = float(np.median(centroids[db > -65.0])) if np.any(db > -65.0) else 800.0
-        z_db_arr = (db - median_rms) / std_rms
+        z_db_arr = (db - mean_rms) / std_rms
 
         raw_bins = []
         spikes = []
@@ -144,6 +145,7 @@ def analyze_audio_spikes(audio_path: str, spike_offset: float = 8.0, return_meta
 
         audio_meta = {
             "median_rms_db": round(median_rms, 2),
+            "mean_rms_db": round(mean_rms, 2),
             "std_rms_db": round(std_rms, 2),
             "median_centroid": round(med_cent, 1),
             "raw_bins": raw_bins,
@@ -591,29 +593,63 @@ def run_fusion(
     # Persist standardized telemetry cache files for isolated EDL & Sandbox iterations
     try:
         os.makedirs("/files/temp", exist_ok=True)
+        active_stream_file = os.path.basename(video_path) if video_path else ""
+        try:
+            with open("/files/temp/active_stream.txt", "w", encoding="utf-8") as asf:
+                asf.write(active_stream_file)
+        except Exception:
+            pass
+
         ae_peaks = [
             {
                 "start": round(float(sw[0]), 2),
                 "end": round(float(sw[1]), 2),
                 "mid": round((float(sw[0]) + float(sw[1])) / 2.0, 2),
-                "jump_db": float(sw[2]) if len(sw) > 2 else 10.0,
-                "z_db": float(sw[3]) if len(sw) > 3 else 2.5,
-                "pitch_var": float(sw[4]) if len(sw) > 4 else 3.0,
-                "label": "SCREAM" if (len(sw) > 2 and float(sw[2]) >= 10.0) else "dB_PEAK",
+                "jump_db": round(float(sw[2]), 1) if len(sw) > 2 else 8.0,
+                "z_db": round(float(sw[3]), 2) if len(sw) > 3 else 2.2,
+                "pitch_var": round(float(sw[4]), 2) if len(sw) > 4 else 3.0,
+                "label": "SCREAM" if (len(sw) > 3 and float(sw[3]) >= 2.8) else "dB_PEAK",
             }
             for sw in audio_spikes
         ]
         with open("/files/temp/audio_energy.json", "w", encoding="utf-8") as f:
             json.dump({
+                "stream_file": active_stream_file,
                 "peaks": ae_peaks,
                 "count": len(ae_peaks),
                 "median_rms_db": audio_meta.get("median_rms_db", -30.0),
+                "mean_rms_db": audio_meta.get("mean_rms_db", audio_meta.get("median_rms_db", -30.0)),
                 "std_rms_db": audio_meta.get("std_rms_db", 6.0),
                 "raw_bins": audio_meta.get("raw_bins", []),
             }, f, indent=2)
         if chat_res is not None:
             with open("/files/temp/chat_laughter_clusters.json", "w", encoding="utf-8") as f:
-                json.dump({"clusters": chat_res.get("top_clusters", []), "count": len(chat_res.get("top_clusters", []))}, f, indent=2)
+                json.dump({
+                    "stream_file": active_stream_file,
+                    "chat_source": os.path.basename(chat_file) if chat_file else "",
+                    "clusters": chat_res.get("top_clusters", []),
+                    "count": len(chat_res.get("top_clusters", [])),
+                }, f, indent=2)
+            if os.path.exists("/files/temp/comedic_beats.json"):
+                try:
+                    cb_doc = json.load(open("/files/temp/comedic_beats.json", "r", encoding="utf-8"))
+                    if isinstance(cb_doc, dict):
+                        cb_doc["stream_file"] = active_stream_file
+                        json.dump(cb_doc, open("/files/temp/comedic_beats.json", "w", encoding="utf-8"), indent=2)
+                except Exception:
+                    pass
+        else:
+            # Purge any stale chat telemetry from prior VODs so cross-VOD leakage cannot happen
+            for stale_chat in (
+                "/files/temp/chat_laughter_clusters.json",
+                "/files/temp/chat_analysis.json",
+                "/files/temp/comedic_beats.json",
+            ):
+                if os.path.exists(stale_chat):
+                    try:
+                        os.remove(stale_chat)
+                    except Exception:
+                        pass
         if face_res is not None:
             f_ev = [
                 {
@@ -630,6 +666,7 @@ def run_fusion(
             ]
             with open("/files/temp/face_emotions.json", "w", encoding="utf-8") as f:
                 json.dump({
+                    "stream_file": active_stream_file,
                     "median_mar": face_res.get("median_mar", 0.42),
                     "top_events": f_ev,
                     "samples": face_res.get("samples", []),
@@ -644,6 +681,7 @@ def run_fusion(
             output_dir="/files/temp",
             top_k=top_k,
             save_cache=True,
+            stream_file=active_stream_file,
         )
     except Exception as e_idx:
         print(f"[Multimodal Warning] Unified timeline index build failed: {e_idx}", file=sys.stderr)

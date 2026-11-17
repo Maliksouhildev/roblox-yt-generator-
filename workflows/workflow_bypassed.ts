@@ -843,7 +843,7 @@ inputItems.forEach((clipData, clipIdx) => {
       if (!isHook && firstI > 0 && Number(words[firstI - 1].end || 0) > seg.start + 0.04 && (seg.start - Number(words[firstI - 1].start || 0)) <= 0.6) {
         const p2End = firstI > 1 ? Number(words[firstI - 2].end || 0) : 0;
         const p1Gap = Number(words[firstI - 1].start || 0) - p2End;
-        const p2Punct = firstI <= 1 || /[.!?]["')\]]*$/.test(String(words[firstI - 2].word || '').trim());
+        const p2Punct = firstI <= 1 || /[.!?]["')\\]]*$/.test(String(words[firstI - 2].word || '').trim());
         if (p1Gap > 0.45 || p2Punct) {
           firstI -= 1;
           seg.start = Number(Math.max(minBound, cleanCutBefore(firstI)).toFixed(3));
@@ -851,12 +851,12 @@ inputItems.forEach((clipData, clipIdx) => {
       }
 
       if (!isHook) {
-        const prevTermStart = firstI <= 0 || /[.!?]["')\]]*$/.test(String(words[firstI - 1].word || '').trim()) || (Number(words[firstI].start || 0) - Number(words[firstI - 1].end || 0)) >= 0.40;
+        const prevTermStart = firstI <= 0 || /[.!?]["')\\]]*$/.test(String(words[firstI - 1].word || '').trim()) || (Number(words[firstI].start || 0) - Number(words[firstI - 1].end || 0)) >= 0.40;
         // Drop 1..2-word prior-sentence tail ending in [.!?] ONLY when preceded mid-sentence (not when already cleanly at sentence start!)
         if (!prevTermStart) {
           let hasCloseBackStart = false;
           for (let b = firstI - 1; b >= Math.max(0, firstI - 6); b--) {
-            if (b === 0 || /[.!?]["')\]]*$/.test(String(words[b - 1].word || '').trim())) {
+            if (b === 0 || /[.!?]["')\\]]*$/.test(String(words[b - 1].word || '').trim())) {
               if ((seg.start - Number(words[b].start || 0)) <= 0.85 && Number(words[b].start || 0) >= minBound) {
                 hasCloseBackStart = true;
               }
@@ -867,7 +867,7 @@ inputItems.forEach((clipData, clipIdx) => {
             for (let k = 0; k < 2 && (firstI + k + 1) < words.length; k++) {
               const tokK = String(words[firstI + k].word || '').trim();
               const nxtS = Number(words[firstI + k + 1].start || 0);
-              if (/[.!?]["')\]]*$/.test(tokK) && nxtS < seg.end - 3.0) {
+              if (/[.!?]["')\\]]*$/.test(tokK) && nxtS < seg.end - 3.0) {
                 firstI = firstI + k + 1;
                 seg.start = Number(Math.max(minBound, cleanCutBefore(firstI)).toFixed(3));
                 break;
@@ -876,7 +876,7 @@ inputItems.forEach((clipData, clipIdx) => {
           }
         }
         // Guard against Whisper backward-overlapping prior-sentence tokens (e.g. 'town.' ending after 'Can' started)
-        if (firstI > 0 && !/[.!?]["')\]]*$/.test(String(words[firstI - 1].word || '').trim())) {
+        if (firstI > 0 && !/[.!?]["')\\]]*$/.test(String(words[firstI - 1].word || '').trim())) {
           let maxPrevMid = -1;
           for (let p = Math.max(0, firstI - 5); p < firstI; p++) {
             const pm = (Number(words[p].start || 0) + Number(words[p].end || words[p].start || 0)) * 0.5;
@@ -887,7 +887,7 @@ inputItems.forEach((clipData, clipIdx) => {
             for (let wi2 = firstI; wi2 < Math.min(words.length - 1, firstI + 12); wi2++) {
               const wm2 = (Number(words[wi2].start || 0) + Number(words[wi2].end || words[wi2].start || 0)) * 0.5;
               if (wm2 >= seg.start) {
-                if (/[.!?]["')\]]*$/.test(String(words[wi2].word || '').trim()) && Number(words[wi2 + 1].start || 0) < seg.end - 3.0) {
+                if (/[.!?]["')\\]]*$/.test(String(words[wi2].word || '').trim()) && Number(words[wi2 + 1].start || 0) < seg.end - 3.0) {
                   const nxS = Number(words[wi2 + 1].start || 0);
                   const wE = Number(words[wi2].end || 0);
                   seg.start = Number(Math.max(minBound, Math.max(wm2 + 0.03, wE <= nxS ? Math.max(wE + 0.03, nxS - 0.03) : nxS + 0.01)).toFixed(3));
@@ -898,11 +898,11 @@ inputItems.forEach((clipData, clipIdx) => {
           }
         }
         // Drop weak leading conjunction filler ("But ...", "And ...", "So ...") ONLY if mid-sentence
-        if (firstI > 0 && !/[.!?]["')\]]*$/.test(String(words[firstI - 1].word || '').trim()) && /^(and|but|so|then|or)$/i.test(String(words[firstI].word || '').replace(/[^a-zA-Z]/g, ''))) {
+        if (firstI > 0 && !/[.!?]["')\\]]*$/.test(String(words[firstI - 1].word || '').trim()) && /^(and|but|so|then|or)$/i.test(String(words[firstI].word || '').replace(/[^a-zA-Z]/g, ''))) {
           for (let k = 1; k <= 5 && (firstI + k + 1) < words.length; k++) {
             const tokK = String(words[firstI + k].word || '').trim();
             const nxtS = Number(words[firstI + k + 1].start || 0);
-            if (/[.!?]["')\]]*$/.test(tokK) && (seg.end - nxtS) >= 18.0) {
+            if (/[.!?]["')\\]]*$/.test(tokK) && (seg.end - nxtS) >= 18.0) {
               firstI = firstI + k + 1;
               seg.start = Number(Math.max(minBound, cleanCutBefore(firstI)).toFixed(3));
               break;
@@ -916,7 +916,7 @@ inputItems.forEach((clipData, clipIdx) => {
           const curW = words[wi];
           const pTok = String(prevW.word || '').trim();
           const gap = Number(curW.start || 0) - Number(prevW.end || 0);
-          return (/[.!?]["')\]]*$/.test(pTok) || gap > 0.40) && Number(prevW.end || 0) <= Number(curW.start || 0) + 0.08;
+          return (/[.!?]["')\\]]*$/.test(pTok) || gap > 0.40) && Number(prevW.end || 0) <= Number(curW.start || 0) + 0.08;
         };
         if (!isCleanBoundary(firstI)) {
           let bestStart = seg.start;
@@ -947,10 +947,10 @@ inputItems.forEach((clipData, clipIdx) => {
           for (let sh = 0; sh <= 10 && (actIdx + sh + 1) < words.length; sh++) {
             const cIdx = actIdx + sh;
             if (wMid(cIdx) - seg.start > 3.2 || (seg.end - wMid(cIdx)) < 18.0) break;
-            const prevEnds = cIdx === 0 || /[.!?]["')\]]*$/.test(String(words[cIdx - 1].word || '').trim()) || (Number(words[cIdx].start || 0) - Number(words[cIdx - 1].end || 0)) >= 0.40;
+            const prevEnds = cIdx === 0 || /[.!?]["')\\]]*$/.test(String(words[cIdx - 1].word || '').trim()) || (Number(words[cIdx].start || 0) - Number(words[cIdx - 1].end || 0)) >= 0.40;
             const maxPrevM = cIdx > 0 ? Math.max(...[1,2,3].filter(d => cIdx - d >= 0).map(d => wMid(cIdx - d))) : -1;
             const curCur = String(words[cIdx].word || '').trim();
-            if (prevEnds && !/[.!?]["')\]]*$/.test(curCur) && wMid(cIdx) > maxPrevM) {
+            if (prevEnds && !/[.!?]["')\\]]*$/.test(curCur) && wMid(cIdx) > maxPrevM) {
               seg.start = Number(Math.max(minBound, (maxPrevM + wMid(cIdx)) * 0.5).toFixed(3));
               break;
             }
@@ -972,7 +972,7 @@ inputItems.forEach((clipData, clipIdx) => {
           const bare = tok.toLowerCase().replace(/[^a-z]/g, '');
           return /[,;:]$/.test(tok) || /^(and|but|so|or|wait|like|uh|um|to|the|a|an|my|your|our|in|on|at|for|with|of|if|that|this|is|are|was|were|going|gonna|wanna|i|you|we|they|it)$/.test(bare);
         };
-        const isPunctEnd = (wi) => /[.!?]["')\]]*$/.test(String(words[wi].word || '').trim());
+        const isPunctEnd = (wi) => /[.!?]["')\\]]*$/.test(String(words[wi].word || '').trim());
         const isPauseEnd = (wi) => {
           if (isDanglingTail(wi)) return false;
           const gap = wi < words.length - 1 ? Number(words[wi + 1].start || 0) - Number(words[wi].end || 0) : 1.0;
@@ -1060,7 +1060,7 @@ inputItems.forEach((clipData, clipIdx) => {
         for (let k = tailIdx + 1; k < Math.min(words.length, tailIdx + 45); k++) {
           const weK = Number(words[k].end || lastS.end);
           if ((weK - lastS.end) > needExtra + 6.0) break;
-          if ((weK - lastS.end) >= needExtra && /[.!?]["')\]]*$/.test(String(words[k].word || '').trim())) {
+          if ((weK - lastS.end) >= needExtra && /[.!?]["')\\]]*$/.test(String(words[k].word || '').trim())) {
             const nxtS = k + 1 < words.length ? Number(words[k + 1].start || weK + 0.5) : weK + 0.5;
             lastS.end = Number(Math.min(nxtS - 0.03, weK + 0.10).toFixed(3));
             break;
@@ -1092,7 +1092,7 @@ inputItems.forEach((clipData, clipIdx) => {
               for (let k = tailIdx + 1; k < Math.min(words.length, tailIdx + 24); k++) {
                 const weK = Number(words[k].end || lastSeg.end);
                 if (weK - lastSeg.end > maxExtra) break;
-                if (/[.!?]["')\]]*$/.test(String(words[k].word || '').trim()) && (weK - lastSeg.end) >= 0.9) {
+                if (/[.!?]["')\\]]*$/.test(String(words[k].word || '').trim()) && (weK - lastSeg.end) >= 0.9) {
                   const nxtS = k + 1 < words.length ? Number(words[k + 1].start || weK + 0.5) : weK + 0.5;
                   lastSeg.end = Number(Math.min(nxtS - 0.03, weK + 0.10).toFixed(3));
                   break;
@@ -1118,7 +1118,7 @@ inputItems.forEach((clipData, clipIdx) => {
         let cleanEnd = null;
         for (let wi = words.length - 1; wi >= 0; wi--) {
           const we = Number(words[wi].end || 0);
-          if (we <= targetEnd && we >= s.start + 6.0 && /[.!?]["')\]]*$/.test(String(words[wi].word || '').trim())) {
+          if (we <= targetEnd && we >= s.start + 6.0 && /[.!?]["')\\]]*$/.test(String(words[wi].word || '').trim())) {
             const nxtS = wi + 1 < words.length ? Number(words[wi + 1].start || we + 0.5) : we + 0.5;
             cleanEnd = Number(Math.min(nxtS - 0.03, we + 0.10).toFixed(3));
             break;
@@ -1129,6 +1129,25 @@ inputItems.forEach((clipData, clipIdx) => {
           over -= (s.end - nextEnd);
           s.end = nextEnd;
         }
+      }
+    }
+  }
+
+  // Fix 1.6: Ellipsis orphan spillover guard on first segment opener
+  if (finalSegs.length > 0 && words.length > 0) {
+    const seg0 = finalSegs[0];
+    const s0Words = words.filter(w => {
+      const mid = (Number(w.start || 0) + Number(w.end || w.start || 0)) * 0.5;
+      return mid >= seg0.start && mid <= seg0.end;
+    });
+    for (let k = 0; k < Math.min(5, s0Words.length - 1); k++) {
+      const tk = String(s0Words[k].word || '').trim();
+      const nx = String(s0Words[k + 1].word || '').trim();
+      if (/(\\.\\.\\.|\\u2026)["')\\]]*$/.test(tk) && /^[A-Z]/.test(nx) && (seg0.end - Number(s0Words[k + 1].start || 0)) >= 20.0) {
+        const prevE = Number(s0Words[k].end || 0);
+        const nxtS = Number(s0Words[k + 1].start || 0);
+        seg0.start = Number(Math.max(3.0, prevE <= nxtS ? Math.max(prevE + 0.03, nxtS - 0.03) : nxtS + 0.01).toFixed(3));
+        break;
       }
     }
   }
@@ -1146,6 +1165,50 @@ inputItems.forEach((clipData, clipIdx) => {
       spoken_text: segWords
     };
   });
+
+  // Fix 1.5: Deterministic Meme SFX timestamp resolution against edl_segments
+  const totalOutDur = enrichedSegs.reduce((acc, s) => acc + Math.max(0, s.end - s.start), 0);
+  const mapVodSecToRelative = (vodSec, segsArr) => {
+    let prior = 0;
+    for (const sg of segsArr) {
+      if (vodSec >= sg.start - 1.5 && vodSec <= sg.end + 1.5) {
+        return Number((prior + Math.max(0, Math.min(sg.end - sg.start, vodSec - sg.start))).toFixed(2));
+      }
+      prior += Math.max(0, sg.end - sg.start);
+    }
+    return null;
+  };
+  let climaxRelSec = Math.max(0.5, totalOutDur - 3.5);
+  if (enrichedSegs.length > 0 && clipData.payoff_time) {
+    const mappedP = mapVodSecToRelative(Number(clipData.payoff_time), enrichedSegs);
+    if (mappedP !== null) climaxRelSec = Math.max(0.5, Math.min(totalOutDur - 1.5, mappedP));
+  }
+  const firstSegStart = enrichedSegs.length ? enrichedSegs[0].start : 0;
+  const rawMemes = Array.isArray(clipData.memes) ? clipData.memes : [];
+  const resolvedMemes = rawMemes.map(m => {
+    const mf = (m && (m.file || m.sound || m.name)) || '';
+    const ts = Number(m && m.timestamp);
+    let relTs = climaxRelSec;
+    if (!Number.isNaN(ts) && enrichedSegs.length > 0) {
+      const mm = Math.floor(ts);
+      const ss = Math.round((ts - mm) * 100);
+      const candMMSS = (ss >= 0 && ss < 60) ? (mm * 60 + ss) : null;
+      const candDecMin = ts * 60;
+      const candVodSec = ts;
+      const mappedList = [];
+      if (firstSegStart >= 60) {
+        if (candMMSS !== null) { const rA = mapVodSecToRelative(candMMSS, enrichedSegs); if (rA !== null) mappedList.push(rA); }
+        const rB = mapVodSecToRelative(candDecMin, enrichedSegs); if (rB !== null) mappedList.push(rB);
+        const rC = mapVodSecToRelative(candVodSec, enrichedSegs); if (rC !== null) mappedList.push(rC);
+      }
+      if (mappedList.length > 0) {
+        relTs = mappedList.reduce((best, cur) => Math.abs(cur - climaxRelSec) < Math.abs(best - climaxRelSec) ? cur : best, mappedList[0]);
+      } else if (ts >= 0 && ts <= totalOutDur && Math.abs(ts - (firstSegStart / 60)) > 1.0) {
+        relTs = Number(ts.toFixed(2));
+      }
+    }
+    return { ...m, file: mf, timestamp: Number(Math.max(0.5, Math.min(Math.max(0.5, totalOutDur - 1.5), relTs)).toFixed(2)) };
+  }).filter(m => m.file);
 
   const computedScript = enrichedSegs
     .map(s => \`[\${s.role} \${s.start.toFixed(1)}s-\${s.end.toFixed(1)}s] "\${s.spoken_text || '...'}"\`)
@@ -1173,6 +1236,7 @@ inputItems.forEach((clipData, clipIdx) => {
         cause_and_effect_setup: clipData.cause_and_effect_setup,
         entity_continuity_check: clipData.entity_continuity_check || { passed: true },
         assembled_spoken_script: clipData.assembled_spoken_script || computedScript,
+        memes: resolvedMemes,
         signal_justification: clipData.signal_justification || {},
         total_segments: enrichedSegs.length
       }
@@ -1406,10 +1470,10 @@ function getLoopNodeJson(nodeName, fallbackJson) {
 // ── Strict Caption & Placeholder Sanitizer ───────────────────────────────
 const BANNED_CAPTION_RE = /^(I CALLED TIME OUT|HE ACTUALLY FELL FOR IT|THAT DOES NOT COUNT|MY WORST BLUNDER|MUST WATCH MOMENT|VIRAL MOMENT|NO WORDS|NO AUDIO FOUND|NO TRANSCRIPT|UNDEFINED|NULL|ERROR)$/i;
 function sanitizeCaption(str, defaultFallback) {
-  const safeFallback = (defaultFallback && !BANNED_CAPTION_RE.test(String(defaultFallback).trim()) && !/\b(NO WORDS|NO AUDIO FOUND|NO TRANSCRIPT)\b/i.test(String(defaultFallback)) && !/<[^>]+>/.test(String(defaultFallback))) ? defaultFallback : "GAMING MOMENT";
+  const safeFallback = (defaultFallback && !BANNED_CAPTION_RE.test(String(defaultFallback).trim()) && !/\\b(NO WORDS|NO AUDIO FOUND|NO TRANSCRIPT)\\b/i.test(String(defaultFallback)) && !/<[^>]+>/.test(String(defaultFallback))) ? defaultFallback : "GAMING MOMENT";
   if (!str || typeof str !== 'string') return safeFallback;
   let clean = str.trim();
-  if (/[\$({]|<[^>]+>|item\.json|loop\s*clips|\{\{|\}\}|\b(undefined|null|error|no words|no audio found|no transcript)\b/i.test(clean)) {
+  if (/[\\$({]|<[^>]+>|item\\.json|loop\\s*clips|\\{\\{|\\}\\}|\\b(undefined|null|error|no words|no audio found|no transcript)\\b/i.test(clean)) {
     return safeFallback;
   }
   clean = clean.replace(/[{}\\x27\\x22\`$()<>]/g, '').replace(/_/g, ' ').trim().toUpperCase();
@@ -1429,7 +1493,7 @@ const avatarRowDetected = !!(camConfig && camConfig.avatar_row_detected);
 
 const getMemeOutput = getLoopNodeJson('Get Meme List', {}).stdout || "";
 const parts = getMemeOutput.split("---DIMENSIONS---");
-const realFiles = (parts[0] || "").split(NL).map(f => f.trim().replace(/\r/g, '')).filter(f => f.length > 3);
+const realFiles = (parts[0] || "").split(NL).map(f => f.trim().replace(/\\r/g, '')).filter(f => f.length > 3);
 
 let isVertical = false;
 if (parts.length > 1) {
@@ -1472,7 +1536,7 @@ let screams = [], memes = [], climaxQuote = "", reactionTriggers = [];
 // Deterministic Anti-Hallucination Check on story_hook (rejects foreign game names / unrelated nouns)
 function verifyHookAntiHallucination(candidateHook, clipSpeech, directorHook) {
   const cleanCand = sanitizeCaption(candidateHook, directorHook);
-  const FOREIGN_GAME_RE = /\b(RUST|TOWER OF HELL|FORTNITE|MINECRAFT|VALORANT|APEX|AMONG US|CSGO|GTA|BEDWARS|BROOKHAVEN|BLOXBURG)\b/i;
+  const FOREIGN_GAME_RE = /\\b(RUST|TOWER OF HELL|FORTNITE|MINECRAFT|VALORANT|APEX|AMONG US|CSGO|GTA|BEDWARS|BROOKHAVEN|BLOXBURG)\\b/i;
   let summaryText = "";
   try {
     const fs0 = require('fs');
@@ -1549,7 +1613,7 @@ if (relativePayoff <= 0 || relativePayoff >= clipDur) {
 
 let climaxStart = relativePayoff;
 if (climaxQuote && wordData.length > 0) {
-  const quoteWords = String(climaxQuote).toLowerCase().replace(/[^a-z0-9\s]/g, '').trim().split(/\s+/).filter(Boolean);
+  const quoteWords = String(climaxQuote).toLowerCase().replace(/[^a-z0-9\\s]/g, '').trim().split(/\\s+/).filter(Boolean);
   if (quoteWords.length > 0) {
     let bestIdx = -1;
     let maxMatch = 0;
@@ -1620,15 +1684,41 @@ const memeInputOffset = remotionOverlayFile ? 2 : 1;
 // ── Meme Audio Mixing & Loudness Mastering ───────────────────────────────
 const masterAudioFx = "acompressor=threshold=-20dB:ratio=5:attack=4:release=45,alimiter=limit=-1.5dB:attack=4:release=45,equalizer=f=3500:t=q:w=1.2:g=-3.5";
 
+const segListForMemes = Array.isArray(clipData.segments) ? clipData.segments : [];
+const firstSegStM = segListForMemes.length ? (Number(segListForMemes[0].start) || clipStart) : clipStart;
+const mapVodToRelMeme = (vs) => {
+  let pr = 0;
+  for (const sg of segListForMemes) {
+    const s0 = Number(sg.start) || 0, s1 = Number(sg.end) || 0;
+    if (vs >= s0 - 1.5 && vs <= s1 + 1.5) return pr + Math.max(0, Math.min(s1 - s0, vs - s0));
+    pr += Math.max(0, s1 - s0);
+  }
+  return null;
+};
 let audioInputs = [], audioFilters = "", activeMemes = 0;
 if (memes && memes.length > 0) {
   memes.forEach(m => {
-    if (activeMemes >= 6 || !m.file) return;
-    const realFile = getBestMatch(m.file) || (realFiles.find(f => f.toLowerCase().includes('vine')) || null);
+    const memeKey = (m && (m.file || m.sound || m.name)) || '';
+    if (activeMemes >= 6 || !memeKey) return;
+    const realFile = getBestMatch(memeKey) || (realFiles.find(f => f.toLowerCase().includes('vine')) || null);
     if (realFile) {
-      const time = parseFloat(m.timestamp);
+      let time = parseFloat(m.timestamp);
+      if (!isNaN(time) && segListForMemes.length > 0 && firstSegStM >= 60) {
+        const mm = Math.floor(time), ss = Math.round((time - mm) * 100);
+        const cA = (ss >= 0 && ss < 60) ? mapVodToRelMeme(mm * 60 + ss) : null;
+        const cB = mapVodToRelMeme(time * 60);
+        const cC = mapVodToRelMeme(time);
+        const validMapped = [cA, cB, cC].filter(v => v !== null);
+        if (validMapped.length > 0) {
+          time = validMapped.reduce((b, c) => Math.abs(c - climaxStart) < Math.abs(b - climaxStart) ? c : b, validMapped[0]);
+        } else if (!(time >= 0 && time <= clipDur && Math.abs(time - (firstSegStM / 60)) > 1.0)) {
+          time = Math.max(0.5, Math.min(clipDur - 1.5, climaxStart));
+        }
+      } else if (isNaN(time) || time < 0 || time > clipDur) {
+        time = Math.max(0.5, Math.min(clipDur - 1.5, climaxStart));
+      }
       if (!isNaN(time) && time >= 0) {
-        const delay = Math.floor(time * 1000);
+        const delay = Math.floor(Math.min(Math.max(0, clipDur - 0.5), time) * 1000);
         audioInputs.push('-i "/files/memes/' + realFile + '"');
         const memeVol = (typeof m.volume === 'number' ? m.volume : 0.30);
         const streamIdx = activeMemes + memeInputOffset;
@@ -1894,7 +1984,7 @@ if (isVertical) {
   filter = gamePart + overlayGraph;
 }
 
-const title = (clipData.title || "output_clip").replace(/[\/\\"'<>|&;:]/g, '_').trim();
+const title = (clipData.title || "output_clip").replace(/[\\/\\"'<>|&;:]/g, '_').trim();
 const outputFile = "/files/outputs/" + title + ".mp4";
 const extraInputs = overlayInput ? (' ' + overlayInput) : "";
 
@@ -3010,8 +3100,8 @@ if (whisperWords.length === 0) {
   } catch(e) {}
 }
 
-const OUTRO_PANHANDLING_RE = /\b(everybody\s+subscribe|hit\s+the\s+like\s+button|smash\s+(?:that\s+|the\s+)?like|don'?t\s+forget\s+to\s+subscribe|make\s+sure\s+to\s+subscribe|drop\s+a\s+like\s+and\s+subscribe|subscribe\s+to\s+the\s+channel|thanks\s+for\s+watching\s+(?:guys|everyone)|peace\s+out\s+everybody|we'?re\s+going\s+to\s+say\s+bye|came\s+from\s+the\s+stream|comment\b[^.?!]{0,40}\btomorrow|comment\s+[a-z0-9]{2,12}\s+(?:and\s+we'?ll|if\s+you)|ending\s+the\s+stream|see\s+you\s+next\s+time|be\s+right\s+back|starting\s+soon)\b/i;
-const INTRO_RULES_RAID_RE = /\b(thank\s+you\s+for\s+the\s+raid|thanks\s+for\s+the\s+raid|welcome\s+raiders|watch\s+till\s+the\s+end\s+of\s+the\s+stream|keep\s+counter)\b/i;
+const OUTRO_PANHANDLING_RE = /\\b(everybody\\s+subscribe|hit\\s+the\\s+like\\s+button|smash\\s+(?:that\\s+|the\\s+)?like|don'?t\\s+forget\\s+to\\s+subscribe|make\\s+sure\\s+to\\s+subscribe|drop\\s+a\\s+like\\s+and\\s+subscribe|subscribe\\s+to\\s+the\\s+channel|thanks\\s+for\\s+watching\\s+(?:guys|everyone)|peace\\s+out\\s+everybody|we'?re\\s+going\\s+to\\s+say\\s+bye|came\\s+from\\s+the\\s+stream|comment\\b[^.?!]{0,40}\\btomorrow|comment\\s+[a-z0-9]{2,12}\\s+(?:and\\s+we'?ll|if\\s+you)|ending\\s+the\\s+stream|see\\s+you\\s+next\\s+time|be\\s+right\\s+back|starting\\s+soon)\\b/i;
+const INTRO_RULES_RAID_RE = /\\b(thank\\s+you\\s+for\\s+the\\s+raid|thanks\\s+for\\s+the\\s+raid|welcome\\s+raiders|watch\\s+till\\s+the\\s+end\\s+of\\s+the\\s+stream|keep\\s+counter)\\b/i;
 const BANNED_CAPTION_RE = /^(I CALLED TIME OUT|HE ACTUALLY FELL FOR IT|THAT DOES NOT COUNT|MY WORST BLUNDER|MUST WATCH MOMENT|VIRAL MOMENT|PLAYING THE GAME|PLAYING THE GAME WRONG|GAMEPLAY HIGHLIGHT CLIP|WATCH THIS CLIP|NO WORDS|NO AUDIO FOUND|NO TRANSCRIPT|UNDEFINED|NULL|ERROR)$/i;
 
 function getWindowTranscript(segs) {
@@ -3037,10 +3127,10 @@ for (const item of items) {
   content = content.split(b3 + 'json').join('').split(b3).join('').trim();
 
   // 2. Auto-Fix common AI JSON typos
-  content = content.replace(/\}\}\}\,\,/g, '}},');
-  content = content.replace(/\}\}\]\}/g, '}}]}');
-  content = content.replace(/\]\]/g, ']');
-  content = content.replace(/\}\,\]/g, '}]');
+  content = content.replace(/\\}\\}\\}\\,\\,/g, '}},');
+  content = content.replace(/\\}\\}\\]\\}/g, '}}]}');
+  content = content.replace(/\\]\\]/g, ']');
+  content = content.replace(/\\}\\,\\]/g, '}]');
 
   try {
     const aiData = JSON.parse(content);
@@ -3052,7 +3142,7 @@ for (const item of items) {
     continue;
   } catch (e) {
     // Try extracting embedded JSON object
-    const jsonMatch = content.match(/\{[\s\S]*"clips"\s*:\s*\[[\s\S]*\]\s*\}/);
+    const jsonMatch = content.match(/\\{[\\s\\S]*"clips"\\s*:\\s*\\[[\\s\\S]*\\]\\s*\\}/);
     if (jsonMatch) {
       try {
         const recovered = JSON.parse(jsonMatch[0]);
@@ -3063,18 +3153,18 @@ for (const item of items) {
       } catch(e2) {}
     }
 
-    const clipBlocks = content.split(/"clip_number"\s*:/i);
+    const clipBlocks = content.split(/"clip_number"\\s*:/i);
     if (clipBlocks.length > 1) {
       for (let i = 1; i < clipBlocks.length; i++) {
         const block = clipBlocks[i];
-        const titleMatch = block.match(/"title"\s*:\s*"([^"]+)"/i);
-        const hookMatch = block.match(/"hook_caption"\s*:\s*"([^"]+)"/i);
-        const archMatch = block.match(/"narrative_archetype"\s*:\s*"([^"]+)"/i);
-        const startMatch = block.match(/"start_time"\s*:\s*([\d.]+)/i);
-        const endMatch = block.match(/"end_time"\s*:\s*([\d.]+)/i);
-        const payoffMatch = block.match(/"payoff_time"\s*:\s*([\d.]+)/i);
+        const titleMatch = block.match(/"title"\\s*:\\s*"([^"]+)"/i);
+        const hookMatch = block.match(/"hook_caption"\\s*:\\s*"([^"]+)"/i);
+        const archMatch = block.match(/"narrative_archetype"\\s*:\\s*"([^"]+)"/i);
+        const startMatch = block.match(/"start_time"\\s*:\\s*([\\d.]+)/i);
+        const endMatch = block.match(/"end_time"\\s*:\\s*([\\d.]+)/i);
+        const payoffMatch = block.match(/"payoff_time"\\s*:\\s*([\\d.]+)/i);
         let parsedSegs = null;
-        const segsMatch = block.match(/"segments"\s*:\s*(\[[\s\S]*?\])/i);
+        const segsMatch = block.match(/"segments"\\s*:\\s*(\\[[\\s\\S]*?\\])/i);
         if (segsMatch) {
           try { parsedSegs = JSON.parse(segsMatch[1]); } catch(eSeg) {}
         }
@@ -3095,7 +3185,7 @@ for (const item of items) {
         }
       }
     } else {
-      const allTimeMatches = [...content.matchAll(/\[([\d\.]+)[sS]?\s*-\s*([\d\.]+)[sS]?\]/g)];
+      const allTimeMatches = [...content.matchAll(/\\[([\\d\\.]+)[sS]?\\s*-\\s*([\\d\\.]+)[sS]?\\]/g)];
       if (allTimeMatches.length > 0) {
         let currentClipStart = parseFloat(allTimeMatches[0][1]);
         let currentClipEnd = parseFloat(allTimeMatches[0][2]);
@@ -3220,7 +3310,7 @@ if (allClips.length === 0) {
 }
 
 function normalizeRole(roleStr) {
-  const r = String(roleStr || '').toUpperCase().trim().replace(/[\s-]+/g, '_');
+  const r = String(roleStr || '').toUpperCase().trim().replace(/[\\s-]+/g, '_');
   const allowed = new Set([
     'HOOK_CLIMAX', 'CONTINUOUS_ARC', 'PROMPT_SETUP', 'REACTION_PAYOFF',
     'WAGER_SETUP', 'KARMA_PAYOFF', 'PREMISE', 'PUNCHLINE',
@@ -3242,7 +3332,7 @@ const CONTINUITY_STOPWORDS = new Set([
   'okay','just','like','know','look','here','come','make','take','your','youre','dont',
   'cant','wont','didnt','mean','literally','actually','seriously','ohmygod','gosh'
 ]);
-const NARRATIVE_BRIDGE_RE = /\b(because|told you|earlier|remember|that's why|promised|agreed|i said|called it|actually happened|bet you|planted|device|secret|truth|found out)\b/i;
+const NARRATIVE_BRIDGE_RE = /\\b(because|told you|earlier|remember|that's why|promised|agreed|i said|called it|actually happened|bet you|planted|device|secret|truth|found out)\\b/i;
 
 function checkSemanticEntityContinuity(segs, archetype, causeText) {
   const body = (segs || []).filter(s => s.role !== 'HOOK_CLIMAX');
@@ -3310,13 +3400,13 @@ function snapSegmentBounds(st, en, role, minBound, maxBound) {
     return { start: Number(outSt.toFixed(2)), end: Number(outEn.toFixed(2)) };
   }
   // Drop 1..2-word prior-sentence tail ending in [.!?] ONLY when preceded mid-sentence
-  const splitPrevClean = firstI <= 0 || /[.!?]["')\]]*$/.test(String(whisperWords[firstI - 1].word || '').trim());
+  const splitPrevClean = firstI <= 0 || /[.!?]["')\\]]*$/.test(String(whisperWords[firstI - 1].word || '').trim());
   if (!splitPrevClean) {
     for (let k = 0; k < 2 && (firstI + k + 1) < whisperWords.length; k++) {
       const fTok = String(whisperWords[firstI + k].word || '').trim();
       const nxtS = Number(whisperWords[firstI + k + 1].start || outSt);
       const fEnd = Number(whisperWords[firstI + k].end || outSt);
-      if (/[.!?]["')\]]*$/.test(fTok) && nxtS < outEn - 3.0) {
+      if (/[.!?]["')\\]]*$/.test(fTok) && nxtS < outEn - 3.0) {
         firstI = firstI + k + 1;
         outSt = Math.max(minBound, fEnd <= nxtS ? Math.max(fEnd + 0.035, nxtS - 0.035) : nxtS + 0.01);
         break;
@@ -3324,12 +3414,12 @@ function snapSegmentBounds(st, en, role, minBound, maxBound) {
     }
   }
   // Snap start to clean sentence boundary [.!?]
-  if (firstI > 0 && !/[.!?]["')\]]*$/.test(String(whisperWords[firstI - 1].word || '').trim())) {
+  if (firstI > 0 && !/[.!?]["')\\]]*$/.test(String(whisperWords[firstI - 1].word || '').trim())) {
     let snapped = false;
     // Prefer skipping forward to next sentence start if within 2.4s (prevents grabbing prior incomplete clause!)
     for (let j = firstI + 1; j < Math.min(whisperWords.length, firstI + 14); j++) {
       const wsJ = Number(whisperWords[j].start || outSt);
-      if ((wsJ - outSt) <= 2.4 && /[.!?]["')\]]*$/.test(String(whisperWords[j - 1].word || '').trim()) && (outEn - wsJ) >= 3.0) {
+      if ((wsJ - outSt) <= 2.4 && /[.!?]["')\\]]*$/.test(String(whisperWords[j - 1].word || '').trim()) && (outEn - wsJ) >= 3.0) {
         const prevEnd = Number(whisperWords[j - 1].end || 0);
         outSt = Math.max(minBound, prevEnd <= wsJ ? Math.max(prevEnd + 0.035, wsJ - 0.035) : wsJ + 0.01);
         snapped = true;
@@ -3340,7 +3430,7 @@ function snapSegmentBounds(st, en, role, minBound, maxBound) {
       for (let j = firstI - 1; j >= Math.max(0, firstI - 18); j--) {
         const wsJ = Number(whisperWords[j].start || outSt);
         if (wsJ < minBound || (outSt - wsJ) > 2.8) break;
-        if (j === 0 || /[.!?]["')\]]*$/.test(String(whisperWords[j - 1].word || '').trim())) {
+        if (j === 0 || /[.!?]["')\\]]*$/.test(String(whisperWords[j - 1].word || '').trim())) {
           const prevEnd = j > 0 ? Number(whisperWords[j - 1].end || 0) : 0;
           const cleanCut = prevEnd <= wsJ ? Math.max(prevEnd + 0.035, wsJ - 0.035) : wsJ + 0.01;
           outSt = Math.max(minBound, cleanCut);
@@ -3536,11 +3626,31 @@ return allClips.map((clip, index) => {
   sTime = validSegs[0].start;
   eTime = validSegs[validSegs.length - 1].end;
 
-  let hookCaption = (clip.hook_caption || "").trim().toUpperCase();
+  const DANGLING_END_RE = /\\b(TO|A|AN|THE|OF|IN|ON|AT|FOR|WITH|FROM|BY|AND|OR|BUT|IF|IS|ARE|WAS|WERE|DO|DOES|DID|NOT|WANT|GOING|HAVE|HAS|MY|YOUR|OUR|THEIR|THIS|THAT)$/i;
+  const fixHookText = (rawH, titleTxt, spTxt, causeTxt) => {
+    let h = String(rawH || "").replace(/[\\u2018\\u2019]/g, "'").replace(/[^A-Za-z0-9'\\s!?-]/g, " ").replace(/\\s+/g, " ").trim().toUpperCase();
+    const semCtx = (String(titleTxt || "") + " " + String(causeTxt || "")).toLowerCase();
+    if (/\\bcoolest\\b/i.test(semCtx)) h = h.replace(/\\bCOLDEST\\b/g, "COOLEST");
+    h = h.replace(/\\bRAGE\\s+BADER\\b/g, "RAGE BAITER");
+    let hw = h.split(/\\s+/).filter(Boolean);
+    if (hw.length > 6) hw = hw.slice(0, 6);
+    // Complete dangling tail using immediate next head noun from spoken script if present
+    if (hw.length >= 2 && hw.length < 6 && DANGLING_END_RE.test(hw[hw.length - 1]) && spTxt) {
+      const tailRe = new RegExp(hw.slice(-2).join("\\\\s+") + "\\\\s+([A-Za-z0-9']+)", "i");
+      const tm = String(spTxt).match(tailRe);
+      if (tm && tm[1] && !DANGLING_END_RE.test(tm[1])) hw.push(tm[1].toUpperCase());
+    }
+    while (hw.length > 3 && DANGLING_END_RE.test(hw[hw.length - 1])) hw.pop();
+    while (hw.length > 3 && hw.join(" ").length > 32) hw.pop();
+    if (hw.length >= 3 && !DANGLING_END_RE.test(hw[hw.length - 1])) return hw.join(" ");
+    let tw = String(titleTxt || "").replace(/[^A-Za-z0-9\\s']/g, " ").trim().toUpperCase().split(/\\s+/).filter(Boolean);
+    if (tw.length > 6) tw = tw.slice(0, 6);
+    while (tw.length > 3 && (DANGLING_END_RE.test(tw[tw.length - 1]) || tw.join(" ").length > 32)) tw.pop();
+    return tw.length >= 3 ? tw.join(" ") : (hw.join(" ") || "GAMING MOMENT");
+  };
+  let hookCaption = fixHookText(clip.hook_caption || clip.title, clip.title, getWindowTranscript(validSegs), clip.cause_and_effect_setup);
   if (!hookCaption || hookCaption.length < 3 || BANNED_CAPTION_RE.test(hookCaption) || /<[^>]+>/.test(hookCaption)) {
-    hookCaption = (clip.title || "").replace(/[^a-zA-Z0-9\s]/g, "").trim().toUpperCase();
-    const words = hookCaption.split(/\s+/).filter(Boolean).slice(0, 5);
-    hookCaption = words.join(" ");
+    hookCaption = fixHookText(clip.title, clip.title, getWindowTranscript(validSegs), clip.cause_and_effect_setup);
   }
 
   const windowSpeech = getWindowTranscript(validSegs);
@@ -4873,10 +4983,23 @@ let chatClusters = null;
 let comedicBeats = null;
 let faceEmotions = null;
 
-try { if (fs.existsSync('/files/temp/audio_energy.json')) audioEnergy = JSON.parse(fs.readFileSync('/files/temp/audio_energy.json', 'utf8')); } catch (e) {}
-try { if (fs.existsSync('/files/temp/chat_laughter_clusters.json')) chatClusters = JSON.parse(fs.readFileSync('/files/temp/chat_laughter_clusters.json', 'utf8')); } catch (e) {}
-try { if (fs.existsSync('/files/temp/comedic_beats.json')) comedicBeats = JSON.parse(fs.readFileSync('/files/temp/comedic_beats.json', 'utf8')); } catch (e) {}
-try { if (fs.existsSync('/files/temp/face_emotions.json')) faceEmotions = JSON.parse(fs.readFileSync('/files/temp/face_emotions.json', 'utf8')); } catch (e) {}
+const expectedStream = (indexDoc && indexDoc.stream_file) || pinned.stream_file || '';
+const loadCheckedCache = (fp) => {
+  if (!fs.existsSync(fp)) return null;
+  try {
+    const obj = JSON.parse(fs.readFileSync(fp, 'utf8'));
+    if (expectedStream && obj && obj.stream_file && obj.stream_file !== expectedStream) {
+      try { fs.unlinkSync(fp); } catch (eDel) {}
+      return null;
+    }
+    return obj;
+  } catch (e) { return null; }
+};
+audioEnergy = loadCheckedCache('/files/temp/audio_energy.json');
+chatClusters = loadCheckedCache('/files/temp/chat_laughter_clusters.json');
+if (expectedStream && chatClusters && !chatClusters.stream_file) { chatClusters = null; }
+comedicBeats = loadCheckedCache('/files/temp/comedic_beats.json');
+faceEmotions = loadCheckedCache('/files/temp/face_emotions.json');
 
 let words = (whisperDoc && (whisperDoc.words || (whisperDoc.x_groq && whisperDoc.x_groq.words))) || [];
 let duration = (whisperDoc && whisperDoc.duration) || (indexDoc && indexDoc.stream_duration_sec) || (words.length ? words[words.length - 1].end : 3600);
@@ -4893,7 +5016,7 @@ if (sliceCfg && (sliceCfg.slice_start_sec !== undefined || sliceCfg.slice_end_se
   if (outAnchors.length === 0 && indexDoc && indexDoc.anchors) outAnchors = indexDoc.anchors;
   const sliceWords = words.filter(w => Number(w.end || 0) >= sLo && Number(w.start || 0) <= sHi);
   if (sliceWords.length > 0) outText = sliceWords.map(w => String(w.word || '').trim()).join(' ');
-  outMacro = outSentences.filter(s => (s.tags || []).length > 0).slice(0, 120).map(s => s.annotated_line).join('\n');
+  outMacro = outSentences.filter(s => (s.tags || []).length > 0).slice(0, 120).map(s => s.annotated_line).join('\\n');
 }
 
 return [{
@@ -5037,20 +5160,31 @@ const getTagsInWindow = (t0, t1) => {
 };
 
 const BANNED_RE = /^(I CALLED TIME OUT|HE ACTUALLY FELL FOR IT|THAT DOES NOT COUNT|MY WORST BLUNDER|MUST WATCH MOMENT|VIRAL MOMENT|PLAYING THE GAME|PLAYING THE GAME WRONG|GAMEPLAY HIGHLIGHT CLIP|WATCH THIS CLIP|NO WORDS|NO AUDIO FOUND|NO TRANSCRIPT|UNDEFINED|NULL|ERROR)$/i;
-const FOREIGN_GAME_RE = /\b(RUST|TOWER OF HELL|FORTNITE|MINECRAFT|VALORANT|APEX|AMONG US|CSGO|GTA|BEDWARS|BROOKHAVEN|BLOXBURG)\b/i;
+const FOREIGN_GAME_RE = /\\b(RUST|TOWER OF HELL|FORTNITE|MINECRAFT|VALORANT|APEX|AMONG US|CSGO|GTA|BEDWARS|BROOKHAVEN|BLOXBURG)\\b/i;
 const HOOK_COMMON = new Set(["WHAT","WHEN","WHY","HOW","THIS","THAT","WAIT","ONLY","EVER","BEST","WORST","REAL","FAKE","ACTUALLY","LITERALLY","STOP","NEVER","MOMENT","GAMING","INSANE","CRAZY","CHAOS","CAUGHT","BUSTED","TRAPPED","SCAM","CLUTCH","ROAST","FAIL","RAGE","SHOCK","BETRAYAL","MYSTERY","KARMA"]);
 
+const DANGLING_END_HOOK_RE = /\\b(TO|A|AN|THE|OF|IN|ON|AT|FOR|WITH|FROM|BY|AND|OR|BUT|IF|IS|ARE|WAS|WERE|DO|DOES|DID|NOT|WANT|GOING|HAVE|HAS|MY|YOUR|OUR|THEIR|THIS|THAT)$/i;
 function verifyHook(candidate, fallbackHook, clipSpeech, clipTitle, extraCtx) {
+  const ctxLower = (String(clipTitle || '') + ' ' + String(extraCtx || '') + ' ' + JSON.stringify(globalSummary)).toLowerCase();
   const sanitizeHook = (v) => {
-    const cleaned = String(v || '').replace(/[^\x20-\x7E]/g, '').replace(/[{}\\x27\\x22\`$()<>]/g, '').replace(/_/g, ' ').replace(/\s+/g, ' ').trim().toUpperCase();
-    const wds = cleaned.split(' ').filter(Boolean);
-    return (wds.length > 5 ? wds.slice(0, 5).join(' ') : cleaned).substring(0, 42);
+    let cleaned = String(v || '').replace(/[^\\x20-\\x7E]/g, '').replace(/[{}\\x27\\x22\`$()<>]/g, '').replace(/_/g, ' ').replace(/\\s+/g, ' ').trim().toUpperCase();
+    if (/\\bcoolest\\b/i.test(ctxLower)) cleaned = cleaned.replace(/\\bCOLDEST\\b/g, 'COOLEST');
+    cleaned = cleaned.replace(/\\bRAGE\\s+BADER\\b/g, 'RAGE BAITER');
+    let wds = cleaned.split(' ').filter(Boolean);
+    if (wds.length > 6) wds = wds.slice(0, 6);
+    if (wds.length >= 2 && wds.length < 6 && DANGLING_END_HOOK_RE.test(wds[wds.length - 1]) && clipSpeech) {
+      const mTail = String(clipSpeech).match(new RegExp(wds.slice(-2).join('\\\\s+') + '\\\\s+([A-Za-z0-9\\x27]+)', 'i'));
+      if (mTail && mTail[1] && !DANGLING_END_HOOK_RE.test(mTail[1])) wds.push(mTail[1].toUpperCase());
+    }
+    while (wds.length > 3 && DANGLING_END_HOOK_RE.test(wds[wds.length - 1])) wds.pop();
+    while (wds.length > 3 && wds.join(' ').length > 32) wds.pop();
+    return wds.join(' ');
   };
   const safeTitle = sanitizeHook(clipTitle);
   const corpus = (JSON.stringify(globalSummary) + ' ' + String(clipSpeech || '') + ' ' + String(clipTitle || '') + ' ' + String(extraCtx || '')).toLowerCase();
   const speechCorpus = (JSON.stringify(globalSummary) + ' ' + String(clipSpeech || '')).toLowerCase();
   const isClean = (txt) => {
-    if (!txt || txt.length < 3 || BANNED_RE.test(txt)) return false;
+    if (!txt || txt.length < 3 || BANNED_RE.test(txt) || DANGLING_END_HOOK_RE.test(txt)) return false;
     const fg = txt.match(FOREIGN_GAME_RE);
     if (fg && !speechCorpus.includes(fg[0].toLowerCase())) return false;
     const nouns = (txt.toLowerCase().match(/[a-z0-9]{4,}/g) || []).filter(w => !HOOK_COMMON.has(w.toUpperCase()));
@@ -5061,12 +5195,10 @@ function verifyHook(candidate, fallbackHook, clipSpeech, clipTitle, extraCtx) {
   const fb = sanitizeHook(fallbackHook);
   const candWc = cand ? cand.split(' ').filter(Boolean).length : 0;
   const fbWc = fb ? fb.split(' ').filter(Boolean).length : 0;
-  if (isClean(cand) && candWc >= 3) return cand;
-  if (isClean(fb) && fbWc >= 3) return fb;
-  if (isClean(cand)) return cand;
-  if (isClean(fb)) return fb;
-  if (isClean(safeTitle)) return safeTitle;
-  return 'WATCH THIS CLIP NOW';
+  if (isClean(cand) && candWc >= 3 && candWc <= 6) return cand;
+  if (isClean(fb) && fbWc >= 3 && fbWc <= 6) return fb;
+  if (isClean(safeTitle) && safeTitle.split(' ').length >= 3) return safeTitle;
+  return isClean(cand) ? cand : (isClean(fb) ? fb : 'WATCH THIS CLIP NOW');
 }
 
 const grouped = new Map();
@@ -5116,15 +5248,24 @@ const previews = Array.from(grouped.values()).map(p => {
   if (p.edl_segments.length > 0) {
     const firstStart = Number(p.edl_segments[0].start) || 0;
     const lastEnd = Number(p.edl_segments[p.edl_segments.length - 1].end) || 0;
-    p.pre_hook_context_text = getWordsBetween(Math.max(0, firstStart - 5.0), Math.max(0, firstStart - 0.05));
+    // Fix 1.6: Last 10 spoken words preceding edl_segments[0].start (searching up to 15.0s backward)
+    const priorWords = words.filter(w => {
+      const mid = (Number(w.start || 0) + Number(w.end || w.start || 0)) * 0.5;
+      return mid >= Math.max(0, firstStart - 15.0) && mid < firstStart - 0.02;
+    }).slice(-10).map(w => String(w.word || '').trim()).filter(Boolean).join(' ');
+    p.pre_hook_context_text = priorWords || getWordsBetween(Math.max(0, firstStart - 15.0), Math.max(0, firstStart - 0.02));
     p.post_payoff_context_text = getWordsBetween(lastEnd + 0.05, lastEnd + 5.0);
   }
+  // Fix 1.3: Deterministic signal_justification strictly from actual empirical tags (never LLM hallucinations)
   const allSegTags = p.edl_segments.flatMap(s => s.signal_tags_in_window || []);
+  const chatTag = allSegTags.find(t => t.includes('CHAT_BURST') || t.includes('LAUGH_BURST') || t.includes('CHAT_QUESTION_CLUSTER'));
+  const dbTag = allSegTags.find(t => t.includes('SCREAM') || t.includes('dB_PEAK'));
+  const faceTag = allSegTags.find(t => t.includes('FACE:'));
   const viewerVoice = allSegTags.some(t => t.includes('VIEWER_OR_GAME_VOICE'));
   p.signal_justification = {
-    chat_burst: p.signal_justification.chat_burst || allSegTags.find(t => t.includes('CHAT_BURST')) || 'None',
-    db_spike: p.signal_justification.db_spike || allSegTags.find(t => t.includes('dB_PEAK') || t.includes('SCREAM')) || 'Normal',
-    face_emotion: p.signal_justification.face_emotion || allSegTags.find(t => t.includes('FACE:')) || 'Neutral',
+    chat_burst: chatTag || 'NONE',
+    db_spike: dbTag || 'NONE',
+    face_emotion: faceTag || 'NONE',
     viewer_voice_present: p.signal_justification.viewer_voice_present !== undefined ? Boolean(p.signal_justification.viewer_voice_present) : viewerVoice
   };
   p.final_top_hook_caption = verifyHook(p.final_top_hook_caption, p.final_top_hook_caption, p.assembled_spoken_script, p.title);

@@ -27,12 +27,47 @@ GEMINI_KEY_FILES = [
 ]
 
 AUDIT_PROMPT = (
-    "You are auditing 4 frames (indices 0, 1, 2, 3) extracted from a Roblox gaming Short. "
-    "Does ANY frame show a web browser (Chrome/Edge), Twitch/YouTube chat dashboard window, "
-    "Discord, or the Roblox ESC pause/settings menu? "
-    "Ignore normal Roblox HUD health/hotbar/nametags or small corner stream facecams. "
-    "Return JSON: {\"has_ui_obstruction\": bool, \"bad_frames\": [indices]}"
+    "You are auditing 4 frames (indices 0, 1, 2, 3) extracted from a gaming Short (Roblox / GTA 6). "
+    "Flag has_ui_obstruction=true if ANY frame shows: "
+    "(1) a web browser (Chrome/Edge), Twitch/YouTube chat dashboard, Discord, or pause/ESC/settings menus blocking gameplay; "
+    "(2) M-rated NSFW scenes (nudity, strip clubs, sexually explicit content, or graphic TOS-violating gore); or "
+    "(3) static non-gameplay screens across frames. "
+    "WHITELIST (do NOT flag): normal GTA 6 bottom-left minimap radar, cinematic cutscene top/bottom black letterbox bars, "
+    "normal Roblox HUD health/hotbar/nametags, or small corner stream facecams. "
+    "Return JSON: {\"has_ui_obstruction\": bool, \"is_nsfw_or_unsafe\": bool, \"bad_frames\": [indices]}"
 )
+
+
+def local_nsfw_and_static_heuristic(frames: list) -> dict:
+    """Offline OpenCV YCrCb skin-tone cluster & static-screen fallback heuristic."""
+    try:
+        import cv2
+        import numpy as np
+    except Exception:
+        return {"is_nsfw_heuristic": False, "is_static": False}
+
+    skin_ratios = []
+    imgs = []
+    for _, fpath in frames:
+        img = cv2.imread(fpath)
+        if img is None:
+            continue
+        h, w = img.shape[:2]
+        # Focus on central gameplay region [15%..85% y, 15%..85% x] to ignore corner webcam faces
+        roi = img[int(h * 0.15):int(h * 0.85), int(w * 0.15):int(w * 0.85)]
+        ycrcb = cv2.cvtColor(roi, cv2.COLOR_BGR2YCrCb)
+        mask = cv2.inRange(ycrcb, (60, 133, 77), (255, 173, 127))
+        skin_ratios.append(float(np.count_nonzero(mask)) / float(max(1, mask.size)))
+        imgs.append(cv2.cvtColor(cv2.resize(roi, (160, 90)), cv2.COLOR_BGR2GRAY))
+
+    # Strip club / explicit close-up scenes typically exhibit unusually high (>48%) central skin-tone coverage
+    is_nsfw = sum(1 for r in skin_ratios if r > 0.48) >= 2
+    is_static = False
+    if len(imgs) >= 3:
+        diffs = [float(np.mean(np.abs(imgs[i].astype(np.float32) - imgs[i - 1].astype(np.float32)))) for i in range(1, len(imgs))]
+        if all(d < 2.2 for d in diffs):
+            is_static = True
+    return {"is_nsfw_heuristic": is_nsfw, "is_static": is_static}
 
 
 def get_gemini_api_key() -> str:
@@ -102,11 +137,15 @@ def parse_audit_response(raw_text: str) -> dict:
     if m:
         cleaned = m.group(0)
     data = json.loads(cleaned)
-    has_obs = bool(data.get("has_ui_obstruction", False))
+    has_obs = bool(data.get("has_ui_obstruction", False) or data.get("is_nsfw_or_unsafe", False))
     bad = data.get("bad_frames") or []
     if not isinstance(bad, list):
         bad = []
-    return {"has_ui_obstruction": has_obs, "bad_frames": bad}
+    return {
+        "has_ui_obstruction": has_obs,
+        "is_nsfw_or_unsafe": bool(data.get("is_nsfw_or_unsafe", False)),
+        "bad_frames": bad,
+    }
 
 
 def call_gemini_vision(frames: list, api_key: str, models=None) -> dict:
@@ -155,11 +194,19 @@ def audit_video(video_path: str) -> dict:
     if not os.path.isfile(video_path):
         return {"has_ui_obstruction": False, "bad_frames": [], "skipped": "video_missing"}
     api_key = get_gemini_api_key()
-    if not api_key:
-        return {"has_ui_obstruction": False, "bad_frames": [], "skipped": "missing_api_key"}
 
     with tempfile.TemporaryDirectory(prefix="ui_audit_") as tmp_dir:
         frames = extract_key_frames(video_path, tmp_dir)
+        heur = local_nsfw_and_static_heuristic(frames)
+        if heur.get("is_nsfw_heuristic") or heur.get("is_static"):
+            return {
+                "has_ui_obstruction": True,
+                "is_nsfw_or_unsafe": bool(heur.get("is_nsfw_heuristic")),
+                "bad_frames": [i for i, _ in frames],
+                "reason": "nsfw_skin_cluster" if heur.get("is_nsfw_heuristic") else "static_screen",
+            }
+        if not api_key:
+            return {"has_ui_obstruction": False, "bad_frames": [], "skipped": "missing_api_key"}
         return call_gemini_vision(frames, api_key)
 
 
