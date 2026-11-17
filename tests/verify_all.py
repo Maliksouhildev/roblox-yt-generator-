@@ -117,6 +117,20 @@ checks = [
     ("3. Prepare Director Prompt", "thank you for the raid", "Director anti-intro rules & anti-raid filter"),
     ("5. Split Clips", "INTRO_RULES_RAID_RE", "SplitClips filters raid thank-yous & intro rules clips"),
     ("6. Extract Viral Segments", "isPauseOrPunctStart", "ExtractViral +-1.2s Whisper sentence/pause boundary snapping"),
+
+    # 14. Scout Retry Circuit-Breaker, Smart Chunking, Gemini Output/Safety & Truncation Guards
+    ("1. Prepare Scout Prompt", "Math.min(4, Math.max(1, charChunks))", "PrepareScoutPrompt char-budgeted chunking capped at 4 chunks"),
+    ("1. Prepare Scout Prompt", "_scout_primary_dead = false", "PrepareScoutPrompt resets staticData circuit breaker"),
+    ("1. Prepare Scout Prompt", "RAW DECIMAL SECONDS", "PrepareScoutPrompt enforces raw decimal seconds format"),
+    ("Guard Scout Retries", "_scout_primary_dead = true", "GuardScoutRetries trips circuit breaker on repeated/daily 429"),
+    ("Check Scout Primary Health", "_scout_primary_live", "CheckScoutPrimaryHealth exposes primary health flag"),
+    ("If Scout Primary Live?", "_scout_primary_live", "IfScoutPrimaryLive bypasses exhausted primary Scout model"),
+    ("Scout Accumulate", "normalizeTimestamps", "ScoutAccumulate normalizes MM:SS timestamps to decimal seconds"),
+    ("Scout Accumulate", "validItems", "ScoutAccumulate filters <120-char truncated fragments"),
+    ("Gemini Model (Scout)", "maxOutputTokens", "GeminiModelScout configures maxOutputTokens 8192 + safetySettings"),
+    ("Gemini Backup Model Scout", "gemini-2.5-flash", "GeminiBackupModelScout uses full gemini-2.5-flash with BLOCK_NONE"),
+    ("Gemini Model (Director)", "BLOCK_NONE", "GeminiModelDirector disables overly strict safety cutoffs"),
+    ("Gemini Backup Model Director", "gemini-2.5-flash", "GeminiBackupModelDirector uses full gemini-2.5-flash"),
 ]
 
 all_passed = True

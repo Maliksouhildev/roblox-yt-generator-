@@ -548,9 +548,30 @@
         25920
       ],
       "parameters": {
-        "modelName": "models/gemini-3.5-flash-lite",
+        "modelName": "models/gemini-2.5-flash-lite",
         "options": {
-          "temperature": 0.1
+          "temperature": 0.1,
+          "maxOutputTokens": 4096,
+          "safetySettings": {
+            "values": [
+              {
+                "category": "HARM_CATEGORY_HARASSMENT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_HATE_SPEECH",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                "threshold": "BLOCK_NONE"
+              }
+            ]
+          }
         }
       },
       "credentials": {
@@ -593,13 +614,34 @@
       "parameters": {
         "modelName": "models/gemini-3.5-flash",
         "options": {
-          "temperature": 0.2
+          "temperature": 0.2,
+          "maxOutputTokens": 4096,
+          "safetySettings": {
+            "values": [
+              {
+                "category": "HARM_CATEGORY_HARASSMENT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_HATE_SPEECH",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                "threshold": "BLOCK_NONE"
+              }
+            ]
+          }
         }
       },
       "credentials": {
         "googlePalmApi": {
-          "id": "9NtnnUmLQ5Ydiu6q",
-          "name": "Google Gemini(PaLM) Api account 2"
+          "id": "EJRA7ZZxsBILsA9T",
+          "name": "gemini 2 "
         }
       },
       "retryOnFail": false,
@@ -677,9 +719,30 @@
         26400
       ],
       "parameters": {
-        "modelName": "models/gemini-3.5-flash-lite",
+        "modelName": "models/gemini-2.5-flash",
         "options": {
-          "temperature": 0.1
+          "temperature": 0.1,
+          "maxOutputTokens": 4096,
+          "safetySettings": {
+            "values": [
+              {
+                "category": "HARM_CATEGORY_HARASSMENT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_HATE_SPEECH",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                "threshold": "BLOCK_NONE"
+              }
+            ]
+          }
         }
       },
       "credentials": {
@@ -750,15 +813,36 @@
         26500
       ],
       "parameters": {
-        "modelName": "models/gemini-3.5-flash-lite",
+        "modelName": "models/gemini-2.5-flash",
         "options": {
-          "temperature": 0.2
+          "temperature": 0.2,
+          "maxOutputTokens": 4096,
+          "safetySettings": {
+            "values": [
+              {
+                "category": "HARM_CATEGORY_HARASSMENT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_HATE_SPEECH",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                "threshold": "BLOCK_NONE"
+              }
+            ]
+          }
         }
       },
       "credentials": {
         "googlePalmApi": {
-          "id": "EJRA7ZZxsBILsA9T",
-          "name": "gemini 2 "
+          "id": "9NtnnUmLQ5Ydiu6q",
+          "name": "Google Gemini(PaLM) Api account 2"
         }
       },
       "retryOnFail": false,
@@ -887,7 +971,7 @@
         26120
       ],
       "parameters": {
-        "jsCode": "const fs = require('fs');\nlet whisperData = null;\n\ntry {\n  const items = $input.all();\n  if (items && items[0] && items[0].json && (items[0].json.text || (items[0].json.annotated_sentences && items[0].json.annotated_sentences.length))) {\n    whisperData = items[0].json;\n  }\n} catch(e) {}\n\nif (!whisperData) {\n  try {\n    const lct = $('Load Cached Telemetry').first().json;\n    if (lct && (lct.text || (lct.words && lct.words.length))) whisperData = lct;\n  } catch(e) {}\n}\nif (!whisperData) {\n  try {\n    const w = $('3. Groq Whisper').first().json;\n    if (w && w.text && w.text.length > 10) whisperData = w;\n  } catch(e) {}\n}\nif (!whisperData) {\n  try {\n    const w2 = $('3. Groq Whisper Fallback').first().json;\n    if (w2 && w2.text && w2.text.length > 10) whisperData = w2;\n  } catch(e) {}\n}\n\nif (!whisperData || (!whisperData.text && !(whisperData.annotated_sentences && whisperData.annotated_sentences.length))) {\n    throw new Error('CRITICAL ERROR: Transcript text is missing. Run Whisper node or Load Cached Telemetry first.');\n}\n\nconst isDryRun = Boolean(whisperData.dry_run);\nconst rawText = whisperData.text || '';\nlet whisperWords = whisperData.words || (whisperData.x_groq && whisperData.x_groq.words) || [];\nconst durationMinutes = (whisperData.duration || (whisperWords.length ? whisperWords[whisperWords.length - 1].end : 1800)) / 60;\n\n// Load freshly generated Unified Multimodal Timeline Index (stale index files are unlinked in Find Stream & Save Whisper Transcript)\nlet indexDoc = null;\nif (fs.existsSync('/files/temp/unified_timeline_index.json')) {\n  try {\n    indexDoc = JSON.parse(fs.readFileSync('/files/temp/unified_timeline_index.json', 'utf8'));\n  } catch(e) {}\n}\n\n// Use annotated [dB_PEAK], [CHAT_BURST], [FACE_SPIKE], [WPM_SPIKE] sentences in BOTH Production & Sandbox modes\nlet annotatedSentences = whisperData.annotated_sentences || (indexDoc && indexDoc.annotated_sentences) || [];\n\n// Filter Whisper prompt hallucinations (repeated intro music loops)\nconst isHallucination = (txt) => {\n  const low = String(txt || '').toLowerCase();\n  const keys = ['roblox gaming', 'lucky blocks', 'divine mutation', '10x luck', 'streamer reacting', 'gaming chaos'];\n  const hits = keys.filter(k => low.includes(k)).length;\n  return hits >= 2;\n};\n\nlet sentences = [];\nif (annotatedSentences.length > 0) {\n  sentences = annotatedSentences.map(s => `[${Number(s.start).toFixed(1)}s - ${Number(s.end).toFixed(1)}s]${(s.tags && s.tags.length) ? ' ' + s.tags.join(' ') : ''} ${s.text}`);\n} else {\n  let currSentence = \"\";\n  let currStart = -1;\n  let currEnd = -1;\n  for (let w of whisperWords) {\n    if (currStart === -1) currStart = w.start;\n    currSentence += w.word;\n    currEnd = w.end;\n    if (/[.!?]$/.test(w.word.trim())) {\n      if (!isHallucination(currSentence)) {\n        sentences.push(`[${currStart.toFixed(1)}s - ${currEnd.toFixed(1)}s] ${currSentence.trim()}`);\n      }\n      currSentence = \"\";\n      currStart = -1;\n    }\n  }\n  if (currSentence && !isHallucination(currSentence)) {\n    sentences.push(`[${currStart.toFixed(1)}s - ${currEnd.toFixed(1)}s] ${currSentence.trim()}`);\n  }\n}\n\nconst numberedLines = sentences.length > 0 ? sentences : (rawText.match(/[^.!?]+[.!?]+/g) || [rawText]).map((s, i) => '[L' + (i+1) + '] ' + s.trim());\n\n// Multimodal Viral Anchors Extraction\nlet viralAnchors = whisperData.anchors || [];\nif (viralAnchors.length === 0) {\n  try {\n    const fusionItem = $('Run Multimodal Fusion').first();\n    if (fusionItem && fusionItem.json && fusionItem.json.stdout) {\n      const parsed = JSON.parse(fusionItem.json.stdout);\n      if (parsed && parsed.anchors && parsed.anchors.length > 0) {\n        viralAnchors = parsed.anchors;\n      }\n    }\n  } catch(e) {}\n}\nif (viralAnchors.length === 0 && indexDoc && indexDoc.anchors) {\n  viralAnchors = indexDoc.anchors;\n}\n\nconst macroTimeline = whisperData.macro_high_signal_timeline || (indexDoc && indexDoc.macro_high_signal_timeline) || '';\n\nlet multimodalHeader = \"\";\nif (viralAnchors.length > 0) {\n  multimodalHeader = \"\\n=== [PROVEN MULTIMODAL VIRAL PEAKS (AUDIENCE CHAT, FACECAM & VOCAL ENERGY)] ===\\n\" +\n    \"The following moments across the full 1+ hour VOD have been empirically pre-verified by live chat velocity bursts (LMAO, 💀, WTF), streamer face reactions (laughter/shock), vocal dB spikes, and WPM bursts.\\n\" +\n    \"YOU MUST PRIORITIZE SELECTING MOMENTS AROUND THESE PROVEN PEAKS AND LINKING LONG-RANGE CALLBACKS ACROSS THE STREAM:\\n\\n\";\n\n  for (let a of viralAnchors.slice(0, 18)) {\n    multimodalHeader += `• [ANCHOR #${a.anchor_id}] [${a.start}s - ${a.end}s] (Peak at ${a.peak_time}s | Score: ${a.virality_score}/100 | Fit: ${a.recommended_archetype || 'NARRATIVE'})\\n` +\n      `  - Audience Chat: ${a.chat_signal}\\n` +\n      `  - Streamer Facecam: ${a.face_signal}\\n` +\n      `  - Audio Energy: ${a.audio_signal}\\n` +\n      (a.why_chat_laughed ? `  - Why Chat Laughed: ${a.why_chat_laughed}\\n` : '') +\n      (a.comedy_mechanism ? `  - Comedic Catalyst: ${a.comedy_mechanism}\\n` : '') +\n      (a.setup_tension_hook ? `  - Setup Tension Hook (In-Media-Res): ${a.setup_tension_hook}\\n` : '') +\n      (a.callback_links && a.callback_links.length ? `  - Cross-Stream Callback Links: ${a.callback_links.map(cb => cb.tc + ' (\"' + cb.keyword + '\"): ' + cb.text).join(' | ')}\\n` : '') +\n      (a.is_multi_beat && a.beat_2 ? `  - Compound Multi-Beat Callback: Beat 2 at ${a.beat_2.peak_time}s (\"it happened again\")\\n` : '') +\n      (a.recommended_structure ? `  - Recommended Arc: ${a.recommended_structure}\\n` : '') +\n      (a.transcript_snippet ? `  - Transcript Preview: \"${a.transcript_snippet.substring(0, 180)}\"\\n` : '') +\n      `\\n`;\n  }\n}\n\n// Dynamic 15-minute window chunking & 120,000-char limit so Scout reads 100% of the stream transcript\nlet numChunks = isDryRun ? 1 : Math.max(1, Math.ceil(durationMinutes / 15));\nconst linesPerChunk = Math.ceil(numberedLines.length / numChunks);\nconst overlap = 10;\nconst MAX_CHUNK_CHARS = 120000;\n\nconst results = [];\nfor (let i = 0; i < numChunks; i++) {\n  let chunkText = '';\n  if (isDryRun && macroTimeline) {\n    chunkText = \"=== HIGH-SIGNAL ANNOTATED TIMELINE ACROSS FULL VOD ===\\n\" + macroTimeline.substring(0, 60000) +\n      \"\\n\\n=== SAMPLED RAW SENTENCE CONTEXT ===\\n\" + numberedLines.join('\\n').substring(0, 60000);\n  } else {\n    const start = Math.max(0, i * linesPerChunk - overlap);\n    const end = Math.min(numberedLines.length, (i + 1) * linesPerChunk + overlap);\n    chunkText = numberedLines.slice(start, end).join('\\n');\n    if (chunkText.length > MAX_CHUNK_CHARS) {\n      chunkText = chunkText.substring(0, MAX_CHUNK_CHARS) + '\\n[... chunk trimmed to fit token limit ...]';\n    }\n  }\n\n  const prompt =\n    'SYSTEM: You are an elite YouTube Shorts Viral Content Scout & Story Architect. Read the multimodal transcript index and construct 4-5 complete, multi-segment 30-45s story arcs across the stream.\\n\\n' +\n    (multimodalHeader ? multimodalHeader + '\\n' : '') +\n    '=== CRITICAL ANTI-ADMIN, ANTI-IDLE, ANTI-INTRO, ANTI-RULES & ANTI-OUTRO FILTER ===\\n' +\n    'The streamer frequently Alt-Tabs out of Roblox into Chrome, Notepad, or OBS, explains stream rules at the start, or idles between matches. You MUST REJECT any segments containing:\\n' +\n    '• Typing player usernames into search bars, Chrome/browser tabs, YouTube Studio live chat popouts, Roblox website group/payout pages, Discord DMs, or settings.\\n' +\n    '• [STRICT ANTI-INTRO, ANTI-RULES BANTER & ANTI-RAID]: FORBID selecting the streamer\\'s opening stream-rules or giveaway explanations (\"like the stream\", \"keep counter\", \"watch till the end of the stream\", \"rules of the stream\") and FORBID raid thank-yous (\"thank you for the raid\", \"welcome raiders\"). Clips MUST feature actual in-game action, jumpscares, or comedic gameplay events!\\n' +\n    '• Outro panhandling or stream wrap-up banter (\"everybody subscribe\", \"hit the like button\", \"smash that like\", \"see you next stream\").\\n' +\n    '• Reading long lists of $3 donations or subscriber names while idling in menus ([STRICT ANTI-CONVERSATIONAL BANTER & DONATION AFTERMATH]).\\n' +\n    '• [STRICT ANTI-IDLE & ANTI-STATIC]: REJECT segments where the character is standing still in a lobby waiting for a match, reading chat idly, or staring at a wall!\\n' +\n    '• [STRICT ANTI-LOADING SCREEN]: NEVER start a clip at [0.0s - 3.0s] or on intro music/loading screens.\\n' +\n    '• [STRICT ANTI-SLOW-UI & TRADE MENUS]: REJECT segments where the streamer spends 10+ seconds clicking buttons inside inventory/trade UI panels.\\n' +\n    '• [STRICT ANTI-GRIND & ANTI-FARMING]: REJECT repetitive grinding, farming coins/potatoes, or boring waiting.\\n\\n' +\n    '=== MULTI-SEGMENT NARRATIVE ARCHING (NO ISOLATED 20s SOUNDBITES) ===\\n' +\n    'STOP extracting isolated, random 15-20s soundbites! Every candidate MUST stitch non-sequential moments into a unified 30-45s 3-act story arc with complete sentences:\\n' +\n    '  (1) [SETUP / STAKES] (8-14s): The wager, challenge, promise, or boast that gives a cold viewer clear stakes (e.g., agreeing to a 1v1 for the Nicholas Scythe).\\n' +\n    '  (2) [ESCALATION / STRUGGLE] (8-16s): The gameplay action, rising tension, failure, glitching, or frantic no-hit frustration (jumping past dead air after SETUP).\\n' +\n    '  (3) [PAYOFF / REACTION] (8-16s): The victory, confession, scam accusation, trade resolution, or item reveal + reaction.\\n' +\n    'Evaluate candidates across these 5 Viral Shorts Models (every model MUST contain all 3 acts: SETUP -> ESCALATION -> PAYOFF):\\n' +\n    '1. IN_MEDIA_RES_FLASHFORWARD (Optional 1.8-2.4s HOOK_CLIMAX cut 0.3s before punchline -> rewind to SETUP -> ESCALATION -> full PAYOFF)\\n' +\n    '2. DOUBLE_DOWN_ESCALATION (SETUP wager/fail 1 -> jump cut past dead air -> ESCALATION double-down -> Bigger Fail/Win PAYOFF)\\n' +\n    '3. HUBRIS_INSTANT_KARMA (Arrogant boast SETUP -> gameplay ESCALATION -> instant collapse + stunned reaction PAYOFF)\\n' +\n    '4. MYSTERY_OPEN_LOOP (Weird anomaly/question SETUP or HOOK_CLIMAX -> escalating clues ESCALATION -> twist reveal PAYOFF)\\n' +\n    '5. REVERSE_PAYOFF_LOOP (Chronological SETUP -> ESCALATION -> truncated PAYOFF flowing seamlessly back into 0:00 SETUP opening line)\\n\\n' +\n    '• [ZERO-SECOND RETENTION & STRICT ANTI-MID-THOUGHT PREAMBLE]: REJECT clips that start mid-sentence, mid-thought, or with casual filler (\"Speaking of...\", \"Um...\"). Use exact [start_s - end_s] sentence boundaries!\\n' +\n    '• [CAUSE-EFFECT NARRATIVE THROUGH-LINE & ANTI-CHAOS]: Every candidate MUST pair a clear SETUP/stakes beat (even minutes earlier in the VOD) with ESCALATION and its PAYOFF.\\n' +\n    '• ZERO IRRELEVANT PREAMBLE: Start each segment cleanly at the start of a complete sentence.\\n' +\n    '• [SATISFYING CLIMAX ONLY]: Climax must deliver clear visual/emotional impact followed by strictly 2.0-3.5s of aftermath. NEVER cut mid-sentence or mid-word!\\n\\n' +\n    'OUTPUT: Plain text only. For each of the 4-5 multi-segment story arcs (totaling 30-45s each), provide:\\n' +\n    '- Tag & Recommended Archetype: [TAG NAME] | Archetype: [ONE OF THE 5 MODELS]\\n' +\n    '- (Optional) Hook/Climax Tease Timestamp: [X.Xs - Y.Ys] (1.8-2.4s cut strictly BEFORE punchline, only if non-spoilering)\\n' +\n    '- [SETUP / STAKES] Timestamp: [X.Xs - Y.Ys] (8-14s, exact full-sentence bounds)\\n' +\n    '- [ESCALATION / STRUGGLE] Timestamp: [X.Xs - Y.Ys] (8-16s, strictly after SETUP, exact full-sentence bounds)\\n' +\n    '- [PAYOFF / REACTION] Timestamp: [X.Xs - Y.Ys] (8-16s, strictly after ESCALATION, exact full-sentence bounds)\\n' +\n    '- Multimodal Signal Drivers: (Chat Z-score, dB spike, Emotion, WPM)\\n' +\n    '- Exact Verbatim Quotes for SETUP, ESCALATION & PAYOFF\\n\\n' +\n    '--- CHUNK ' + (i+1) + '/' + numChunks + ' ---\\n' +\n    chunkText;\n\n  results.push({ json: { prompt, chunk_index: i+1, dry_run: isDryRun } });\n}\n\nreturn results;"
+        "jsCode": "const fs = require('fs');\ntry {\n  const sd = $getWorkflowStaticData('global');\n  sd._scout_primary_dead = false;\n  sd._scout_consec_429 = 0;\n} catch (e) {}\nlet whisperData = null;\n\ntry {\n  const items = $input.all();\n  if (items && items[0] && items[0].json && (items[0].json.text || (items[0].json.annotated_sentences && items[0].json.annotated_sentences.length))) {\n    whisperData = items[0].json;\n  }\n} catch(e) {}\n\nif (!whisperData) {\n  try {\n    const lct = $('Load Cached Telemetry').first().json;\n    if (lct && (lct.text || (lct.words && lct.words.length))) whisperData = lct;\n  } catch(e) {}\n}\nif (!whisperData) {\n  try {\n    const w = $('3. Groq Whisper').first().json;\n    if (w && w.text && w.text.length > 10) whisperData = w;\n  } catch(e) {}\n}\nif (!whisperData) {\n  try {\n    const w2 = $('3. Groq Whisper Fallback').first().json;\n    if (w2 && w2.text && w2.text.length > 10) whisperData = w2;\n  } catch(e) {}\n}\n\nif (!whisperData || (!whisperData.text && !(whisperData.annotated_sentences && whisperData.annotated_sentences.length))) {\n    throw new Error('CRITICAL ERROR: Transcript text is missing. Run Whisper node or Load Cached Telemetry first.');\n}\n\nconst isDryRun = Boolean(whisperData.dry_run);\nconst rawText = whisperData.text || '';\nlet whisperWords = whisperData.words || (whisperData.x_groq && whisperData.x_groq.words) || [];\nconst durationMinutes = (whisperData.duration || (whisperWords.length ? whisperWords[whisperWords.length - 1].end : 1800)) / 60;\n\n// Load freshly generated Unified Multimodal Timeline Index (stale index files are unlinked in Find Stream & Save Whisper Transcript)\nlet indexDoc = null;\nif (fs.existsSync('/files/temp/unified_timeline_index.json')) {\n  try {\n    indexDoc = JSON.parse(fs.readFileSync('/files/temp/unified_timeline_index.json', 'utf8'));\n  } catch(e) {}\n}\n\n// Use annotated [dB_PEAK], [CHAT_BURST], [FACE_SPIKE], [WPM_SPIKE] sentences in BOTH Production & Sandbox modes\nlet annotatedSentences = whisperData.annotated_sentences || (indexDoc && indexDoc.annotated_sentences) || [];\n\n// Filter Whisper prompt hallucinations (repeated intro music loops)\nconst isHallucination = (txt) => {\n  const low = String(txt || '').toLowerCase();\n  const keys = ['roblox gaming', 'lucky blocks', 'divine mutation', '10x luck', 'streamer reacting', 'gaming chaos'];\n  const hits = keys.filter(k => low.includes(k)).length;\n  return hits >= 2;\n};\n\nlet sentences = [];\nif (annotatedSentences.length > 0) {\n  sentences = annotatedSentences.map(s => `[${Number(s.start).toFixed(1)}s - ${Number(s.end).toFixed(1)}s]${(s.tags && s.tags.length) ? ' ' + s.tags.join(' ') : ''} ${s.text}`);\n} else {\n  let currSentence = \"\";\n  let currStart = -1;\n  let currEnd = -1;\n  for (let w of whisperWords) {\n    if (currStart === -1) currStart = w.start;\n    currSentence += w.word;\n    currEnd = w.end;\n    if (/[.!?]$/.test(w.word.trim())) {\n      if (!isHallucination(currSentence)) {\n        sentences.push(`[${currStart.toFixed(1)}s - ${currEnd.toFixed(1)}s] ${currSentence.trim()}`);\n      }\n      currSentence = \"\";\n      currStart = -1;\n    }\n  }\n  if (currSentence && !isHallucination(currSentence)) {\n    sentences.push(`[${currStart.toFixed(1)}s - ${currEnd.toFixed(1)}s] ${currSentence.trim()}`);\n  }\n}\n\nconst numberedLines = sentences.length > 0 ? sentences : (rawText.match(/[^.!?]+[.!?]+/g) || [rawText]).map((s, i) => '[L' + (i+1) + '] ' + s.trim());\n\n// Multimodal Viral Anchors Extraction\nlet viralAnchors = whisperData.anchors || [];\nif (viralAnchors.length === 0) {\n  try {\n    const fusionItem = $('Run Multimodal Fusion').first();\n    if (fusionItem && fusionItem.json && fusionItem.json.stdout) {\n      const parsed = JSON.parse(fusionItem.json.stdout);\n      if (parsed && parsed.anchors && parsed.anchors.length > 0) {\n        viralAnchors = parsed.anchors;\n      }\n    }\n  } catch(e) {}\n}\nif (viralAnchors.length === 0 && indexDoc && indexDoc.anchors) {\n  viralAnchors = indexDoc.anchors;\n}\n\nconst macroTimeline = whisperData.macro_high_signal_timeline || (indexDoc && indexDoc.macro_high_signal_timeline) || '';\n\nlet multimodalHeader = \"\";\nif (viralAnchors.length > 0) {\n  multimodalHeader = \"\\n=== [PROVEN MULTIMODAL VIRAL PEAKS (AUDIENCE CHAT, FACECAM & VOCAL ENERGY)] ===\\n\" +\n    \"The following moments across the full 1+ hour VOD have been empirically pre-verified by live chat velocity bursts (LMAO, 💀, WTF), streamer face reactions (laughter/shock), vocal dB spikes, and WPM bursts.\\n\" +\n    \"YOU MUST PRIORITIZE SELECTING MOMENTS AROUND THESE PROVEN PEAKS AND LINKING LONG-RANGE CALLBACKS ACROSS THE STREAM:\\n\\n\";\n\n  for (let a of viralAnchors.slice(0, 18)) {\n    multimodalHeader += `• [ANCHOR #${a.anchor_id}] [${a.start}s - ${a.end}s] (Peak at ${a.peak_time}s | Score: ${a.virality_score}/100 | Fit: ${a.recommended_archetype || 'NARRATIVE'})\\n` +\n      `  - Audience Chat: ${a.chat_signal}\\n` +\n      `  - Streamer Facecam: ${a.face_signal}\\n` +\n      `  - Audio Energy: ${a.audio_signal}\\n` +\n      (a.why_chat_laughed ? `  - Why Chat Laughed: ${a.why_chat_laughed}\\n` : '') +\n      (a.comedy_mechanism ? `  - Comedic Catalyst: ${a.comedy_mechanism}\\n` : '') +\n      (a.setup_tension_hook ? `  - Setup Tension Hook (In-Media-Res): ${a.setup_tension_hook}\\n` : '') +\n      (a.callback_links && a.callback_links.length ? `  - Cross-Stream Callback Links: ${a.callback_links.map(cb => cb.tc + ' (\"' + cb.keyword + '\"): ' + cb.text).join(' | ')}\\n` : '') +\n      (a.is_multi_beat && a.beat_2 ? `  - Compound Multi-Beat Callback: Beat 2 at ${a.beat_2.peak_time}s (\"it happened again\")\\n` : '') +\n      (a.recommended_structure ? `  - Recommended Arc: ${a.recommended_structure}\\n` : '') +\n      (a.transcript_snippet ? `  - Transcript Preview: \"${a.transcript_snippet.substring(0, 180)}\"\\n` : '') +\n      `\\n`;\n  }\n}\n\n// Char-budgeted chunking (~75k chars/chunk, capped at 4 chunks) so Scout stays fast and well inside daily quota\nconst totalSentenceChars = numberedLines.reduce((acc, s) => acc + s.length + 1, 0);\nconst charChunks = Math.max(1, Math.ceil(totalSentenceChars / 75000));\nlet numChunks = isDryRun ? 1 : Math.min(4, Math.max(1, charChunks));\nconst linesPerChunk = Math.ceil(numberedLines.length / numChunks);\nconst overlap = 10;\nconst MAX_CHUNK_CHARS = 120000;\n\nconst results = [];\nfor (let i = 0; i < numChunks; i++) {\n  let chunkText = '';\n  if (isDryRun && macroTimeline) {\n    chunkText = \"=== HIGH-SIGNAL ANNOTATED TIMELINE ACROSS FULL VOD ===\\n\" + macroTimeline.substring(0, 60000) +\n      \"\\n\\n=== SAMPLED RAW SENTENCE CONTEXT ===\\n\" + numberedLines.join('\\n').substring(0, 60000);\n  } else {\n    const start = Math.max(0, i * linesPerChunk - overlap);\n    const end = Math.min(numberedLines.length, (i + 1) * linesPerChunk + overlap);\n    chunkText = numberedLines.slice(start, end).join('\\n');\n    if (chunkText.length > MAX_CHUNK_CHARS) {\n      chunkText = chunkText.substring(0, MAX_CHUNK_CHARS) + '\\n[... chunk trimmed to fit token limit ...]';\n    }\n  }\n\n  const prompt =\n    'SYSTEM: You are an elite YouTube Shorts Viral Content Scout & Story Architect. Read the multimodal transcript index and construct 4-5 complete, multi-segment 30-45s story arcs across the stream.\\n\\n' +\n    (multimodalHeader ? multimodalHeader + '\\n' : '') +\n    '=== CRITICAL ANTI-ADMIN, ANTI-IDLE, ANTI-INTRO, ANTI-RULES & ANTI-OUTRO FILTER ===\\n' +\n    'The streamer frequently Alt-Tabs out of Roblox into Chrome, Notepad, or OBS, explains stream rules at the start, or idles between matches. You MUST REJECT any segments containing:\\n' +\n    '• Typing player usernames into search bars, Chrome/browser tabs, YouTube Studio live chat popouts, Roblox website group/payout pages, Discord DMs, or settings.\\n' +\n    '• [STRICT ANTI-INTRO, ANTI-RULES BANTER & ANTI-RAID]: FORBID selecting the streamer\\'s opening stream-rules or giveaway explanations (\"like the stream\", \"keep counter\", \"watch till the end of the stream\", \"rules of the stream\") and FORBID raid thank-yous (\"thank you for the raid\", \"welcome raiders\"). Clips MUST feature actual in-game action, jumpscares, or comedic gameplay events!\\n' +\n    '• Outro panhandling or stream wrap-up banter (\"everybody subscribe\", \"hit the like button\", \"smash that like\", \"see you next stream\").\\n' +\n    '• Reading long lists of $3 donations or subscriber names while idling in menus ([STRICT ANTI-CONVERSATIONAL BANTER & DONATION AFTERMATH]).\\n' +\n    '• [STRICT ANTI-IDLE & ANTI-STATIC]: REJECT segments where the character is standing still in a lobby waiting for a match, reading chat idly, or staring at a wall!\\n' +\n    '• [STRICT ANTI-LOADING SCREEN]: NEVER start a clip at [0.0s - 3.0s] or on intro music/loading screens.\\n' +\n    '• [STRICT ANTI-SLOW-UI & TRADE MENUS]: REJECT segments where the streamer spends 10+ seconds clicking buttons inside inventory/trade UI panels.\\n' +\n    '• [STRICT ANTI-GRIND & ANTI-FARMING]: REJECT repetitive grinding, farming coins/potatoes, or boring waiting.\\n\\n' +\n    '=== MULTI-SEGMENT NARRATIVE ARCHING (NO ISOLATED 20s SOUNDBITES) ===\\n' +\n    'STOP extracting isolated, random 15-20s soundbites! Every candidate MUST stitch non-sequential moments into a unified 30-45s 3-act story arc with complete sentences:\\n' +\n    '  (1) [SETUP / STAKES] (8-14s): The wager, challenge, promise, or boast that gives a cold viewer clear stakes (e.g., agreeing to a 1v1 for the Nicholas Scythe).\\n' +\n    '  (2) [ESCALATION / STRUGGLE] (8-16s): The gameplay action, rising tension, failure, glitching, or frantic no-hit frustration (jumping past dead air after SETUP).\\n' +\n    '  (3) [PAYOFF / REACTION] (8-16s): The victory, confession, scam accusation, trade resolution, or item reveal + reaction.\\n' +\n    'Evaluate candidates across these 5 Viral Shorts Models (every model MUST contain all 3 acts: SETUP -> ESCALATION -> PAYOFF):\\n' +\n    '1. IN_MEDIA_RES_FLASHFORWARD (Optional 1.8-2.4s HOOK_CLIMAX cut 0.3s before punchline -> rewind to SETUP -> ESCALATION -> full PAYOFF)\\n' +\n    '2. DOUBLE_DOWN_ESCALATION (SETUP wager/fail 1 -> jump cut past dead air -> ESCALATION double-down -> Bigger Fail/Win PAYOFF)\\n' +\n    '3. HUBRIS_INSTANT_KARMA (Arrogant boast SETUP -> gameplay ESCALATION -> instant collapse + stunned reaction PAYOFF)\\n' +\n    '4. MYSTERY_OPEN_LOOP (Weird anomaly/question SETUP or HOOK_CLIMAX -> escalating clues ESCALATION -> twist reveal PAYOFF)\\n' +\n    '5. REVERSE_PAYOFF_LOOP (Chronological SETUP -> ESCALATION -> truncated PAYOFF flowing seamlessly back into 0:00 SETUP opening line)\\n\\n' +\n    '• [ZERO-SECOND RETENTION & STRICT ANTI-MID-THOUGHT PREAMBLE]: REJECT clips that start mid-sentence, mid-thought, or with casual filler (\"Speaking of...\", \"Um...\"). Use exact [start_s - end_s] sentence boundaries!\\n' +\n    '• [CAUSE-EFFECT NARRATIVE THROUGH-LINE & ANTI-CHAOS]: Every candidate MUST pair a clear SETUP/stakes beat (even minutes earlier in the VOD) with ESCALATION and its PAYOFF.\\n' +\n    '• ZERO IRRELEVANT PREAMBLE: Start each segment cleanly at the start of a complete sentence.\\n' +\n    '• [SATISFYING CLIMAX ONLY]: Climax must deliver clear visual/emotional impact followed by strictly 2.0-3.5s of aftermath. NEVER cut mid-sentence or mid-word!\\n\\n' +\n    'OUTPUT: Plain text only. For each of the 4-5 multi-segment story arcs (totaling 30-45s each), provide:\\n' +\n    '- Tag & Recommended Archetype: [TAG NAME] | Archetype: [ONE OF THE 5 MODELS]\\n' +\n    '- (Optional) Hook/Climax Tease Timestamp: [X.Xs - Y.Ys] (1.8-2.4s cut strictly BEFORE punchline, only if non-spoilering)\\n' +\n    '- [SETUP / STAKES] Timestamp: [X.Xs - Y.Ys] (8-14s, exact full-sentence bounds)\\n' +\n    '- [ESCALATION / STRUGGLE] Timestamp: [X.Xs - Y.Ys] (8-16s, strictly after SETUP, exact full-sentence bounds)\\n' +\n    '- [PAYOFF / REACTION] Timestamp: [X.Xs - Y.Ys] (8-16s, strictly after ESCALATION, exact full-sentence bounds)\\n' +\n    '- Multimodal Signal Drivers: (Chat Z-score, dB spike, Emotion, WPM)\\n' +\n    '- Exact Verbatim Quotes for SETUP, ESCALATION & PAYOFF\\n\\n' +\n    'STRICT CHUNK SCOPE, FORMAT & COMPLETION RULES:\\n' +\n    '- Prioritize story arcs whose PAYOFF occurs inside CHUNK ' + (i+1) + ' timestamps (earlier anchors may only provide SETUP).\\n' +\n    '- Output ALL timestamps strictly in RAW DECIMAL SECONDS (e.g. [408.0s - 419.2s]), NEVER MM:SS format (never [06:48.0s]).\\n' +\n    '- Complete 3-4 full story arcs cleanly and NEVER stop mid-line or mid-archetype.\\n\\n' +\n    '--- CHUNK ' + (i+1) + '/' + numChunks + ' ---\\n' +\n    chunkText;\n\n  results.push({ json: { prompt, chunk_index: i+1, dry_run: isDryRun } });\n}\n\nreturn results;"
       }
     },
     {
@@ -902,13 +986,34 @@
       "parameters": {
         "modelName": "models/gemini-3.5-flash",
         "options": {
-          "temperature": 0.4
+          "temperature": 0.4,
+          "maxOutputTokens": 8192,
+          "safetySettings": {
+            "values": [
+              {
+                "category": "HARM_CATEGORY_HARASSMENT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_HATE_SPEECH",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                "threshold": "BLOCK_NONE"
+              }
+            ]
+          }
         }
       },
       "credentials": {
         "googlePalmApi": {
-          "id": "9NtnnUmLQ5Ydiu6q",
-          "name": "Google Gemini(PaLM) Api account 2"
+          "id": "EJRA7ZZxsBILsA9T",
+          "name": "gemini 2 "
         }
       },
       "retryOnFail": false,
@@ -954,7 +1059,7 @@
         26360
       ],
       "parameters": {
-        "amount": 45,
+        "amount": 15,
         "unit": "seconds"
       }
     },
@@ -968,7 +1073,7 @@
         26120
       ],
       "parameters": {
-        "jsCode": "const allItems = [];\nfor (const nodeName of [\"2. Basic LLM Chain (Scout)\", \"2. Basic LLM Chain (Scout Fallback)\"]) {\n  let runIdx = 0;\n  while (true) {\n    try {\n      const items = $items(nodeName, 0, runIdx);\n      if (!items || items.length === 0) break;\n      for (const it of items) {\n        if (it && it.json && (it.json.output || it.json.text)) allItems.push(it);\n      }\n      runIdx++;\n    } catch (e) {\n      break;\n    }\n  }\n}\nconst out = allItems.length > 0 ? allItems : $items(\"2. Basic LLM Chain (Scout)\");\nlet isDryRun = false;\ntry { isDryRun = Boolean($('1. Prepare Scout Prompt').first().json.dry_run); } catch(e) {}\nreturn out.map(it => ({ json: { ...it.json, dry_run: isDryRun } }));"
+        "jsCode": "const allItems = [];\nconst normalizeTimestamps = (txt) => String(txt || '').replace(/\\[([^\\]]*?)(\\d{1,3}):(\\d{2}(?:\\.\\d+)?)s?([^\\]]*?)\\]/gi, (full) =>\n  full.replace(/(\\d{1,3}):(\\d{2}(?:\\.\\d+)?)s?/gi, (_, m, s) => (parseInt(m, 10) * 60 + parseFloat(s)).toFixed(1) + 's')\n);\nconst cleanScoutText = (raw) => {\n  let t = normalizeTimestamps(raw).trim();\n  if (!t) return '';\n  // Drop incomplete trailing fragment line (e.g. cut off at \"- [ESCALATION / STRUGGLE] Timestamp: [12:36.4s -\")\n  const lines = t.split('\\n');\n  while (lines.length > 2) {\n    const last = lines[lines.length - 1].trim();\n    if (!last || /(?:[-:|[]\\s*$|Archetype:\\s*$)/.test(last)) {\n      lines.pop();\n    } else {\n      break;\n    }\n  }\n  return lines.join('\\n').trim();\n};\n\nfor (const nodeName of [\"2. Basic LLM Chain (Scout)\", \"2. Basic LLM Chain (Scout Fallback)\"]) {\n  let runIdx = 0;\n  while (true) {\n    try {\n      const items = $items(nodeName, 0, runIdx);\n      if (!items || items.length === 0) break;\n      for (const it of items) {\n        const rawOut = it && it.json && (it.json.output || it.json.text);\n        if (rawOut) {\n          const cleaned = cleanScoutText(rawOut);\n          allItems.push({ json: { ...it.json, text: it.json.text ? cleaned : it.json.text, output: it.json.output ? cleaned : it.json.output } });\n        }\n      }\n      runIdx++;\n    } catch (e) {\n      break;\n    }\n  }\n}\nconst validItems = allItems.filter(it => String(it.json.output || it.json.text || '').trim().length >= 120);\nconst out = validItems.length > 0 ? validItems : (allItems.length > 0 ? allItems : $items(\"2. Basic LLM Chain (Scout)\"));\nlet isDryRun = false;\ntry { isDryRun = Boolean($('1. Prepare Scout Prompt').first().json.dry_run); } catch(e) {}\nreturn out.map(it => ({ json: { ...it.json, dry_run: isDryRun } }));"
       }
     },
     {
@@ -996,13 +1101,34 @@
       "parameters": {
         "modelName": "models/gemini-3.5-flash",
         "options": {
-          "temperature": 0.1
+          "temperature": 0.1,
+          "maxOutputTokens": 8192,
+          "safetySettings": {
+            "values": [
+              {
+                "category": "HARM_CATEGORY_HARASSMENT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_HATE_SPEECH",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                "threshold": "BLOCK_NONE"
+              }
+            ]
+          }
         }
       },
       "credentials": {
         "googlePalmApi": {
-          "id": "9NtnnUmLQ5Ydiu6q",
-          "name": "Google Gemini(PaLM) Api account 2"
+          "id": "EJRA7ZZxsBILsA9T",
+          "name": "gemini 2 "
         }
       },
       "retryOnFail": false,
@@ -1088,7 +1214,7 @@
         26000
       ],
       "parameters": {
-        "amount": 45
+        "amount": 10
       }
     },
     {
@@ -1208,7 +1334,7 @@
         26400
       ],
       "parameters": {
-        "amount": 55,
+        "amount": 20,
         "unit": "seconds"
       }
     },
@@ -1223,7 +1349,7 @@
         26360
       ],
       "parameters": {
-        "amount": 55,
+        "amount": 20,
         "unit": "seconds"
       }
     },
@@ -1836,7 +1962,7 @@
         26140
       ],
       "parameters": {
-        "amount": 50
+        "amount": 12
       },
       "webhookId": "f4c2a1b0-7e88-4c11-9d22-334455667788"
     },
@@ -2007,7 +2133,7 @@
         26400
       ],
       "parameters": {
-        "jsCode": "const DAILY_RE = /(?:per\\s*day|daily|free_tier_requests|retry\\s+in\\s+\\d+h)/i;\nreturn $input.all().map((it, idx) => {\n  const errText = JSON.stringify(it.json.error || it.json.description || it.json.message || it.json);\n  const isDaily = DAILY_RE.test(errText);\n  const count = (Number(it.json._scout_retry_count) || 0) + 1;\n  return {\n    pairedItem: it.pairedItem || { item: idx },\n    json: { ...it.json, _scout_retry_count: count, _daily_quota_hit: isDaily, _allow_retry: !isDaily && count <= 1 }\n  };\n});"
+        "jsCode": "const DAILY_RE = /(?:per\\s*day|daily|free_tier_requests|retry\\s+in\\s+\\d+h)/i;\nconst sd = $getWorkflowStaticData('global');\nreturn $input.all().map((it, idx) => {\n  const errText = JSON.stringify(it.json.error || it.json.description || it.json.message || it.json);\n  const isDaily = DAILY_RE.test(errText);\n  const count = (Number(it.json._scout_retry_count) || 0) + 1;\n  sd._scout_consec_429 = (Number(sd._scout_consec_429) || 0) + 1;\n  const allowRetry = !isDaily && count <= 1 && Number(sd._scout_consec_429) <= 1;\n  if (!allowRetry) sd._scout_primary_dead = true;\n  return {\n    pairedItem: it.pairedItem || { item: idx },\n    json: { ...it.json, _scout_retry_count: count, _daily_quota_hit: isDaily || !allowRetry, _allow_retry: allowRetry }\n  };\n});"
       }
     },
     {
@@ -2065,9 +2191,30 @@
         26720
       ],
       "parameters": {
-        "modelName": "models/gemini-3.5-flash-lite",
+        "modelName": "models/gemini-2.5-flash",
         "options": {
-          "temperature": 0.4
+          "temperature": 0.4,
+          "maxOutputTokens": 8192,
+          "safetySettings": {
+            "values": [
+              {
+                "category": "HARM_CATEGORY_HARASSMENT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_HATE_SPEECH",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                "threshold": "BLOCK_NONE"
+              }
+            ]
+          }
         }
       },
       "retryOnFail": false,
@@ -2075,8 +2222,8 @@
       "waitBetweenTries": 1000,
       "credentials": {
         "googlePalmApi": {
-          "id": "EJRA7ZZxsBILsA9T",
-          "name": "gemini 2 "
+          "id": "9NtnnUmLQ5Ydiu6q",
+          "name": "Google Gemini(PaLM) Api account 2"
         }
       }
     },
@@ -2133,7 +2280,7 @@
         26420
       ],
       "parameters": {
-        "amount": 30
+        "amount": 5
       },
       "webhookId": "f4c2a1b0-7e88-4c11-9d22-334455667799"
     },
@@ -2162,9 +2309,30 @@
         26680
       ],
       "parameters": {
-        "modelName": "models/gemini-3.5-flash-lite",
+        "modelName": "models/gemini-2.5-flash",
         "options": {
-          "temperature": 0.1
+          "temperature": 0.1,
+          "maxOutputTokens": 8192,
+          "safetySettings": {
+            "values": [
+              {
+                "category": "HARM_CATEGORY_HARASSMENT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_HATE_SPEECH",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "threshold": "BLOCK_NONE"
+              },
+              {
+                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                "threshold": "BLOCK_NONE"
+              }
+            ]
+          }
         }
       },
       "retryOnFail": false,
@@ -2172,8 +2340,8 @@
       "waitBetweenTries": 1000,
       "credentials": {
         "googlePalmApi": {
-          "id": "EJRA7ZZxsBILsA9T",
-          "name": "gemini 2 "
+          "id": "9NtnnUmLQ5Ydiu6q",
+          "name": "Google Gemini(PaLM) Api account 2"
         }
       }
     },
@@ -2233,6 +2401,49 @@
         },
         "options": {}
       }
+    },
+    {
+      "parameters": {
+        "jsCode": "let dead = false;\ntry {\n  const sd = $getWorkflowStaticData('global');\n  dead = Boolean(sd._scout_primary_dead);\n} catch (e) {}\nreturn $input.all().map((it, idx) => ({\n  pairedItem: it.pairedItem || { item: idx },\n  json: { ...it.json, _scout_primary_live: !dead }\n}));"
+      },
+      "id": "route-scout-model-health",
+      "name": "Check Scout Primary Health",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -87960,
+        26300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ Boolean($json._scout_primary_live) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-scout-primary-live",
+      "name": "If Scout Primary Live?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -87920,
+        26360
+      ]
     }
   ],
   "connections": {
@@ -3234,7 +3445,7 @@
         ],
         [
           {
-            "node": "Scout Wait",
+            "node": "Check Scout Primary Health",
             "type": "main",
             "index": 0
           }
@@ -3562,6 +3773,35 @@
         [
           {
             "node": "Loop Clips",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Scout Primary Health": {
+      "main": [
+        [
+          {
+            "node": "If Scout Primary Live?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Scout Primary Live?": {
+      "main": [
+        [
+          {
+            "node": "Scout Wait",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "2. Basic LLM Chain (Scout Fallback)",
             "type": "main",
             "index": 0
           }

@@ -1722,9 +1722,18 @@ OUTPUT JSON FORMAT EXACTLY AND ONLY JSON. NO MARKDOWN:
         waitBetweenTries: 1000,
     })
     GeminiModel1 = {
-        modelName: 'models/gemini-3.5-flash-lite',
+        modelName: 'models/gemini-2.5-flash-lite',
         options: {
             temperature: 0.1,
+            maxOutputTokens: 4096,
+            safetySettings: {
+                values: [
+                    { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+                    { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+                    { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+                    { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
+                ],
+            },
         },
     };
 
@@ -1794,7 +1803,7 @@ Output ONLY valid raw JSON matching this schema (replace angle-bracket placehold
         type: '@n8n/n8n-nodes-langchain.lmChatGoogleGemini',
         version: 1,
         position: [-83900, 26440],
-        credentials: { googlePalmApi: { id: '9NtnnUmLQ5Ydiu6q', name: 'Google Gemini(PaLM) Api account 2' } },
+        credentials: { googlePalmApi: { id: 'EJRA7ZZxsBILsA9T', name: 'gemini 2 ' } },
         retryOnFail: false,
         maxTries: 1,
         waitBetweenTries: 1000,
@@ -1803,6 +1812,15 @@ Output ONLY valid raw JSON matching this schema (replace angle-bracket placehold
         modelName: 'models/gemini-3.5-flash',
         options: {
             temperature: 0.2,
+            maxOutputTokens: 4096,
+            safetySettings: {
+                values: [
+                    { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+                    { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+                    { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+                    { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
+                ],
+            },
         },
     };
 
@@ -1889,9 +1907,18 @@ OUTPUT JSON FORMAT EXACTLY AND ONLY JSON. NO MARKDOWN:
         waitBetweenTries: 1000,
     })
     GeminiBackupModel1 = {
-        modelName: 'models/gemini-3.5-flash-lite',
+        modelName: 'models/gemini-2.5-flash',
         options: {
             temperature: 0.1,
+            maxOutputTokens: 4096,
+            safetySettings: {
+                values: [
+                    { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+                    { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+                    { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+                    { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
+                ],
+            },
         },
     };
 
@@ -1989,15 +2016,24 @@ Output ONLY valid raw JSON matching this schema (replace angle-bracket placehold
         type: '@n8n/n8n-nodes-langchain.lmChatGoogleGemini',
         version: 1,
         position: [-82920, 26500],
-        credentials: { googlePalmApi: { id: 'EJRA7ZZxsBILsA9T', name: 'gemini 2 ' } },
+        credentials: { googlePalmApi: { id: '9NtnnUmLQ5Ydiu6q', name: 'Google Gemini(PaLM) Api account 2' } },
         retryOnFail: false,
         maxTries: 1,
         waitBetweenTries: 1000,
     })
     GeminiBackupModel3 = {
-        modelName: 'models/gemini-3.5-flash-lite',
+        modelName: 'models/gemini-2.5-flash',
         options: {
             temperature: 0.2,
+            maxOutputTokens: 4096,
+            safetySettings: {
+                values: [
+                    { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+                    { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+                    { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+                    { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
+                ],
+            },
         },
     };
 
@@ -2135,6 +2171,11 @@ return $input.all();`,
     })
     _1PrepareScoutPrompt = {
         jsCode: `const fs = require('fs');
+try {
+  const sd = $getWorkflowStaticData('global');
+  sd._scout_primary_dead = false;
+  sd._scout_consec_429 = 0;
+} catch (e) {}
 let whisperData = null;
 
 try {
@@ -2258,8 +2299,10 @@ if (viralAnchors.length > 0) {
   }
 }
 
-// Dynamic 15-minute window chunking & 120,000-char limit so Scout reads 100% of the stream transcript
-let numChunks = isDryRun ? 1 : Math.max(1, Math.ceil(durationMinutes / 15));
+// Char-budgeted chunking (~75k chars/chunk, capped at 4 chunks) so Scout stays fast and well inside daily quota
+const totalSentenceChars = numberedLines.reduce((acc, s) => acc + s.length + 1, 0);
+const charChunks = Math.max(1, Math.ceil(totalSentenceChars / 75000));
+let numChunks = isDryRun ? 1 : Math.min(4, Math.max(1, charChunks));
 const linesPerChunk = Math.ceil(numberedLines.length / numChunks);
 const overlap = 10;
 const MAX_CHUNK_CHARS = 120000;
@@ -2315,6 +2358,10 @@ for (let i = 0; i < numChunks; i++) {
     '- [PAYOFF / REACTION] Timestamp: [X.Xs - Y.Ys] (8-16s, strictly after ESCALATION, exact full-sentence bounds)\n' +
     '- Multimodal Signal Drivers: (Chat Z-score, dB spike, Emotion, WPM)\n' +
     '- Exact Verbatim Quotes for SETUP, ESCALATION & PAYOFF\n\n' +
+    'STRICT CHUNK SCOPE, FORMAT & COMPLETION RULES:\n' +
+    '- Prioritize story arcs whose PAYOFF occurs inside CHUNK ' + (i+1) + ' timestamps (earlier anchors may only provide SETUP).\n' +
+    '- Output ALL timestamps strictly in RAW DECIMAL SECONDS (e.g. [408.0s - 419.2s]), NEVER MM:SS format (never [06:48.0s]).\n' +
+    '- Complete 3-4 full story arcs cleanly and NEVER stop mid-line or mid-archetype.\n\n' +
     '--- CHUNK ' + (i+1) + '/' + numChunks + ' ---\n' +
     chunkText;
 
@@ -2330,7 +2377,7 @@ return results;`,
         type: '@n8n/n8n-nodes-langchain.lmChatGoogleGemini',
         version: 1,
         position: [-87680, 26580],
-        credentials: { googlePalmApi: { id: '9NtnnUmLQ5Ydiu6q', name: 'Google Gemini(PaLM) Api account 2' } },
+        credentials: { googlePalmApi: { id: 'EJRA7ZZxsBILsA9T', name: 'gemini 2 ' } },
         retryOnFail: false,
         maxTries: 1,
         waitBetweenTries: 1000,
@@ -2339,6 +2386,15 @@ return results;`,
         modelName: 'models/gemini-3.5-flash',
         options: {
             temperature: 0.4,
+            maxOutputTokens: 8192,
+            safetySettings: {
+                values: [
+                    { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+                    { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+                    { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+                    { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
+                ],
+            },
         },
     };
 
@@ -2375,7 +2431,7 @@ return results;`,
         position: [-87880, 26360],
     })
     ScoutWait = {
-        amount: 45,
+        amount: 15,
         unit: 'seconds',
     };
 
@@ -2388,6 +2444,25 @@ return results;`,
     })
     ScoutAccumulate = {
         jsCode: `const allItems = [];
+const normalizeTimestamps = (txt) => String(txt || '').replace(/\\[([^\\]]*?)(\\d{1,3}):(\\d{2}(?:\\.\\d+)?)s?([^\\]]*?)\\]/gi, (full) =>
+  full.replace(/(\\d{1,3}):(\\d{2}(?:\\.\\d+)?)s?/gi, (_, m, s) => (parseInt(m, 10) * 60 + parseFloat(s)).toFixed(1) + 's')
+);
+const cleanScoutText = (raw) => {
+  let t = normalizeTimestamps(raw).trim();
+  if (!t) return '';
+  // Drop incomplete trailing fragment line (e.g. cut off at "- [ESCALATION / STRUGGLE] Timestamp: [12:36.4s -")
+  const lines = t.split('\\n');
+  while (lines.length > 2) {
+    const last = lines[lines.length - 1].trim();
+    if (!last || /(?:[-:|\\[]\\s*$|Archetype:\\s*$)/.test(last)) {
+      lines.pop();
+    } else {
+      break;
+    }
+  }
+  return lines.join('\\n').trim();
+};
+
 for (const nodeName of ["2. Basic LLM Chain (Scout)", "2. Basic LLM Chain (Scout Fallback)"]) {
   let runIdx = 0;
   while (true) {
@@ -2395,7 +2470,11 @@ for (const nodeName of ["2. Basic LLM Chain (Scout)", "2. Basic LLM Chain (Scout
       const items = $items(nodeName, 0, runIdx);
       if (!items || items.length === 0) break;
       for (const it of items) {
-        if (it && it.json && (it.json.output || it.json.text)) allItems.push(it);
+        const rawOut = it && it.json && (it.json.output || it.json.text);
+        if (rawOut) {
+          const cleaned = cleanScoutText(rawOut);
+          allItems.push({ json: { ...it.json, text: it.json.text ? cleaned : it.json.text, output: it.json.output ? cleaned : it.json.output } });
+        }
       }
       runIdx++;
     } catch (e) {
@@ -2403,7 +2482,8 @@ for (const nodeName of ["2. Basic LLM Chain (Scout)", "2. Basic LLM Chain (Scout
     }
   }
 }
-const out = allItems.length > 0 ? allItems : $items("2. Basic LLM Chain (Scout)");
+const validItems = allItems.filter(it => String(it.json.output || it.json.text || '').trim().length >= 120);
+const out = validItems.length > 0 ? validItems : (allItems.length > 0 ? allItems : $items("2. Basic LLM Chain (Scout)"));
 let isDryRun = false;
 try { isDryRun = Boolean($('1. Prepare Scout Prompt').first().json.dry_run); } catch(e) {}
 return out.map(it => ({ json: { ...it.json, dry_run: isDryRun } }));`,
@@ -2561,7 +2641,7 @@ return [{ pairedItem: { item: 0 }, json: { prompt, targetClips, dry_run: isDryRu
         type: '@n8n/n8n-nodes-langchain.lmChatGoogleGemini',
         version: 1,
         position: [-86220, 26320],
-        credentials: { googlePalmApi: { id: '9NtnnUmLQ5Ydiu6q', name: 'Google Gemini(PaLM) Api account 2' } },
+        credentials: { googlePalmApi: { id: 'EJRA7ZZxsBILsA9T', name: 'gemini 2 ' } },
         retryOnFail: false,
         maxTries: 1,
         waitBetweenTries: 1000,
@@ -2570,6 +2650,15 @@ return [{ pairedItem: { item: 0 }, json: { prompt, targetClips, dry_run: isDryRu
         modelName: 'models/gemini-3.5-flash',
         options: {
             temperature: 0.1,
+            maxOutputTokens: 8192,
+            safetySettings: {
+                values: [
+                    { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+                    { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+                    { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+                    { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
+                ],
+            },
         },
     };
 
@@ -3217,7 +3306,7 @@ return [{ pairedItem: { item: 0 }, json: { url: randomUrl } }];`,
         position: [-89280, 26000],
     })
     WaitBeforeScout = {
-        amount: 45,
+        amount: 10,
     };
 
     @node({
@@ -3254,7 +3343,7 @@ return [{ pairedItem: { item: 0 }, json: { url: randomUrl } }];`,
         position: [-86440, 26140],
     })
     WaitBeforeDirector = {
-        amount: 50,
+        amount: 12,
     };
 
     @node({
@@ -3266,7 +3355,7 @@ return [{ pairedItem: { item: 0 }, json: { url: randomUrl } }];`,
         position: [-85820, 26420],
     })
     WaitBeforeDirectorFallback = {
-        amount: 30,
+        amount: 5,
     };
 
     @node({
@@ -3374,6 +3463,45 @@ return $input.all().map((it, idx) => {
     };
 
     @node({
+        id: 'route-scout-model-health',
+        name: 'Check Scout Primary Health',
+        type: 'n8n-nodes-base.code',
+        version: 2,
+        position: [-87960, 26300],
+    })
+    CheckScoutPrimaryHealth = {
+        jsCode: `let dead = false;
+try {
+  const sd = $getWorkflowStaticData('global');
+  dead = Boolean(sd._scout_primary_dead);
+} catch (e) {}
+return $input.all().map((it, idx) => ({
+  pairedItem: it.pairedItem || { item: idx },
+  json: { ...it.json, _scout_primary_live: !dead }
+}));`,
+    };
+
+    @node({
+        id: 'if-scout-primary-live',
+        name: 'If Scout Primary Live?',
+        type: 'n8n-nodes-base.if',
+        version: 2.2,
+        position: [-87920, 26360],
+    })
+    IfScoutPrimaryLive = {
+        conditions: {
+            options: { caseSensitive: true, typeValidation: 'strict' },
+            conditions: [{
+                leftValue: '={{ Boolean($json._scout_primary_live) }}',
+                rightValue: true,
+                operator: { type: 'boolean', operation: 'true' },
+            }],
+            combinator: 'and',
+        },
+        options: {},
+    };
+
+    @node({
         id: 'a5c0e708-3f56-4a78-9b90-778899001122',
         name: 'Guard Scout Retries',
         type: 'n8n-nodes-base.code',
@@ -3382,13 +3510,17 @@ return $input.all().map((it, idx) => {
     })
     GuardScoutRetries = {
         jsCode: `const DAILY_RE = /(?:per\\s*day|daily|free_tier_requests|retry\\s+in\\s+\\d+h)/i;
+const sd = $getWorkflowStaticData('global');
 return $input.all().map((it, idx) => {
   const errText = JSON.stringify(it.json.error || it.json.description || it.json.message || it.json);
   const isDaily = DAILY_RE.test(errText);
   const count = (Number(it.json._scout_retry_count) || 0) + 1;
+  sd._scout_consec_429 = (Number(sd._scout_consec_429) || 0) + 1;
+  const allowRetry = !isDaily && count <= 1 && Number(sd._scout_consec_429) <= 1;
+  if (!allowRetry) sd._scout_primary_dead = true;
   return {
     pairedItem: it.pairedItem || { item: idx },
-    json: { ...it.json, _scout_retry_count: count, _daily_quota_hit: isDaily, _allow_retry: !isDaily && count <= 1 }
+    json: { ...it.json, _scout_retry_count: count, _daily_quota_hit: isDaily || !allowRetry, _allow_retry: allowRetry }
   };
 });`,
     };
@@ -3432,14 +3564,25 @@ return $input.all().map((it, idx) => {
         type: '@n8n/n8n-nodes-langchain.lmChatGoogleGemini',
         version: 1,
         position: [-86920, 26720],
-        credentials: { googlePalmApi: { id: 'EJRA7ZZxsBILsA9T', name: 'gemini 2 ' } },
+        credentials: { googlePalmApi: { id: '9NtnnUmLQ5Ydiu6q', name: 'Google Gemini(PaLM) Api account 2' } },
         retryOnFail: false,
         maxTries: 1,
         waitBetweenTries: 1000,
     })
     GeminiBackupModelScout = {
-        modelName: 'models/gemini-3.5-flash-lite',
-        options: { temperature: 0.4 },
+        modelName: 'models/gemini-2.5-flash',
+        options: {
+            temperature: 0.4,
+            maxOutputTokens: 8192,
+            safetySettings: {
+                values: [
+                    { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+                    { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+                    { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+                    { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
+                ],
+            },
+        },
     };
 
     @node({
@@ -3501,14 +3644,25 @@ return $input.all().map((it, idx) => {
         type: '@n8n/n8n-nodes-langchain.lmChatGoogleGemini',
         version: 1,
         position: [-85600, 26680],
-        credentials: { googlePalmApi: { id: 'EJRA7ZZxsBILsA9T', name: 'gemini 2 ' } },
+        credentials: { googlePalmApi: { id: '9NtnnUmLQ5Ydiu6q', name: 'Google Gemini(PaLM) Api account 2' } },
         retryOnFail: false,
         maxTries: 1,
         waitBetweenTries: 1000,
     })
     GeminiBackupModelDirector = {
-        modelName: 'models/gemini-3.5-flash-lite',
-        options: { temperature: 0.1 },
+        modelName: 'models/gemini-2.5-flash',
+        options: {
+            temperature: 0.1,
+            maxOutputTokens: 8192,
+            safetySettings: {
+                values: [
+                    { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+                    { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+                    { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+                    { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
+                ],
+            },
+        },
     };
 
     @node({
@@ -3641,7 +3795,7 @@ return $input.all().map((it, idx) => {
         position: [-87040, 26400],
     })
     WaitScoutError = {
-        amount: 55,
+        amount: 20,
         unit: 'seconds',
     };
 
@@ -3654,7 +3808,7 @@ return $input.all().map((it, idx) => {
         position: [-85720, 26360],
     })
     WaitDirectorError = {
-        amount: 55,
+        amount: 20,
         unit: 'seconds',
     };
 
@@ -4395,7 +4549,10 @@ return previews.map(p => ({ json: p }));`,
         this.ScoutLoop.out(0).to(this.ScoutAccumulate.in(0));
         this.ScoutLoop.out(1).to(this.IfSandboxSkipWait.in(0));
         this.IfSandboxSkipWait.out(0).to(this._2BasicLlmChainScout.in(0));
-        this.IfSandboxSkipWait.out(1).to(this.ScoutWait.in(0));
+        this.IfSandboxSkipWait.out(1).to(this.CheckScoutPrimaryHealth.in(0));
+        this.CheckScoutPrimaryHealth.out(0).to(this.IfScoutPrimaryLive.in(0));
+        this.IfScoutPrimaryLive.out(0).to(this.ScoutWait.in(0));
+        this.IfScoutPrimaryLive.out(1).to(this._2BasicLlmChainScoutFallback.in(0));
         this.ScoutWait.out(0).to(this._2BasicLlmChainScout.in(0));
         this._2BasicLlmChainScout.out(0).to(this.ScoutLoop.in(0));
         this._2BasicLlmChainScout.out(1).to(this.IfScout429.in(0));

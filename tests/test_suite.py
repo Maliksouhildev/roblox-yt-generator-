@@ -578,6 +578,104 @@ class TestPipelineComprehensive(unittest.TestCase):
         is_avatar_row = (max(xs) - min(xs)) > real_w * 0.25
         self.assertTrue(is_avatar_row, "Top avatar row across screen width must be detected as dead space")
 
+    def test_scout_chunking_circuit_breaker_and_accumulate_normalization(self):
+        """Scout hardening: <=4 chunks on 3h VOD, circuit breaker skips dead primary, Accumulate normalizes MM:SS and drops <120-char stubs."""
+        # 1. Test 1. Prepare Scout Prompt chunk count on a simulated 3.3h (3098 sentences) stream
+        prep_js = self.nodes["1. Prepare Scout Prompt"]["parameters"]["jsCode"]
+        synth_sentences = [
+            {"start": i * 3.9, "end": i * 3.9 + 3.5, "text": f"Sentence {i} we are running from the monster inside Roblox Doors!"}
+            for i in range(3098)
+        ]
+        harness_prep = (
+            "const staticStore = {};\n"
+            "const $getWorkflowStaticData = () => staticStore;\n"
+            "const $input = { all: () => [{ json: { dry_run: false, duration: 12132.8, text: 'hello', annotated_sentences: " + json.dumps(synth_sentences) + " } }] };\n"
+            "const $ = () => ({ first: () => ({ json: {} }), last: () => ({ json: {} }) });\n"
+            "function runNode() {\n" + prep_js + "\n}\n"
+            "const res = runNode();\n"
+            "console.log(JSON.stringify({ count: res.length, firstIdx: res[0].json.chunk_index }));\n"
+        )
+        with tempfile.NamedTemporaryFile('w', suffix='.js', delete=False, encoding='utf-8') as tf:
+            tf.write(harness_prep)
+            p_path = tf.name
+        try:
+            res = subprocess.run(['node', p_path], capture_output=True, text=True)
+            self.assertEqual(res.returncode, 0, f"Prepare Scout Prompt failed: {res.stderr}")
+            parsed = json.loads(res.stdout.strip())
+            self.assertLessEqual(parsed["count"], 4, "3.3h VOD must be chunked into <= 4 chunks")
+            self.assertGreaterEqual(parsed["count"], 3)
+        finally:
+            if os.path.exists(p_path):
+                os.remove(p_path)
+
+        # 2. Test Guard Scout Retries trips _scout_primary_dead after repeated 429s even when error description is stripped
+        guard_js = self.nodes["Guard Scout Retries"]["parameters"]["jsCode"]
+        health_js = self.nodes["Check Scout Primary Health"]["parameters"]["jsCode"]
+        harness_guard = (
+            "const staticStore = { _scout_primary_dead: false, _scout_consec_429: 0 };\n"
+            "const $getWorkflowStaticData = () => staticStore;\n"
+            "let $input = { all: () => [{ json: { error: 'The service is receiving too many requests from you' } }] };\n"
+            "function runGuard() {\n" + guard_js + "\n}\n"
+            "function runHealth() {\n" + health_js + "\n}\n"
+            "const r1 = runGuard();\n"
+            "$input = { all: () => [{ json: { ...r1[0].json } }] };\n"
+            "const r2 = runGuard();\n"
+            "$input = { all: () => [{ json: { prompt: 'chunk2' } }] };\n"
+            "const h = runHealth();\n"
+            "console.log(JSON.stringify({ r1_retry: r1[0].json._allow_retry, r2_retry: r2[0].json._allow_retry, dead: staticStore._scout_primary_dead, next_live: h[0].json._scout_primary_live }));\n"
+        )
+        with tempfile.NamedTemporaryFile('w', suffix='.js', delete=False, encoding='utf-8') as tf:
+            tf.write(harness_guard)
+            g_path = tf.name
+        try:
+            res = subprocess.run(['node', g_path], capture_output=True, text=True)
+            self.assertEqual(res.returncode, 0, f"Guard Scout Retries failed: {res.stderr}")
+            out = json.loads(res.stdout.strip())
+            self.assertTrue(out["r1_retry"])
+            self.assertFalse(out["r2_retry"])
+            self.assertTrue(out["dead"])
+            self.assertFalse(out["next_live"])
+        finally:
+            if os.path.exists(g_path):
+                os.remove(g_path)
+
+        # 3. Test Scout Accumulate normalizes MM:SS timestamps, trims partial trailing line, and drops <120-char stubs
+        acc_js = self.nodes["Scout Accumulate"]["parameters"]["jsCode"]
+        run0 = (
+            "Tag & Recommended Archetype: [THE SPOILER REVEAL] | Archetype: [HUBRIS_INSTANT_KARMA]\n"
+            "- [SETUP / STAKES] Timestamp: [06:48.0s - 06:59.2s]\n"
+            "- [PAYOFF / REACTION] Timestamp: [12:31.9s - 1234.6s]\n"
+            "- [ESCALATION / STRUGGLE] Timestamp: [12:36.4s -"
+        )
+        run2 = "Tag & Recommended Archetype: [THE CORNY JOKE ROAST] | Archetype:"
+        harness_acc = (
+            "const $items = (name, outIdx, runIdx) => {\n"
+            "  if (name === '2. Basic LLM Chain (Scout Fallback)') {\n"
+            f"    if (runIdx === 0) return [{{ json: {{ text: {json.dumps(run0)} }} }}];\n"
+            f"    if (runIdx === 1) return [{{ json: {{ text: {json.dumps(run2)} }} }}];\n"
+            "  }\n"
+            "  return [];\n"
+            "};\n"
+            "const $ = () => ({ first: () => ({ json: { dry_run: false } }) });\n"
+            "function runAcc() {\n" + acc_js + "\n}\n"
+            "console.log(JSON.stringify(runAcc()));\n"
+        )
+        with tempfile.NamedTemporaryFile('w', suffix='.js', delete=False, encoding='utf-8') as tf:
+            tf.write(harness_acc)
+            a_path = tf.name
+        try:
+            res = subprocess.run(['node', a_path], capture_output=True, text=True)
+            self.assertEqual(res.returncode, 0, f"Scout Accumulate failed: {res.stderr}")
+            out = json.loads(res.stdout.strip())
+            self.assertEqual(len(out), 1, "Must drop 64-char truncated stub chunk")
+            txt = out[0]["json"]["text"]
+            self.assertIn("[408.0s - 419.2s]", txt)
+            self.assertIn("[751.9s - 1234.6s]", txt)
+            self.assertNotIn("[12:36.4s -", txt)
+        finally:
+            if os.path.exists(a_path):
+                os.remove(a_path)
+
 if __name__ == '__main__':
     unittest.main()
 
