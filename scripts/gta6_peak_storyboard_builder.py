@@ -485,13 +485,15 @@ def extract_top_candidates(
             w_end = min(float(duration), w_start + 30.0)
 
         win_sents = [s for s in sentences if s["end"] >= w_start - 0.1 and s["start"] <= w_end + 0.1]
+        cm = chat_meta.get(t_peak) or {}
+        q_cluster = bool(cm.get("question_cluster", False))
         lines = []
-        for s in win_sents:
+        for si_l, s in enumerate(win_sents):
             m, sec_f = divmod(max(0.0, s["start"]), 60.0)
-            lines.append(f"[{int(m):02d}:{sec_f:04.1f} | {s['speaker_tag']}] {s['text']}")
+            q_tag = " [CHAT_QUESTION_CLUSTER]" if (q_cluster and si_l == len(win_sents) // 2) else ""
+            lines.append(f"[{int(m):02d}:{sec_f:04.1f} | {s['speaker_tag']}{q_tag}] {s['text']}")
 
         rb = raw_bins.get(t_peak) or {}
-        cm = chat_meta.get(t_peak) or {}
         candidates.append({
             "rank": idx,
             "candidate_id": f"cand_{idx}",
@@ -627,16 +629,43 @@ def main():
     active_stream = os.path.basename(video_path) if video_path else ""
     vid_dur = _probe_duration(video_path)
 
-    # Fix 1.1: Validate cached chat telemetry against active stream_file header & purge mismatched caches
-    if active_stream and isinstance(chat_doc, dict) and chat_doc:
-        cached_sf = os.path.basename(str(chat_doc.get("stream_file") or "").strip())
-        if cached_sf and cached_sf != active_stream:
-            chat_doc = {}
-            if chat_path and os.path.exists(chat_path):
-                try:
-                    os.remove(chat_path)
-                except Exception:
-                    pass
+    # Fix 1.1: Validate cached telemetry against active stream_file header & purge mismatched caches
+    if active_stream:
+        for nm_doc, p_doc, is_chat in (
+            ("chat", chat_path, True),
+            ("audio_energy", args.audio_energy, False),
+            ("face", args.face, False),
+        ):
+            cur_d = chat_doc if nm_doc == "chat" else (audio_energy_doc if nm_doc == "audio_energy" else face_doc)
+            if isinstance(cur_d, dict) and cur_d:
+                cached_sf = os.path.basename(str(cur_d.get("stream_file") or "").strip())
+                if cached_sf and cached_sf != active_stream:
+                    if nm_doc == "chat":
+                        chat_doc = {}
+                    elif nm_doc == "audio_energy":
+                        audio_energy_doc = {}
+                    else:
+                        face_doc = {}
+                    if is_chat and p_doc and os.path.exists(p_doc):
+                        try:
+                            os.remove(p_doc)
+                        except Exception:
+                            pass
+
+    # Standalone raw .live_chat.json scan if chat_doc is empty
+    if not chat_doc and active_stream and os.path.isdir("/files/inputs"):
+        stem = re.sub(r"^\d+_top_", "", re.sub(r"(\.processing)?\.mp4$", "", active_stream, flags=re.I), flags=re.I)
+        pref = re.sub(r"[^a-z0-9]", "", stem.lower())[:14]
+        for fn in sorted(os.listdir("/files/inputs")):
+            if fn.endswith((".live_chat.json", ".chat.json")):
+                f_pref = re.sub(r"[^a-z0-9]", "", re.sub(r"^\d+_top_", "", fn, flags=re.I).lower())[:14]
+                if pref and (pref in f_pref or f_pref in pref):
+                    try:
+                        from chat_analyzer import analyze_chat
+                        chat_doc = analyze_chat(os.path.join("/files/inputs", fn)) or {}
+                    except Exception:
+                        chat_doc = {}
+                    break
 
     # Clamp effective timeline to overlapping duration so FFmpeg never seeks past EOF
     durs = [d for d in (vid_dur, aud_dur, tx_dur) if d > 0]

@@ -426,6 +426,8 @@ def run_fusion(
     if chat_file:
         try:
             chat_res = analyze_chat(chat_file)
+            if isinstance(chat_res, dict):
+                chat_res["stream_file"] = os.path.basename(video_path) if video_path else ""
             chat_out_temp = "/files/temp/chat_analysis.json"
             with open(chat_out_temp, "w", encoding="utf-8") as f:
                 json.dump(chat_res, f, indent=2)

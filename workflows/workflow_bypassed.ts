@@ -1133,11 +1133,34 @@ inputItems.forEach((clipData, clipIdx) => {
     }
   }
 
-  // Fix 1.6: Ellipsis orphan spillover guard on first segment opener
+  // Fix 1.6: Colliding-midpoint & Ellipsis orphan spillover guard on first segment opener
   if (finalSegs.length > 0 && words.length > 0) {
     const seg0 = finalSegs[0];
+    const mOf = (w) => (Number(w.start || 0) + Number(w.end || w.start || 0)) * 0.5;
+    for (let step = 0; step < 8; step++) {
+      let fIdx = -1;
+      for (let wi = 0; wi < words.length; wi++) {
+        const mw = mOf(words[wi]);
+        if (mw >= seg0.start && mw <= seg0.end) { fIdx = wi; break; }
+      }
+      if (fIdx <= 0) break;
+      const pW = words[fIdx - 1];
+      const fW = words[fIdx];
+      const pTok = String(pW.word || '').trim();
+      const gap = Math.max(0, Number(fW.start || 0) - Number(pW.end || 0));
+      const pEnds = /[.!?]["')\\]]*$/.test(pTok);
+      const tiedMid = mOf(pW) >= seg0.start - 0.005;
+      if ((!pEnds && gap < 0.40) || tiedMid) {
+        const nextCut = Number((Math.max(mOf(fW), mOf(pW)) + 0.015).toFixed(3));
+        if ((seg0.end - nextCut) >= 20.0 && (nextCut - seg0.start) <= 3.5) {
+          seg0.start = Math.max(3.0, nextCut);
+          continue;
+        }
+      }
+      break;
+    }
     const s0Words = words.filter(w => {
-      const mid = (Number(w.start || 0) + Number(w.end || w.start || 0)) * 0.5;
+      const mid = mOf(w);
       return mid >= seg0.start && mid <= seg0.end;
     });
     for (let k = 0; k < Math.min(5, s0Words.length - 1); k++) {
@@ -1151,6 +1174,7 @@ inputItems.forEach((clipData, clipIdx) => {
       }
     }
   }
+
 
   // Attach spoken_text per cut segment using strict word-midpoint ownership
   const enrichedSegs = finalSegs.map((seg) => {

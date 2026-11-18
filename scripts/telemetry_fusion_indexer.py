@@ -245,10 +245,12 @@ def _has_matching_live_chat(active_stream):
     if not active_stream or not os.path.isdir("/files/inputs"):
         return True  # Cannot verify when active_stream unknown
     stem = re.sub(r"(\.processing)?\.mp4$", "", active_stream, flags=re.I)
+    stem = re.sub(r"^\d+_top_", "", stem, flags=re.I)
     prefix = re.sub(r"[^a-z0-9]", "", stem.lower())[:14]
     for fn in os.listdir("/files/inputs"):
         if fn.endswith((".live_chat.json", ".chat.json")):
-            f_pref = re.sub(r"[^a-z0-9]", "", fn.lower())[:14]
+            fn_clean = re.sub(r"^\d+_top_", "", fn, flags=re.I)
+            f_pref = re.sub(r"[^a-z0-9]", "", fn_clean.lower())[:14]
             if prefix and (prefix in f_pref or f_pref in prefix):
                 return True
     return False
