@@ -1,0 +1,651 @@
+{
+  "id": "B331oWlVWY0Q8s2n",
+  "name": "Short Publisher (Bypassed Version)",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0,30 12-23 * * *"
+            },
+            {
+              "field": "cronExpression",
+              "expression": "0 0-11 * * *"
+            }
+          ]
+        }
+      },
+      "id": "75b224d4-527b-4d08-97bc-4955c914b3de",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -600,
+        -100
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "manual-trigger-smart-publisher",
+      "name": "Test Publisher Manually",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -600,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\nconst crypto = require('crypto');\n\nconst MAX_API_UPLOADS_PER_DAY = 6;\nconst MIN_SPACING_MINUTES = 45;\nconst EXCESS_THROTTLE_MS = 2 * 3600 * 1000;\nconst SCORE_TIE_BAND = 0.4;\n\nconst inJson = ($input.first() && $input.first().json) ? $input.first().json : {};\nconst OUTPUTS_DIR = String(inJson._test_outputs_dir || inJson.outputs_dir || '/files/outputs');\nconst INPUTS_DIR = String(inJson._test_inputs_dir || inJson.inputs_dir || '/files/inputs');\nconst QUOTA_STATE_PATH = String(inJson._test_quota_state_path || inJson.quota_state_path || '/files/temp/yt_quota_state.json');\nconst EXCESS_STATE_PATH = String(inJson._test_excess_state_path || inJson.excess_state_path || '/files/temp/yt_excess_alert_state.json');\nconst HISTORY_PATH = String(inJson._test_history_path || inJson.history_path || path.join(OUTPUTS_DIR, 'published_history.json'));\nconst NOW_MS = (typeof inJson._test_now_ms === 'number' && Number.isFinite(inJson._test_now_ms))\n  ? inJson._test_now_ms\n  : Date.now();\n\nfunction safeReadJson(filePath, fallback) {\n  try {\n    if (!fs.existsSync(filePath)) return fallback;\n    const raw = fs.readFileSync(filePath, 'utf8');\n    if (!raw || !raw.trim()) return fallback;\n    return JSON.parse(raw);\n  } catch (e) {\n    return fallback;\n  }\n}\n\nfunction safeWriteJson(filePath, obj) {\n  try {\n    const dir = path.dirname(filePath);\n    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });\n    fs.writeFileSync(filePath, JSON.stringify(obj, null, 2), 'utf8');\n  } catch (e) {}\n}\n\n// Africa/Algiers daily boundary at 08:00 AM: subtract 8 hours then take YYYY-MM-DD in Africa/Algiers.\nfunction getAlgiersQuotaDay(epochMs) {\n  const shifted = new Date(Number(epochMs) - 8 * 3600 * 1000);\n  try {\n    const parts = new Intl.DateTimeFormat('en-CA', {\n      timeZone: 'Africa/Algiers',\n      year: 'numeric',\n      month: '2-digit',\n      day: '2-digit',\n    }).formatToParts(shifted);\n    const map = {};\n    for (const p of parts) map[p.type] = p.value;\n    if (map.year && map.month && map.day) return `${map.year}-${map.month}-${map.day}`;\n  } catch (e) {}\n  // Africa/Algiers is fixed UTC+1 (no DST)\n  const utcPlus1 = new Date(shifted.getTime() + 3600 * 1000);\n  return utcPlus1.toISOString().slice(0, 10);\n}\n\nfunction safeSlice(str, maxLen) {\n  const s = String(str || '');\n  if (s.length <= maxLen) return s;\n  let cut = s.slice(0, maxLen);\n  const lastCode = cut.charCodeAt(cut.length - 1);\n  if (lastCode >= 0xD800 && lastCode <= 0xDBFF) {\n    cut = cut.slice(0, -1);\n  }\n  return cut;\n}\n\nfunction sanitizeTitleText(str) {\n  return String(str || '')\n    .replace(/[<>]/g, ' ')\n    .replace(/[\\x00-\\x1F\\x7F]+/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim();\n}\n\nfunction sanitizeDescText(str) {\n  return String(str || '')\n    .replace(/[<>]/g, '')\n    .replace(/[\\x00-\\x09\\x0B-\\x1F\\x7F]/g, '')\n    .trim();\n}\n\nfunction clampYouTubeTitle(rawTitle, fallbackCaption) {\n  const MAX_LEN = 95;\n  let base = sanitizeTitleText(rawTitle) || sanitizeTitleText(fallbackCaption) || 'INSANE GAMING MOMENT';\n\n  const hasShorts = /#shorts\\b/i.test(base);\n  if (hasShorts) {\n    if (base.length <= MAX_LEN) return base;\n    // Strip trailing #Shorts, clamp core, re-append #Shorts\n    const core = base.replace(/\\s*#shorts\\b/gi, '').replace(/\\s+/g, ' ').trim();\n    const suffix = ' #Shorts';\n    const maxCore = MAX_LEN - suffix.length;\n    const trimmedCore = safeSlice(core, maxCore).replace(/\\s+\\S*$/, (m) => (core.length > maxCore && m.length < 15 ? '' : m)).trim() || safeSlice(core, maxCore).trim();\n    return safeSlice((trimmedCore || 'INSANE GAMING MOMENT') + suffix, MAX_LEN);\n  }\n\n  const suffix = ' #Shorts';\n  const maxCore = MAX_LEN - suffix.length;\n  if (base.length <= maxCore) {\n    return base + suffix;\n  }\n  let trimmed = safeSlice(base, maxCore).trim();\n  if (trimmed.includes(' ') && trimmed.length > 20) {\n    const wordBound = trimmed.replace(/\\s+\\S*$/, '').trim();\n    if (wordBound.length >= 12) trimmed = wordBound;\n  }\n  return safeSlice((trimmed || 'INSANE GAMING MOMENT') + suffix, MAX_LEN);\n}\n\nfunction buildYouTubeDescription(meta, title, creatorCredit, baitQ) {\n  if (meta.youtube_description && String(meta.youtube_description).trim()) {\n    return sanitizeDescText(meta.youtube_description);\n  }\n  if (meta.platform_copy && meta.platform_copy.youtube_shorts && String(meta.platform_copy.youtube_shorts).trim()) {\n    return sanitizeDescText(meta.platform_copy.youtube_shorts);\n  }\n  const hook = String(meta.viral_caption || title || 'INSANE MOMENT').trim();\n  const valueNote = String(meta.visual_value_note || '').trim();\n  const summary = String(meta.global_summary || 'Epic gaming moment!').trim();\n  const game = String(meta.game || 'Gaming').trim();\n  const gameTag = '#' + (game.replace(/[^a-zA-Z0-9]/g, '') || 'Gaming');\n  const lines = [hook];\n  if (valueNote) lines.push('', valueNote);\n  if (baitQ) lines.push('', baitQ);\n  if (creatorCredit) lines.push('', creatorCredit);\n  if (summary) lines.push('', summary);\n  lines.push('', `#Shorts #Gaming #Viral #GamingClips ${gameTag}`);\n  return sanitizeDescText(lines.join('\\n'));\n}\n\nfunction sha256FileSync(filePath) {\n  const hash = crypto.createHash('sha256');\n  const fd = fs.openSync(filePath, 'r');\n  try {\n    const buf = Buffer.allocUnsafe(1024 * 1024);\n    let bytesRead = 0;\n    while ((bytesRead = fs.readSync(fd, buf, 0, buf.length, null)) > 0) {\n      hash.update(buf.subarray(0, bytesRead));\n    }\n  } finally {\n    fs.closeSync(fd);\n  }\n  return hash.digest('hex');\n}\n\nfunction escapeHtml(str) {\n  return String(str || '')\n    .replace(/&/g, '&amp;')\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;');\n}\n\nfunction isProtectedNonSidecar(fileName, fullPath) {\n  if (\n    fileName === 'published_history.json' ||\n    fileName === 'scoreboard.csv' ||\n    fileName === 'player_blacklist.json' ||\n    fileName === 'active_workflow.json' ||\n    fileName === 'live_wf.json' ||\n    fileName === 'updated_workflow.json' ||\n    fileName === 'workflow_generator.json' ||\n    fileName === 'edl_test.json' ||\n    fileName === 'enriched_test.json'\n  ) {\n    return true;\n  }\n  if (/^(ANTIGRAVITY_|whisper_|exec_)/i.test(fileName)) return true;\n  try {\n    const raw = fs.readFileSync(fullPath, 'utf8');\n    const parsed = JSON.parse(raw);\n    if (Array.isArray(parsed)) return true;\n    if (parsed && typeof parsed === 'object') {\n      if (Array.isArray(parsed.nodes) && parsed.connections) return true;\n      if (Array.isArray(parsed.scenarios)) return true;\n    }\n  } catch (e) {\n    // Broken JSON without matching .mp4 is treated as orphan sidecar\n  }\n  return false;\n}\n\n// 1. Scan /files/outputs & perform orphan .json cleanup\nconst orphansDeleted = [];\nlet dirEntries = [];\nif (fs.existsSync(OUTPUTS_DIR)) {\n  dirEntries = fs.readdirSync(OUTPUTS_DIR);\n}\n\nconst mp4Set = new Set(\n  dirEntries.filter((f) => {\n    if (!/\\.mp4$/i.test(f)) return false;\n    if (/\\.(tmp|processing)\\.mp4$/i.test(f) || f.startsWith('.')) return false;\n    try {\n      return fs.statSync(path.join(OUTPUTS_DIR, f)).isFile();\n    } catch (e) {\n      return false;\n    }\n  })\n);\n\nfor (const fileName of dirEntries) {\n  if (!/\\.json$/i.test(fileName) || fileName.startsWith('.')) continue;\n  const fullPath = path.join(OUTPUTS_DIR, fileName);\n  let isFile = false;\n  try { isFile = fs.statSync(fullPath).isFile(); } catch (e) {}\n  if (!isFile) continue;\n\n  const expectedMp4 = fileName.slice(0, -5) + '.mp4';\n  if (!mp4Set.has(expectedMp4)) {\n    if (!isProtectedNonSidecar(fileName, fullPath)) {\n      try {\n        fs.unlinkSync(fullPath);\n        orphansDeleted.push(fileName);\n      } catch (e) {}\n    }\n  }\n}\n\n// 2. Load published_history.json for filename + SHA-256 deduplication\nconst rawHistory = safeReadJson(HISTORY_PATH, []);\nconst historyArr = Array.isArray(rawHistory)\n  ? rawHistory\n  : (rawHistory && Array.isArray(rawHistory.history) ? rawHistory.history : []);\nconst publishedFilenames = new Set();\nconst publishedHashes = new Set();\nfor (const entry of historyArr) {\n  if (!entry || typeof entry !== 'object') continue;\n  if (entry.filename) publishedFilenames.add(String(entry.filename));\n  if (entry.sha256) publishedHashes.add(String(entry.sha256).toLowerCase());\n}\n\n// 3. Build ranked clip queue\nconst rawClips = [];\nfor (const mp4Name of mp4Set) {\n  const mp4Path = path.join(OUTPUTS_DIR, mp4Name);\n  let stat;\n  try {\n    stat = fs.statSync(mp4Path);\n  } catch (e) {\n    continue;\n  }\n  const sha256 = sha256FileSync(mp4Path).toLowerCase();\n  if (publishedFilenames.has(mp4Name) || publishedHashes.has(sha256)) {\n    continue;\n  }\n\n  const stem = mp4Name.slice(0, -4);\n  const jsonPath = path.join(OUTPUTS_DIR, stem + '.json');\n  const hasSidecar = fs.existsSync(jsonPath);\n  const meta = hasSidecar ? safeReadJson(jsonPath, {}) : {};\n\n  const parsedScore = Number(meta.virality_score ?? meta.viral_score);\n  const rawScore = Number.isFinite(parsedScore) ? parsedScore : 5.0;\n  const roundedScore = Math.round(rawScore * 10) / 10;\n\n  let createdAtEpoch = Number(meta.created_at_epoch);\n  if (!Number.isFinite(createdAtEpoch) || createdAtEpoch <= 0) {\n    const isoMs = meta.created_at_iso ? Date.parse(meta.created_at_iso) : NaN;\n    createdAtEpoch = Number.isFinite(isoMs) ? isoMs : stat.mtimeMs;\n  }\n\n  const viralCaption = String(meta.viral_caption || stem).trim();\n  const narrativeArchetype = String(meta.narrative_archetype || meta.archetype || meta.theme || 'GAMING_HIGHLIGHT').trim();\n  const streamerHandle = String(meta.streamer_handle || '').replace(/^@/, '').trim();\n  const creatorCredit = String(meta.creator_credit || (streamerHandle ? ('🎥 @' + streamerHandle) : '')).trim();\n  const commentBaitQuestion = String(meta.comment_bait_question || '').trim();\n  const youtubeTitle = clampYouTubeTitle(meta.youtube_title, viralCaption);\n  const youtubeDescription = buildYouTubeDescription(meta, stem, creatorCredit, commentBaitQuestion);\n\n  rawClips.push({\n    filename: mp4Name,\n    stem,\n    mp4_path: mp4Path,\n    json_path: hasSidecar ? jsonPath : null,\n    has_sidecar: hasSidecar,\n    sha256,\n    file_size_bytes: stat.size,\n    virality_score: roundedScore,\n    created_at_epoch: createdAtEpoch,\n    viral_caption: viralCaption,\n    narrative_archetype: narrativeArchetype,\n    creator_credit: creatorCredit,\n    comment_bait_question: commentBaitQuestion,\n    youtube_title: youtubeTitle,\n    youtube_description: youtubeDescription,\n  });\n}\n\n// Transitive tolerance clustering sort:\n// Primary: virality_score (rounded to 1 decimal) descending.\n// Ties or differences <= 0.4 within a descending tier are broken by created_at_epoch descending (newest first).\nrawClips.sort((a, b) =>\n  (b.virality_score - a.virality_score) ||\n  (b.created_at_epoch - a.created_at_epoch) ||\n  a.filename.localeCompare(b.filename)\n);\n\nconst rankedQueue = [];\nlet idx = 0;\nwhile (idx < rawClips.length) {\n  const anchorScore = rawClips[idx].virality_score;\n  const tier = [rawClips[idx]];\n  idx++;\n  while (idx < rawClips.length && Math.round((anchorScore - rawClips[idx].virality_score) * 10) / 10 <= SCORE_TIE_BAND) {\n    tier.push(rawClips[idx]);\n    idx++;\n  }\n  tier.sort((a, b) =>\n    (b.created_at_epoch - a.created_at_epoch) ||\n    (b.virality_score - a.virality_score) ||\n    a.filename.localeCompare(b.filename)\n  );\n  for (const item of tier) rankedQueue.push(item);\n}\n\n// 4. Quota state & 08:00 AM Africa/Algiers daily boundary reset\nconst currentQuotaDay = getAlgiersQuotaDay(NOW_MS);\nconst rawQuota = safeReadJson(QUOTA_STATE_PATH, {});\nlet uploadsToday = Math.max(0, Number(rawQuota.uploads_today) || 0);\nconst lastUploadEpoch = (typeof rawQuota.last_upload_epoch === 'number' && Number.isFinite(rawQuota.last_upload_epoch) && rawQuota.last_upload_epoch > 0)\n  ? rawQuota.last_upload_epoch\n  : 0;\nconst savedQuotaDay = rawQuota.quota_day\n  ? String(rawQuota.quota_day)\n  : (lastUploadEpoch > 0 ? getAlgiersQuotaDay(lastUploadEpoch) : currentQuotaDay);\n\nif (savedQuotaDay !== currentQuotaDay) {\n  uploadsToday = 0;\n  safeWriteJson(QUOTA_STATE_PATH, {\n    uploads_today: 0,\n    last_upload_epoch: lastUploadEpoch,\n    quota_day: currentQuotaDay,\n    updated_at_iso: new Date(NOW_MS).toISOString(),\n  });\n}\n\nconst slotsRemaining = Math.max(0, MAX_API_UPLOADS_PER_DAY - uploadsToday);\nconst minutesSinceLastUpload = lastUploadEpoch > 0\n  ? Math.max(0, Number(((NOW_MS - lastUploadEpoch) / 60000).toFixed(2)))\n  : null;\nconst spacingOk = (lastUploadEpoch <= 0) || (minutesSinceLastUpload >= MIN_SPACING_MINUTES);\n\nconst queueCount = rankedQueue.length;\nconst queueEmpty = queueCount === 0;\nconst canApiPublish = !queueEmpty && slotsRemaining > 0 && spacingOk;\nconst excessForManual = queueCount > (MAX_API_UPLOADS_PER_DAY - uploadsToday);\n\n// 5. Excess manual alert throttle check (Branch B writes yt_excess_alert_state.json when sending)\nconst rawExcess = safeReadJson(EXCESS_STATE_PATH, {});\nconst lastAlertEpoch = (typeof rawExcess.last_alert_epoch === 'number' && Number.isFinite(rawExcess.last_alert_epoch))\n  ? rawExcess.last_alert_epoch\n  : 0;\nconst lastAlertCount = (typeof rawExcess.last_count === 'number' && Number.isFinite(rawExcess.last_count))\n  ? rawExcess.last_count\n  : -1;\nconst countChanged = queueCount !== lastAlertCount;\nconst twoHoursElapsed = !lastAlertEpoch || ((NOW_MS - lastAlertEpoch) >= EXCESS_THROTTLE_MS);\nconst shouldSendExcessEmail = excessForManual && (countChanged || twoHoursElapsed);\n\n// 6. Build excess_clips_list & excess_html_list\nconst excessSlice = rankedQueue.slice(slotsRemaining);\nconst excessClipsList = excessSlice.map((clip, i) => ({\n  rank: slotsRemaining + i + 1,\n  filename: clip.filename,\n  mp4_path: clip.mp4_path,\n  json_path: clip.json_path,\n  sha256: clip.sha256,\n  virality_score: clip.virality_score,\n  narrative_archetype: clip.narrative_archetype,\n  creator_credit: clip.creator_credit || '🎥 @Streamer',\n  youtube_title: clip.youtube_title,\n  youtube_description: clip.youtube_description,\n}));\n\nconst excessHtmlList = excessClipsList.length\n  ? excessClipsList.map((c) => `\n    <div style=\"border:1px solid #ddd;border-radius:8px;padding:12px;margin:10px 0;background:#fafafa;\">\n      <p style=\"margin:0 0 6px 0;\"><strong>#${c.rank} &bull; ${escapeHtml(c.filename)}</strong> (Score: <strong>${c.virality_score}</strong> | ${escapeHtml(c.narrative_archetype)})</p>\n      <p style=\"margin:4px 0;\"><strong>Title (${c.youtube_title.length}/95):</strong> <code>${escapeHtml(c.youtube_title)}</code></p>\n      <p style=\"margin:4px 0;\"><strong>Creator Credit:</strong> ${escapeHtml(c.creator_credit)}</p>\n      <p style=\"margin:4px 0;\"><strong>Description:</strong></p>\n      <pre style=\"white-space:pre-wrap;background:#fff;border:1px solid #eee;padding:8px;border-radius:4px;font-family:sans-serif;font-size:13px;\">${escapeHtml(c.youtube_description)}</pre>\n      <p style=\"margin:4px 0;color:#666;font-size:12px;\">Path: <code>${escapeHtml(c.mp4_path)}</code></p>\n    </div>`).join('\\n')\n  : '<p>No excess clips.</p>';\n\n// 7. Check generator processing state (/files/inputs/*.processing.mp4)\nlet processingFiles = [];\ntry {\n  if (fs.existsSync(INPUTS_DIR)) {\n    processingFiles = fs.readdirSync(INPUTS_DIR).filter((f) => /\\.processing\\.mp4$/i.test(f));\n  }\n} catch (e) {}\n\nreturn [{\n  json: {\n    queue_empty: queueEmpty,\n    can_api_publish: canApiPublish,\n    excess_for_manual: excessForManual,\n    should_send_excess_email: shouldSendExcessEmail,\n    uploads_today: uploadsToday,\n    slots_remaining: slotsRemaining,\n    minutes_since_last_upload: minutesSinceLastUpload,\n    queue_count: queueCount,\n    top_clip: rankedQueue.length ? rankedQueue[0] : null,\n    excess_clips_list: excessClipsList,\n    excess_html_list: excessHtmlList,\n    is_generator_processing: processingFiles.length > 0,\n    processing_files: processingFiles,\n    orphans_deleted: orphansDeleted,\n    quota_day: currentQuotaDay,\n    _paths: {\n      outputs_dir: OUTPUTS_DIR,\n      inputs_dir: INPUTS_DIR,\n      quota_state_path: QUOTA_STATE_PATH,\n      excess_state_path: EXCESS_STATE_PATH,\n      history_path: HISTORY_PATH,\n    },\n    _now_ms: NOW_MS,\n  }\n}];\n"
+      },
+      "id": "scan-rank-output-queue",
+      "name": "Scan & Rank Output Queue",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -320,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.queue_empty === true }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-queue-empty",
+      "name": "If Queue Empty?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -60,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "command": "={{ (function(){\n  const scan = $json || {};\n  if (scan.is_generator_processing) {\n    const names = Array.isArray(scan.processing_files) ? scan.processing_files.join(', ') : 'active .processing.mp4';\n    return 'echo \"SKIPPED_PROCESSING:' + names.replace(/[\"$`\\\\]/g, '_') + '\"';\n  }\n  return 'mkdir -p /files/temp && PIDFILE=/files/temp/gta6_auto_trigger.pid; WF_ID=Gta6VisionShortsV1; '\n    + 'if pgrep -f \"[n]8n execute --id=$WF_ID\" >/dev/null 2>&1; then echo \"SKIPPED_ALREADY_RUNNING\"; '\n    + 'elif [ -f \"$PIDFILE\" ] && kill -0 \"$(cat \"$PIDFILE\" 2>/dev/null)\" 2>/dev/null; then echo \"SKIPPED_PID_LOCK\"; '\n    + 'else nohup env NODE_FUNCTION_ALLOW_BUILTIN=* NODE_FUNCTION_ALLOW_EXTERNAL=* n8n execute --id=\"$WF_ID\" </dev/null >/files/temp/gta6_auto_trigger.log 2>&1 & '\n    + 'echo $! > \"$PIDFILE\"; echo \"LAUNCHED_PID:$!\"; fi';\n})() }}"
+      },
+      "id": "trigger-gta6-generator",
+      "name": "Trigger GTA6 Generator",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        220,
+        -280
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "mlkmehdid@gmail.com",
+        "toEmail": "mlkmehdid@gmail.com",
+        "subject": "⚠️ Shorts Queue Empty — Auto-Triggered GTA 6 Scraper!",
+        "emailFormat": "html",
+        "html": "={{ (function(){ const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;'); const scan = $('Scan & Rank Output Queue').first().json || {}; const proc = Array.isArray(scan.processing_files) ? scan.processing_files.join(', ') : ''; return '<h2>⚠️ Shorts Queue Is Empty</h2>' + '<p><strong>Action Taken:</strong> ' + (scan.is_generator_processing ? 'VOD already processing in /files/inputs/ (' + esc(proc) + ') — skipped duplicate launch.' : 'No active VOD processing detected — auto-triggered <code>Gta6VisionShortsV1</code> headlessly (<code>' + esc(String($json.stdout || '').trim()) + '</code>).') + '</p>' + '<p><strong>Daily API Quota Used:</strong> ' + esc(scan.uploads_today) + '/6</p>' + '<p>Log file: <code>/files/temp/gta6_auto_trigger.log</code></p>'; })() }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "a504708e-0bfc-4eb2-838c-471c7cb9c7e7",
+      "name": "Email Queue Empty & Auto-Trigger",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        500,
+        -280
+      ],
+      "webhookId": "80f08670-92b6-4e8d-b7c6-058539d5bddf",
+      "credentials": {
+        "smtp": {
+          "id": "y9GfhJenJPSfkVno",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.should_send_excess_email === true }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-should-alert-excess",
+      "name": "If Should Alert Excess?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        220,
+        -40
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\n\nconst item = ($input.first() && $input.first().json) ? $input.first().json : {};\nconst statePath = (item._paths && item._paths.excess_state_path) || item._test_excess_state_path || '/files/temp/yt_excess_alert_state.json';\nconst nowMs = (typeof item._now_ms === 'number' && Number.isFinite(item._now_ms)) ? item._now_ms : Date.now();\nconst count = Number(item.queue_count) || 0;\n\ntry {\n  const dir = path.dirname(statePath);\n  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });\n  fs.writeFileSync(statePath, JSON.stringify({\n    last_alert_epoch: nowMs,\n    last_count: count,\n    updated_at_iso: new Date(nowMs).toISOString(),\n  }, null, 2), 'utf8');\n} catch (e) {}\n\nreturn [{ json: { ...item } }];\n"
+      },
+      "id": "update-excess-alert-state",
+      "name": "Update Excess Alert State",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        -40
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "mlkmehdid@gmail.com",
+        "toEmail": "mlkmehdid@gmail.com",
+        "subject": "={{ '🔥 Excess Shorts Ready (' + $json.queue_count + ' in /files/outputs/) — Manual Upload Recommended!' }}",
+        "emailFormat": "html",
+        "html": "={{ '<h2>🔥 Excess Shorts Ready for Manual Upload</h2>' + '<p><strong>Total Ready in /files/outputs/:</strong> ' + $json.queue_count + ' clip(s)<br/>' + '<strong>API Slots Remaining Today (08:00 Africa/Algiers reset):</strong> ' + $json.slots_remaining + '/6 (' + $json.uploads_today + '/6 used)</p>' + '<p><strong>⚠️ Reminder:</strong> After uploading any excess clip manually in YouTube Studio, please delete BOTH its <code>.mp4</code> and matching <code>.json</code> from <code>/files/outputs/</code> so it is not re-queued.</p>' + '<hr/>' + ($json.excess_html_list || '<p>No excess clips.</p>') }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "email-manual-excess-alert",
+      "name": "Send Manual Upload Alert Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        780,
+        -40
+      ],
+      "webhookId": "9d48b532-2b1e-4918-a89c-8bb1e8e4a102",
+      "credentials": {
+        "smtp": {
+          "id": "y9GfhJenJPSfkVno",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.can_api_publish === true }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-can-api-publish",
+      "name": "If Can API Publish?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        220,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "fileSelector": "={{ $json.top_clip.mp4_path }}",
+        "options": {
+          "dataPropertyName": "data"
+        }
+      },
+      "id": "55dfe836-5bc7-4bfa-afec-1e7e81622e1c",
+      "name": "Read Clip Binary",
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1,
+      "position": [
+        500,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const inItem = $input.first() || {};\nlet scanData = {};\ntry {\n  scanData = $('Scan & Rank Output Queue').first().json || {};\n} catch (e) {\n  scanData = inItem.json || {};\n}\n\nconst topClip = scanData.top_clip || (inItem.json && inItem.json.top_clip);\nif (!topClip || !topClip.mp4_path) {\n  throw new Error('No top_clip available for YouTube upload.');\n}\n\nlet binary = inItem.binary;\nif (!binary || !binary.data) {\n  try {\n    binary = $('Read Clip Binary').first().binary;\n  } catch (e) {}\n}\n\nfunction safeSlice(str, maxLen) {\n  const s = String(str || '');\n  if (s.length <= maxLen) return s;\n  let cut = s.slice(0, maxLen);\n  const lastCode = cut.charCodeAt(cut.length - 1);\n  if (lastCode >= 0xD800 && lastCode <= 0xDBFF) cut = cut.slice(0, -1);\n  return cut;\n}\n\nlet title = String(topClip.youtube_title || topClip.viral_caption || 'INSANE GAMING MOMENT')\n  .replace(/[<>]/g, ' ')\n  .replace(/[\\x00-\\x1F\\x7F]+/g, ' ')\n  .replace(/\\s+/g, ' ')\n  .trim() || 'INSANE GAMING MOMENT';\nif (title.length > 95) {\n  const core = title.replace(/\\s*#shorts\\b/gi, '').trim() || 'INSANE GAMING MOMENT';\n  title = safeSlice(core, 87).trim() + ' #Shorts';\n}\nif (!/#shorts\\b/i.test(title) && title.length <= 87) {\n  title = title + ' #Shorts';\n}\ntitle = safeSlice(title, 95);\n\nconst description = String(topClip.youtube_description || title)\n  .replace(/[<>]/g, '')\n  .replace(/[\\x00-\\x09\\x0B-\\x1F\\x7F]/g, '')\n  .trim() || title;\nconst requestBody = {\n  snippet: {\n    title,\n    description,\n    categoryId: '20',\n  },\n  status: {\n    privacyStatus: 'public',\n    selfDeclaredMadeForKids: false,\n  },\n};\n\nreturn [{\n  json: {\n    ...scanData,\n    top_clip: {\n      ...topClip,\n      youtube_title: title,\n      youtube_description: description,\n    },\n    youtube_title: title,\n    youtube_description: description,\n    yt_request_body: requestBody,\n  },\n  binary,\n}];\n"
+      },
+      "id": "prepare-youtube-upload",
+      "name": "Prepare YouTube Upload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        760,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://www.googleapis.com/upload/youtube/v3/videos",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "youTubeOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "uploadType",
+              "value": "resumable"
+            },
+            {
+              "name": "part",
+              "value": "snippet,status"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Upload-Content-Type",
+              "value": "video/mp4"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.yt_request_body) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "85aa4008-2841-47c5-801f-2573d5ba5828",
+      "name": "Initiate YouTube Upload",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1020,
+        220
+      ],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "youTubeOAuth2Api": {
+          "id": "uZZfE7BMA1T5wyqf",
+          "name": "YouTube account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const resp = ($input.first() && $input.first().json) ? $input.first().json : {};\nconst headers = resp.headers || {};\nlet uploadUrl = headers.location || headers.Location || null;\nif (!uploadUrl) {\n  for (const k of Object.keys(headers)) {\n    if (String(k).toLowerCase() === 'location' && headers[k]) {\n      uploadUrl = headers[k];\n      break;\n    }\n  }\n}\nif (!uploadUrl) {\n  throw new Error('No upload URL returned by YouTube resumable initiation. Headers: ' + JSON.stringify(headers));\n}\n\nlet prep = {};\nlet binary;\ntry {\n  const pNode = $('Prepare YouTube Upload').first();\n  if (pNode && pNode.json && pNode.json.top_clip) {\n    prep = pNode.json;\n    binary = pNode.binary;\n  }\n} catch (e) {}\nif (!prep || !prep.top_clip) {\n  prep = resp;\n  binary = binary || $input.first().binary;\n}\n\nreturn [{\n  json: {\n    ...prep,\n    uploadUrl,\n  },\n  binary,\n}];\n"
+      },
+      "id": "f1971981-7fc7-4489-9e29-d190b1424634",
+      "name": "Extract Upload URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        180
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $json.uploadUrl }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "youTubeOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "video/mp4"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "5b4c38d0-143f-4059-98f5-dd72dd0d12db",
+      "name": "Upload Video to YouTube",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        1540,
+        180
+      ],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "youTubeOAuth2Api": {
+          "id": "uZZfE7BMA1T5wyqf",
+          "name": "YouTube account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\n\nconst MAX_API_UPLOADS_PER_DAY = 6;\nconst errInput = ($input.first() && $input.first().json) ? $input.first().json : {};\n\nlet prep = {};\ntry {\n  const pNode = $('Prepare YouTube Upload').first();\n  if (pNode && pNode.json && pNode.json.top_clip) prep = pNode.json;\n} catch (e) {}\nif (!prep || !prep.top_clip) {\n  prep = errInput;\n}\n\nconst topClip = prep.top_clip || errInput.top_clip || {};\nconst paths = prep._paths || errInput._paths || {};\nconst quotaStatePath = String(errInput._test_quota_state_path || paths.quota_state_path || '/files/temp/yt_quota_state.json');\nconst nowMs = (typeof errInput._test_now_ms === 'number' && Number.isFinite(errInput._test_now_ms))\n  ? errInput._test_now_ms\n  : (typeof prep._now_ms === 'number' && Number.isFinite(prep._now_ms) ? prep._now_ms : Date.now());\n\nfunction getAlgiersQuotaDay(epochMs) {\n  const shifted = new Date(Number(epochMs) - 8 * 3600 * 1000);\n  try {\n    const parts = new Intl.DateTimeFormat('en-CA', {\n      timeZone: 'Africa/Algiers',\n      year: 'numeric',\n      month: '2-digit',\n      day: '2-digit',\n    }).formatToParts(shifted);\n    const map = {};\n    for (const p of parts) map[p.type] = p.value;\n    if (map.year && map.month && map.day) return `${map.year}-${map.month}-${map.day}`;\n  } catch (e) {}\n  return new Date(shifted.getTime() + 3600 * 1000).toISOString().slice(0, 10);\n}\n\nconst rawErrJson = JSON.stringify(errInput);\nconst httpStatus = Number(\n  errInput.httpCode ||\n  errInput.statusCode ||\n  errInput.status ||\n  (errInput.error && (errInput.error.httpCode || errInput.error.statusCode || errInput.error.status || errInput.error.code)) ||\n  0\n) || 'unknown';\nconst errorMessage = String(\n  (errInput.error && (errInput.error.message || errInput.error.description)) ||\n  errInput.message ||\n  errInput.description ||\n  rawErrJson\n).slice(0, 1500);\n\nconst isQuotaError = /(quotaExceeded|uploadLimitExceeded|dailyLimitExceeded|rateLimitExceeded|exceeded.*upload.*limit)/i.test(rawErrJson);\n\nlet existingQuota = {};\ntry {\n  if (fs.existsSync(quotaStatePath)) {\n    existingQuota = JSON.parse(fs.readFileSync(quotaStatePath, 'utf8')) || {};\n  }\n} catch (e) {}\n\nconst quotaDay = getAlgiersQuotaDay(nowMs);\nlet uploadsToday = Number(existingQuota.uploads_today) || Number(prep.uploads_today) || 0;\n\nif (isQuotaError) {\n  uploadsToday = MAX_API_UPLOADS_PER_DAY;\n  try {\n    const dir = path.dirname(quotaStatePath);\n    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });\n    fs.writeFileSync(quotaStatePath, JSON.stringify({\n      uploads_today: MAX_API_UPLOADS_PER_DAY,\n      last_upload_epoch: existingQuota.last_upload_epoch || 0,\n      quota_day: quotaDay,\n      quota_locked_reason: isQuotaError ? 'youtube_quota_or_upload_limit_exceeded' : '',\n      last_error_iso: new Date(nowMs).toISOString(),\n      updated_at_iso: new Date(nowMs).toISOString(),\n    }, null, 2), 'utf8');\n  } catch (e) {}\n}\n\nconst youtubeTitle = String(prep.youtube_title || topClip.youtube_title || topClip.filename || 'Unknown Clip');\nconst filename = String(topClip.filename || 'unknown.mp4');\nconst mp4Path = String(topClip.mp4_path || '');\nconst jsonPath = String(topClip.json_path || '');\n\nreturn [{\n  json: {\n    youtube_title: youtubeTitle,\n    filename,\n    mp4_path: mp4Path,\n    json_path: jsonPath,\n    http_status: httpStatus,\n    error_message: errorMessage,\n    is_quota_error: isQuotaError,\n    uploads_today: uploadsToday,\n    slots_remaining: Math.max(0, MAX_API_UPLOADS_PER_DAY - uploadsToday),\n    files_preserved: true,\n    raw_error: rawErrJson.slice(0, 2000),\n  }\n}];\n"
+      },
+      "id": "handle-youtube-upload-error",
+      "name": "Handle YouTube Upload Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "mlkmehdid@gmail.com",
+        "toEmail": "mlkmehdid@gmail.com",
+        "subject": "={{ '❌ YouTube Upload Failed: ' + $json.youtube_title }}",
+        "emailFormat": "html",
+        "html": "={{ (function(){ const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;'); return '<h2>❌ YouTube Upload Failed</h2>' + '<p><strong>Title:</strong> ' + esc($json.youtube_title) + '</p>' + '<p><strong>File:</strong> <code>' + esc($json.filename) + '</code></p>' + '<p><strong>HTTP Status:</strong> ' + esc($json.http_status) + '</p>' + '<p><strong>Quota/Upload Limit Error:</strong> ' + ($json.is_quota_error ? 'YES (daily API quota locked at 6/6 until 08:00 AM Africa/Algiers)' : 'No') + '</p>' + '<p><strong>Files Preserved:</strong> ✅ Neither <code>.mp4</code> nor <code>.json</code> was deleted.</p>' + '<pre style=\"white-space:pre-wrap;background:#fff5f5;border:1px solid #f5c2c7;padding:10px;\">' + esc($json.error_message) + '</pre>'; })() }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "email-youtube-upload-error",
+      "name": "Send Upload Error Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1820,
+        440
+      ],
+      "webhookId": "b62e8e21-88c5-4457-83e1-60e98e1b0f44",
+      "credentials": {
+        "smtp": {
+          "id": "y9GfhJenJPSfkVno",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\n\nconst MAX_API_UPLOADS_PER_DAY = 6;\nconst uploadResp = ($input.first() && $input.first().json) ? $input.first().json : {};\n\nlet prep = {};\ntry {\n  const pNode = $('Prepare YouTube Upload').first();\n  if (pNode && pNode.json && pNode.json.top_clip) prep = pNode.json;\n} catch (e) {}\nif (!prep || !prep.top_clip) {\n  prep = uploadResp;\n}\n\nconst topClip = prep.top_clip || uploadResp.top_clip || {};\nconst paths = prep._paths || uploadResp._paths || {};\nconst quotaStatePath = String(uploadResp._test_quota_state_path || paths.quota_state_path || '/files/temp/yt_quota_state.json');\nconst historyPath = String(uploadResp._test_history_path || paths.history_path || '/files/outputs/published_history.json');\nconst nowMs = (typeof uploadResp._test_now_ms === 'number' && Number.isFinite(uploadResp._test_now_ms))\n  ? uploadResp._test_now_ms\n  : (typeof prep._now_ms === 'number' && Number.isFinite(prep._now_ms) ? prep._now_ms : Date.now());\n\nfunction getAlgiersQuotaDay(epochMs) {\n  const shifted = new Date(Number(epochMs) - 8 * 3600 * 1000);\n  try {\n    const parts = new Intl.DateTimeFormat('en-CA', {\n      timeZone: 'Africa/Algiers',\n      year: 'numeric',\n      month: '2-digit',\n      day: '2-digit',\n    }).formatToParts(shifted);\n    const map = {};\n    for (const p of parts) map[p.type] = p.value;\n    if (map.year && map.month && map.day) return `${map.year}-${map.month}-${map.day}`;\n  } catch (e) {}\n  return new Date(shifted.getTime() + 3600 * 1000).toISOString().slice(0, 10);\n}\n\nconst videoId = String(\n  uploadResp.id ||\n  (uploadResp.body && uploadResp.body.id) ||\n  (uploadResp.data && uploadResp.data.id) ||\n  uploadResp.videoId ||\n  ''\n).trim();\n\nif (!videoId) {\n  throw new Error('YouTube upload succeeded without returning a videoId: ' + JSON.stringify(uploadResp).slice(0, 500));\n}\n\nconst youtubeTitle = String(prep.youtube_title || topClip.youtube_title || topClip.viral_caption || 'YouTube Short');\nconst filename = String(topClip.filename || '');\nconst sha256 = String(topClip.sha256 || '');\nconst viralityScore = Number(topClip.virality_score ?? 5.0);\nconst archetype = String(topClip.narrative_archetype || 'GAMING_HIGHLIGHT');\nconst creatorCredit = String(topClip.creator_credit || '');\nconst publishedAtIso = new Date(nowMs).toISOString();\nconst url = 'https://www.youtube.com/shorts/' + videoId;\n\n// 1. Append to published_history.json\nlet history = [];\ntry {\n  if (fs.existsSync(historyPath)) {\n    const parsed = JSON.parse(fs.readFileSync(historyPath, 'utf8'));\n    if (Array.isArray(parsed)) history = parsed;\n    else if (parsed && Array.isArray(parsed.history)) history = parsed.history;\n  }\n} catch (e) {\n  history = [];\n}\n\nhistory.push({\n  title: youtubeTitle,\n  filename,\n  sha256,\n  videoId,\n  url,\n  virality_score: viralityScore,\n  archetype,\n  published_at_iso: publishedAtIso,\n});\n\nconst histDir = path.dirname(historyPath);\nif (!fs.existsSync(histDir)) fs.mkdirSync(histDir, { recursive: true });\nfs.writeFileSync(historyPath, JSON.stringify(history, null, 2), 'utf8');\n\n// 2. Increment uploads_today & update last_upload_epoch in yt_quota_state.json\nconst currentQuotaDay = getAlgiersQuotaDay(nowMs);\nlet existingQuota = {};\ntry {\n  if (fs.existsSync(quotaStatePath)) {\n    existingQuota = JSON.parse(fs.readFileSync(quotaStatePath, 'utf8')) || {};\n  }\n} catch (e) {}\n\nconst prevDay = existingQuota.quota_day\n  ? String(existingQuota.quota_day)\n  : (existingQuota.last_upload_epoch ? getAlgiersQuotaDay(existingQuota.last_upload_epoch) : currentQuotaDay);\nconst baseCount = (prevDay === currentQuotaDay) ? Math.max(0, Number(existingQuota.uploads_today) || 0) : 0;\nconst uploadsToday = baseCount + 1;\n\nconst quotaDir = path.dirname(quotaStatePath);\nif (!fs.existsSync(quotaDir)) fs.mkdirSync(quotaDir, { recursive: true });\nfs.writeFileSync(quotaStatePath, JSON.stringify({\n  uploads_today: uploadsToday,\n  last_upload_epoch: nowMs,\n  quota_day: currentQuotaDay,\n  updated_at_iso: publishedAtIso,\n}, null, 2), 'utf8');\n\n// 3. Cleanly delete BOTH .mp4 and .json\nconst mp4Path = String(topClip.mp4_path || '');\nconst jsonPath = String(topClip.json_path || (mp4Path ? mp4Path.replace(/\\.mp4$/i, '.json') : ''));\n\nlet deletedMp4 = false;\nlet deletedJson = false;\nif (mp4Path && fs.existsSync(mp4Path)) {\n  fs.unlinkSync(mp4Path);\n  deletedMp4 = true;\n}\nif (jsonPath && fs.existsSync(jsonPath)) {\n  fs.unlinkSync(jsonPath);\n  deletedJson = true;\n}\n\nconst remainingQueueCount = Math.max(0, (Number(prep.queue_count) || 1) - 1);\nconst slotsRemaining = Math.max(0, MAX_API_UPLOADS_PER_DAY - uploadsToday);\n\nreturn [{\n  json: {\n    videoId,\n    url,\n    studio_url: 'https://studio.youtube.com/video/' + videoId + '/edit',\n    youtube_title: youtubeTitle,\n    title: youtubeTitle,\n    filename,\n    sha256,\n    virality_score: viralityScore,\n    archetype,\n    creator_credit: creatorCredit,\n    uploads_today: uploadsToday,\n    slots_remaining: slotsRemaining,\n    remaining_queue_count: remainingQueueCount,\n    published_at_iso: publishedAtIso,\n    mp4_path: mp4Path,\n    json_path: jsonPath,\n    deleted_mp4: deletedMp4,\n    deleted_json: deletedJson,\n  }\n}];\n"
+      },
+      "id": "record-publish-delete-clip",
+      "name": "Record Publish & Delete Clip",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1820,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "mlkmehdid@gmail.com",
+        "toEmail": "mlkmehdid@gmail.com",
+        "subject": "={{ '🎬 Short Published (' + $json.uploads_today + '/6 Today): ' + $json.youtube_title }}",
+        "emailFormat": "html",
+        "html": "={{ (function(){ const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;'); return '<h2>🎬 New YouTube Short Published!</h2>' + '<p><strong>Title:</strong> ' + esc($json.youtube_title) + '</p>' + '<p><strong>Shorts URL:</strong> <a href=\"' + esc($json.url) + '\">' + esc($json.url) + '</a></p>' + '<p><strong>YouTube Studio:</strong> <a href=\"' + esc($json.studio_url) + '\">' + esc($json.studio_url) + '</a></p>' + '<p><strong>Virality Score:</strong> ' + esc($json.virality_score) + ' | <strong>Archetype:</strong> ' + esc($json.archetype) + '</p>' + ($json.creator_credit ? '<p><strong>Creator:</strong> ' + esc($json.creator_credit) + '</p>' : '') + '<p><strong>Daily API Quota:</strong> ' + esc($json.uploads_today) + '/6 used (' + esc($json.slots_remaining) + ' remaining)</p>' + '<p><strong>Remaining Queue in /files/outputs/:</strong> ' + esc($json.remaining_queue_count) + ' clip(s)</p>' + '<hr/>' + '<p><strong>📁 Cleanup:</strong> Deleted <code>' + esc($json.filename) + '</code> and sidecar JSON; logged SHA-256 to <code>published_history.json</code>.</p>' + '<p><strong>👀 Visibility Reminder:</strong> Uploaded with <code>privacyStatus: public</code>. Check YouTube Studio to confirm HD/Shorts processing and visibility.</p>'; })() }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "54125c4e-8f9c-4cad-96b8-764f7e714d0b",
+      "name": "Send Published Confirmation Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2100,
+        160
+      ],
+      "webhookId": "3f903da9-8afc-444f-97f2-a826f6f64c28",
+      "credentials": {
+        "smtp": {
+          "id": "y9GfhJenJPSfkVno",
+          "name": "SMTP account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Scan & Rank Output Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Test Publisher Manually": {
+      "main": [
+        [
+          {
+            "node": "Scan & Rank Output Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scan & Rank Output Queue": {
+      "main": [
+        [
+          {
+            "node": "If Queue Empty?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Queue Empty?": {
+      "main": [
+        [
+          {
+            "node": "Trigger GTA6 Generator",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "If Should Alert Excess?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "If Can API Publish?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger GTA6 Generator": {
+      "main": [
+        [
+          {
+            "node": "Email Queue Empty & Auto-Trigger",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Should Alert Excess?": {
+      "main": [
+        [
+          {
+            "node": "Update Excess Alert State",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Update Excess Alert State": {
+      "main": [
+        [
+          {
+            "node": "Send Manual Upload Alert Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If Can API Publish?": {
+      "main": [
+        [
+          {
+            "node": "Read Clip Binary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Read Clip Binary": {
+      "main": [
+        [
+          {
+            "node": "Prepare YouTube Upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare YouTube Upload": {
+      "main": [
+        [
+          {
+            "node": "Initiate YouTube Upload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initiate YouTube Upload": {
+      "main": [
+        [
+          {
+            "node": "Extract Upload URL",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle YouTube Upload Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Upload URL": {
+      "main": [
+        [
+          {
+            "node": "Upload Video to YouTube",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle YouTube Upload Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload Video to YouTube": {
+      "main": [
+        [
+          {
+            "node": "Record Publish & Delete Clip",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle YouTube Upload Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handle YouTube Upload Error": {
+      "main": [
+        [
+          {
+            "node": "Send Upload Error Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Publish & Delete Clip": {
+      "main": [
+        [
+          {
+            "node": "Send Published Confirmation Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "Africa/Algiers",
+    "executionOrder": "v1"
+  }
+}

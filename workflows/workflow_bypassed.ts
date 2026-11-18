@@ -626,7 +626,7 @@ if (words.length === 0) {
   } catch(e) {}
 }
 if (words.length === 0) {
-  const txFiles = ['/files/temp/transcript.json', '/files/outputs/whisper_28754.json', '/files/temp/whisper_raw.json'];
+  const txFiles = ['/files/temp/transcript.json', '/files/temp/whisper_28754.json', '/files/temp/whisper_raw.json'];
   for (const fp of txFiles) {
     if (fs.existsSync(fp)) {
       try {
@@ -3757,9 +3757,157 @@ return allClips.map((clip, index) => {
         position: [-81420, 26840],
     })
     WriteSidecarJson = {
-        command: `={{ (function(){ function getNode(name){ try{ const it=$(name).item; if(it&&it.json&&Object.keys(it.json).length) return it.json; }catch(e){} try{ const lt=$(name).last(); if(lt&&lt.json&&Object.keys(lt.json).length) return lt.json; }catch(e2){} return {}; } const loopItem = getNode('Loop Clips'); const title = (loopItem.title || 'clip').replace(/[\\/\\\\"'<>|&;:]/g, '_').trim(); const sidecarFile = '/files/outputs/' + title + '.json'; let summary = {}; try { const sNode = getNode('1. Global Summary AI'); summary = JSON.parse((sNode.output || '{}').replace(/\`\`\`json/gi,'').replace(/\`\`\`/g,'').trim()); } catch(e) {} const BANNED = /^(I CALLED TIME OUT|HE ACTUALLY FELL FOR IT|THAT DOES NOT COUNT|MY WORST BLUNDER|MUST WATCH MOMENT|VIRAL MOMENT|NO WORDS|NO AUDIO FOUND|NO TRANSCRIPT|UNDEFINED|NULL|ERROR)$/i; const fallbackCap = (loopItem.hook_caption && !BANNED.test(String(loopItem.hook_caption).trim()) && !/\\b(NO WORDS|NO AUDIO FOUND|NO TRANSCRIPT)\\b/i.test(String(loopItem.hook_caption)) && !/<[^>]+>/.test(String(loopItem.hook_caption))) ? String(loopItem.hook_caption).trim().toUpperCase() : title; let caption = fallbackCap; try { let raw = (getNode('Context Merge Agent').output || getNode('Context Merge Fallback').output || '{}').replace(/\`\`\`json/gi,'').replace(/\`\`\`/g,'').trim(); const parsed = JSON.parse(raw).story_hook || ''; if (parsed && !BANNED.test(parsed.trim()) && !/\\b(NO WORDS|NO AUDIO FOUND|NO TRANSCRIPT|UNDEFINED|NULL|ERROR)\\b/i.test(parsed) && !/<[^>]+>/.test(parsed)) { caption = parsed.trim().toUpperCase(); } } catch(e) {} const meta = { viral_caption: caption, game: summary.game || 'Gaming', global_summary: summary.global_summary || '', vibe: summary.vibe || '', theme: loopItem.theme || '', key_themes: summary.key_themes || [] }; const jsonStr = JSON.stringify(meta); return \`cat <<'SIDECAR_EOF' > "\${sidecarFile}"
+        command: `={{ (function(){
+function getNode(name){ try{ const it=$(name).item; if(it&&it.json&&Object.keys(it.json).length) return it.json; }catch(e){} try{ const lt=$(name).last(); if(lt&&lt.json&&Object.keys(lt.json).length) return lt.json; }catch(e2){} return {}; }
+const fs = require('fs');
+const loopItem = getNode('Loop Clips');
+const editFields = getNode('Edit Fields');
+const rchNode = getNode('Resolve Creator Handle');
+const lctNode = getNode('Load Cached Telemetry');
+const cfgNode = getNode('Config');
+const title = String(loopItem.title || 'clip').replace(/[\\/"'<>|&;:]/g, '_').trim() || 'clip';
+const sidecarFile = '/files/outputs/' + title + '.json';
+let summary = {};
+for (const sn of ['1. Global Summary AI', '1. Global Summary Fallback', '1. Global Summary Mistral Fallback']) {
+  if (summary && summary.game) break;
+  try {
+    const sNode = getNode(sn);
+    const rawS = String(sNode.output || sNode.text || '').replace(/\`\`\`json/gi,'').replace(/\`\`\`/g,'').trim();
+    if (rawS) {
+      const parsedS = JSON.parse(rawS);
+      if (parsedS && typeof parsedS === 'object') summary = parsedS;
+    }
+  } catch(e) {}
+}
+if (!summary.game) { try { if (fs.existsSync('/files/temp/global_summary.json')) summary = JSON.parse(fs.readFileSync('/files/temp/global_summary.json', 'utf8')); } catch(e2) {} }
+const BANNED = /^(I CALLED TIME OUT|HE ACTUALLY FELL FOR IT|THAT DOES NOT COUNT|MY WORST BLUNDER|MUST WATCH MOMENT|VIRAL MOMENT|PLAYING THE GAME|PLAYING THE GAME WRONG|GAMEPLAY HIGHLIGHT CLIP|WATCH THIS CLIP|NO WORDS|NO AUDIO FOUND|NO TRANSCRIPT|UNDEFINED|NULL|ERROR)$/i;
+const BANNED_SUB = /\\b(NO WORDS|NO AUDIO FOUND|NO TRANSCRIPT|UNDEFINED|NULL|ERROR)\\b/i;
+const fallbackCap = (loopItem.hook_caption && !BANNED.test(String(loopItem.hook_caption).trim()) && !BANNED_SUB.test(String(loopItem.hook_caption)) && !/<[^>]+>/.test(String(loopItem.hook_caption))) ? String(loopItem.hook_caption).trim().toUpperCase() : title;
+let caption = fallbackCap;
+try {
+  let raw = (getNode('Context Merge Agent').output || getNode('Context Merge Fallback').output || getNode('Context Merge Mistral Fallback').output || '{}').replace(/\`\`\`json/gi,'').replace(/\`\`\`/g,'').trim();
+  const parsed = JSON.parse(raw).story_hook || '';
+  if (parsed && !BANNED.test(parsed.trim()) && !BANNED_SUB.test(parsed) && !/<[^>]+>/.test(parsed)) {
+    caption = parsed.trim().toUpperCase();
+  }
+} catch(e) {}
+let streamerHandle = String(loopItem.streamer_handle || rchNode.streamer_handle || '').trim().replace(/^@+/, '');
+if (!streamerHandle) {
+  const sf = String(loopItem.stream_file || editFields.stream_file || lctNode.stream_file || '').trim();
+  if (sf) {
+    try {
+      const stem = sf.replace(/(\\.processing)?\\.mp4$/i, '');
+      for (const ip of ['/files/inputs/' + stem + '.info.json', '/files/inputs/' + sf + '.info.json']) {
+        if (fs.existsSync(ip)) {
+          const info = JSON.parse(fs.readFileSync(ip, 'utf8'));
+          const rawH = String(info.uploader_id || info.channel || info.uploader || '').trim().replace(/^@+/, '');
+          if (rawH) { streamerHandle = rawH.replace(/\\s+/g, ''); break; }
+        }
+      }
+    } catch(e) {}
+    if (!streamerHandle) {
+      const prefM = sf.match(/^(?:\\d+_Top_)?@?([A-Za-z0-9_]+?)___/i);
+      if (prefM) streamerHandle = prefM[1];
+      else {
+        const atM = sf.match(/@([A-Za-z0-9_]+?)(?:___|$|\\.)/);
+        if (atM) streamerHandle = atM[1];
+      }
+    }
+  }
+}
+if (!streamerHandle) {
+  streamerHandle = String(lctNode.streamer_handle || lctNode.streamer_name || cfgNode.streamer_name || 'Streamer').trim().replace(/^@+/, '');
+}
+streamerHandle = streamerHandle.replace(/\\s+/g, '') || 'Streamer';
+const rawCredit = String(loopItem.creator_credit || rchNode.creator_credit || '').trim();
+const creatorCredit = rawCredit
+  ? (rawCredit.startsWith('\\uD83C\\uDFA5 @') ? rawCredit : ('\\uD83C\\uDFA5 @' + rawCredit.replace(/^\\uD83C\\uDFA5\\s*/, '').replace(/^@+/, '').replace(/\\s+/g, '')))
+  : ('\\uD83C\\uDFA5 @' + streamerHandle);
+const isSpoiler = Boolean(loopItem.is_story_spoiler || loopItem.narrative_archetype === 'STORY_CUTSCENE_OR_TWIST_REACTION');
+const spoilerPrefix = isSpoiler ? '\\u26A0\\uFE0F SPOILER \\u2014 ' : '';
+const valueNote = String(loopItem.visual_value_note || '').trim();
+const baitQ = String(loopItem.comment_bait_question || 'What would you have done here?').trim();
+const rawVs = loopItem.virality_score ?? loopItem.viral_score;
+const viralityScore = (rawVs !== undefined && rawVs !== null && rawVs !== '' && Number.isFinite(Number(rawVs))) ? Number(rawVs) : 8.5;
+const createdAtEpoch = Date.now();
+const createdAtIso = new Date(createdAtEpoch).toISOString();
+const gameName = String(summary.game || loopItem.game || '').trim() || 'Gaming';
+const globalSummary = String(summary.global_summary || '').trim();
+const narrativeArchetype = String(loopItem.narrative_archetype || 'CONTINUOUS_GAMEPLAY_CLUTCH_OR_FAIL').trim();
+const displayTitle = String(loopItem.title || title).trim();
+const gTag = gameName.replace(/[^A-Za-z0-9]/g, '');
+const isGta = /gta\\s*6|grand\\s*theft\\s*auto/i.test(gameName);
+const ytTags = isGta
+  ? '#GTA6 #GrandTheftAutoVI #ViceCity #Shorts #Gaming'
+  : ((gTag && gTag.toLowerCase() !== 'gaming') ? ('#' + gTag + ' #Gaming #Shorts #Viral') : '#Gaming #Shorts #Viral');
+const ttTags = isGta
+  ? '#gta6 #grandtheftautovi #vicecity #gaming #fyp'
+  : ((gTag && gTag.toLowerCase() !== 'gaming') ? ('#' + gTag.toLowerCase() + ' #gaming #fyp #viral') : '#gaming #fyp #viral');
+const igTags = isGta
+  ? '#GTA6 #ViceCity #GamingReels #RockstarGames'
+  : ((gTag && gTag.toLowerCase() !== 'gaming') ? ('#' + gTag + ' #GamingReels #Shorts') : '#GamingReels #Shorts #Gaming');
+const xTag = isGta ? '#GTA6' : ((gTag && gTag.toLowerCase() !== 'gaming') ? ('#' + gTag) : '#Gaming');
+const bodyCopy = spoilerPrefix + (valueNote ? (displayTitle + ' \\u2014 ' + valueNote) : displayTitle) + '\\n\\n' + baitQ + '\\n' + creatorCredit;
+const platformCopy = {
+  youtube_shorts: spoilerPrefix + displayTitle + ' | ' + caption + '\\n\\n' + baitQ + '\\n' + creatorCredit + '\\n' + ytTags,
+  tiktok: bodyCopy + '\\n\\n' + ttTags,
+  instagram_reels: bodyCopy + '\\n\\n' + igTags,
+  x_post: spoilerPrefix + caption + ' \\uD83D\\uDC80\\n\\n' + baitQ + '\\n' + creatorCredit + ' ' + xTag
+};
+const ytSuffix = ' \\uD83D\\uDE31\\uD83D\\uDC80 #Shorts';
+let ytHook = String(caption || displayTitle || 'GAMING MOMENT')
+  .replace(/[\\x00-\\x1F\\x7F<>]/g, ' ')
+  .replace(/\\s*#shorts\\b/gi, '')
+  .replace(/(?:\\s*(?:\\uD83D\\uDE31|\\uD83D\\uDC80))+$/g, '')
+  .replace(/\\s+/g, ' ')
+  .trim();
+if (!ytHook) ytHook = 'GAMING MOMENT';
+const maxHookLen = 95 - ytSuffix.length;
+if (ytHook.length > maxHookLen) {
+  let acc = '';
+  for (const ch of Array.from(ytHook)) {
+    if ((acc + ch).length > maxHookLen) break;
+    acc += ch;
+  }
+  ytHook = acc.trim() || 'GAMING MOMENT';
+}
+const youtubeTitle = ytHook + ytSuffix;
+const cleanDesc = (s) => String(s || '').replace(/[<>]/g, '').trim();
+const descNote = valueNote || (loopItem.theme ? String(loopItem.theme).trim() : '');
+const ytHookLine = spoilerPrefix + cleanDesc(caption) + (descNote ? (' \\u2014 ' + cleanDesc(descNote)) : '');
+const youtubeDescription = [
+  ytHookLine,
+  cleanDesc(baitQ),
+  cleanDesc(creatorCredit),
+  globalSummary ? cleanDesc(globalSummary) : '',
+  ytTags
+].filter(Boolean).join('\\n\\n');
+const meta = {
+  viral_caption: caption,
+  title: displayTitle,
+  virality_score: viralityScore,
+  created_at_iso: createdAtIso,
+  created_at_epoch: createdAtEpoch,
+  narrative_archetype: narrativeArchetype,
+  creator_credit: creatorCredit,
+  streamer_handle: streamerHandle,
+  is_story_spoiler: isSpoiler,
+  visual_value_note: valueNote,
+  comment_bait_question: baitQ,
+  game: gameName,
+  global_summary: globalSummary,
+  vibe: summary.vibe || '',
+  theme: loopItem.theme || '',
+  key_themes: summary.key_themes || [],
+  platform_copy: platformCopy,
+  youtube_title: youtubeTitle,
+  youtube_description: youtubeDescription
+};
+const jsonStr = JSON.stringify(meta, null, 2);
+return \`mkdir -p /files/outputs && cat <<'SIDECAR_EOF' > "\${sidecarFile}"
 \${jsonStr}
-SIDECAR_EOF\`; })() }}`,
+SIDECAR_EOF\`;
+})() }}`,
     };
 
     @node({
@@ -4978,9 +5126,9 @@ if (!indexDoc && fs.existsSync(idxPath)) {
 const txCandidates = [
   ...(sliceCfg && sliceCfg.transcript_path ? [sliceCfg.transcript_path] : []),
   '/files/temp/transcript.json',
-  '/files/outputs/whisper_28754.json',
+  '/files/temp/whisper_28754.json',
   '/files/temp/whisper_raw.json',
-  '/files/outputs/whisper_28696.json',
+  '/files/temp/whisper_28696.json',
 ];
 if (!whisperDoc) {
   for (const p of txCandidates) {
