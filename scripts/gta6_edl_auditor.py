@@ -31,7 +31,20 @@ VALID_GTA6_ARCHETYPES = {
 
 DANGLING_HOOK_END_RE = re.compile(
     r"\b(TO|A|AN|THE|OF|IN|ON|AT|FOR|WITH|FROM|BY|AND|OR|BUT|IF|IS|ARE|WAS|WERE|"
-    r"DO|DOES|DID|NOT|WANT|GOING|HAVE|HAS|MY|YOUR|OUR|THEIR|THIS|THAT|WE'RE|I'M|IT'S|I'VE|WE'VE|YOU'VE|THEY'VE|HE'S|SHE'S|DON'T|DIDN'T|WON'T|CAN'T)\s*[.!?]*$",
+    r"DO|DOES|DID|NOT|WANT|GOING|HAVE|HAS|MY|YOUR|OUR|THEIR|THIS|THAT|I|ME|HE|SHE|WE|THEY|"
+    r"WE'RE|I'M|IT'S|I'VE|WE'VE|YOU'VE|THEY'VE|HE'S|SHE'S|DON'T|DIDN'T|WON'T|CAN'T|"
+    r"LIKE|LOVE|HATE|NEED|KNOW|THINK|FEEL|SEE|SAW|LOOK|WATCH|GOT|GET|"
+    r"MAKE|MADE|TAKE|TOOK|GIVE|GAVE|PUT|SAY|SAID|TELL|TOLD|FIND|FOUND|LET|KEEP|TRY|TRIED|USE|USED)\s*[.!?]*$",
+    re.I,
+)
+
+CLICKBAIT_UNSPOKEN_RE = re.compile(
+    r"\b(GLITCH(?:ES)?|HACK(?:S|ED|ING)?|EXPLOIT(?:S|ED)?|MOD(?:S|DED)?|SECRET\s+CODE|INFINITE\s+MONEY|INFINITE|BANNED|CHEAT(?:S|ING)?)\b",
+    re.I,
+)
+
+WEAK_ENDING_FILLER_RE = re.compile(
+    r"^(?:ok(?:ay)?|alright|anyway|yeah|yep|yup|no|uh+|um+|let'?s\s+see|hold\s+on|wait|one\s+sec(?:ond)?|hmm+)[.!?,\s]*$",
     re.I,
 )
 
@@ -322,10 +335,10 @@ def score_clip(
         if hook != hook.upper():
             s4 -= 3.0
             flags.append("HOOK_NOT_ALL_CAPS")
-        if wc < 3 or wc > 6:
+        if wc < 3 or wc > 5:
             s4 -= 3.0
             flags.append("HOOK_WORD_COUNT_OFF")
-        if len(hook) > 32:
+        if len(hook) > 28:
             s4 -= 2.0
             flags.append("HOOK_TOO_LONG_CHARS")
         if re.match(r"^(BECAUSE|AND|SO|BUT|THEN|OR)\b", hook, re.I):
@@ -333,9 +346,9 @@ def score_clip(
             flags.append("HOOK_STARTS_WITH_FILLER")
             notes.append(f"Hook '{hook}' starts with weak continuation word")
         if DANGLING_HOOK_END_RE.search(hook):
-            s4 -= 5.0
-            flags.append("DANGLING_HOOK_END")
-            notes.append(f"Hook '{hook}' ends with dangling word")
+            s4 = 0.0
+            flags.append("DANGLING_HOOK_VERB")
+            notes.append(f"Hook '{hook}' ends with dangling transitive verb / function word")
         content_toks = [
             w for w in re.findall(r"[a-z0-9]{4,}", hook.lower())
             if w not in {"what", "when", "why", "this", "that", "wild", "crazy", "insane"}
@@ -393,12 +406,72 @@ def score_clip(
                 notes.append(f"Micro-gap {gap:.2f}s (<4s) should be 1 continuous segment")
     sub["structural_fit"] = max(0.0, round(s6_fit, 2))
 
-    # 7. Pacing, Duration (20s-45s) & Dead-Air Hygiene (10 pts)
+    # 7. Pacing, Long-Form Duration (34s-58s, reject <32s) & Dead-Air Hygiene (10 pts)
     s7 = 10.0
-    if tot_dur < 20.0 or tot_dur > 45.5:
+    extra_penalties = 0.0
+    if tot_dur < 32.0:
+        s7 = 0.0
+        extra_penalties += 25.0
+        flags.append("CLIP_TOO_SHORT_UNDER_32S")
+        notes.append(f"Duration {tot_dur:.2f}s < 32.0s hard floor (-25 pts)")
+    elif tot_dur > 58.0:
         s7 -= 5.0
-        flags.append("DURATION_OUT_OF_BOUNDS")
-        notes.append(f"Duration {tot_dur:.2f}s outside [20.0, 45.0]")
+        extra_penalties += 25.0
+        flags.append("DURATION_OVER_58S")
+        notes.append(f"Duration {tot_dur:.2f}s > 58.0s cap (-25 pts)")
+    elif tot_dur < 34.0:
+        s7 -= 3.0
+        flags.append("DURATION_UNDER_34S_TARGET")
+        notes.append(f"Duration {tot_dur:.2f}s slightly below 34.0s-55.0s target")
+
+    # Part 2.2: Transitive-verb hook or >28 chars / >5 words penalty (-15 pts)
+    if "DANGLING_HOOK_VERB" in flags or len(hook) > 28 or len(hook.split()) > 5:
+        extra_penalties += 15.0
+        if "DANGLING_HOOK_VERB" not in flags:
+            flags.append("DANGLING_HOOK_VERB")
+        notes.append(f"Hook '{hook}' violates <=28c/5w or transitive-verb ban (-15 pts)")
+
+    # Part 2.3: Hallucinated clickbait words absent from assembled_spoken_script (-15 pts)
+    title_hook_text = f"{clip.get('title') or ''} {hook}"
+    script_low = (script_text or "").lower()
+    cb_matches = [m.group(0) for m in CLICKBAIT_UNSPOKEN_RE.finditer(title_hook_text) if m.group(0).lower() not in script_low]
+    if cb_matches:
+        extra_penalties += 15.0
+        flags.append("HALLUCINATED_CLICKBAIT_TITLE")
+        notes.append(f"Title/hook uses unspoken clickbait {cb_matches} (-15 pts)")
+
+    # Part 2.4: Weak mumble / >2.0s trailing silence ending penalty (-20 pts)
+    if segs and words:
+        last_s = segs[-1]
+        ls0, ls1 = float(last_s.get("start", 0.0)), float(last_s.get("end", 0.0))
+        lsw = _words_in_window(words, w_starts, ls0, ls1)
+        trailing_sil = (ls1 - float(lsw[-1].get("end", ls1))) if lsw else (ls1 - ls0)
+        # Extract final 1-sentence tail string
+        last_txt_full = " ".join(str(w.get("word", "")).strip() for w in lsw[-8:]) if lsw else str(last_s.get("spoken_text") or "")
+        tail_sents = [x.strip() for x in re.split(r"(?<=[.!?])\s+", last_txt_full) if x.strip()]
+        final_sent = tail_sents[-1] if tail_sents else last_txt_full.strip()
+        if trailing_sil > 2.0 or WEAK_ENDING_FILLER_RE.match(final_sent):
+            extra_penalties += 20.0
+            flags.append("WEAK_MUMBLE_OR_SILENT_ENDING")
+            notes.append(f"Weak tail ('{final_sent}' / {trailing_sil:.2f}s trailing silence) (-20 pts)")
+
+    # Part 2.5: Sustained Multi-Beat Narrative Arc (>=2 beats & >=55 spoken words, -15 pts)
+    spoken_wc = len(re.findall(r"\S+", script_text or ""))
+    mb_cand = int(cand.get("multi_beat_count") or 0)
+    mb_tags = [t for t in tag_set if "MULTI_BEAT:" in t]
+    sent_beats = []
+    for s in sentences:
+        sst = float(s.get("start", 0.0))
+        if any(float(sg.get("start", 0)) - 0.5 <= sst <= float(sg.get("end", 0)) + 0.5 for sg in segs):
+            if any(k in tg for tg in (s.get("tags") or []) for k in ("dB_PEAK", "SCREAM", "WPM_SPIKE", "FACE:", "CHAT_BURST")):
+                if not sent_beats or (sst - sent_beats[-1]) >= 6.0:
+                    sent_beats.append(sst)
+    eff_beats = max(mb_cand, 2 if mb_tags else len(sent_beats))
+    if spoken_wc < 55 or eff_beats < 2:
+        extra_penalties += 15.0
+        flags.append("SINGLE_SPIKE_NO_STORY_ARC")
+        notes.append(f"Narrative arc too thin (words={spoken_wc}<55 or beats={eff_beats}<2) (-15 pts)")
+
     for idx_s, seg in enumerate(segs):
         st0 = float(seg.get("start", 0.0))
         en0 = float(seg.get("end", 0.0))
@@ -425,7 +498,7 @@ def score_clip(
                 for s in sentences
             ) or float(cand.get("z_face", 0.0)) >= 1.5
             if not saved:
-                s7 -= 5.0
+                s7 = max(0.0, s7 - 5.0)
                 flags.append("DEAD_AIR_OVER_5S")
                 notes.append(f"Seg {idx_s+1} has {max_sil:.2f}s silent dead air ({sil_span[0]:.1f}-{sil_span[1]:.1f})")
     sub["pacing_hygiene"] = max(0.0, round(s7, 2))
@@ -450,7 +523,7 @@ def score_clip(
         flags.append("GENERIC_TITLE_LEAK")
     sub["safety_and_ui_gate"] = max(0.0, round(s8, 2))
 
-    clip_score_95 = round(sum(sub.values()), 2)
+    clip_score_95 = max(0.0, round(sum(sub.values()) - extra_penalties, 2))
     return {
         "clip_number": clip.get("clip_number"),
         "title": clip.get("title"),

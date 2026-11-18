@@ -17,6 +17,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -28,10 +29,10 @@ GEMINI_KEY_FILES = [
 ]
 
 DEFAULT_MODELS = [
-    "gemini-3.5-flash",
-    "gemini-2.5-flash",
-    "gemini-3.8-flash",
     "gemini-3.1-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-3.5-flash",
+    "gemini-3.8-flash",
     "gemini-3.6-flash",
     "gemini-3.7-flash",
 ]
@@ -45,9 +46,24 @@ GTA6_ARCHETYPES = [
     "STORY_CUTSCENE_OR_TWIST_REACTION",
 ]
 
-DANGLING_HOOK_END_RE = re.compile(
-    r"\b(TO|A|AN|THE|OF|IN|ON|AT|FOR|WITH|FROM|BY|AND|OR|BUT|IF|IS|ARE|WAS|WERE|"
-    r"DO|DOES|DID|NOT|WANT|GOING|HAVE|HAS|MY|YOUR|OUR|THEIR|THIS|THAT|I|ME|HE|SHE|WE|THEY|LIKE|WE'RE|I'M|IT'S|I'VE|WE'VE|YOU'VE|THEY'VE|HE'S|SHE'S|DON'T|DIDN'T|WON'T|CAN'T)\s*$",
+# Part 1.3: Block ALL prepositions, articles, pronouns, auxiliaries, and transitive/perception verbs
+TRANSITIVE_OR_DANGLING_WORDS = (
+    "TO|A|AN|THE|OF|IN|ON|AT|FOR|WITH|FROM|BY|AND|OR|BUT|IF|IS|ARE|WAS|WERE|"
+    "DO|DOES|DID|NOT|GOING|HAVE|HAS|MY|YOUR|OUR|THEIR|THIS|THAT|I|ME|HE|SHE|WE|THEY|"
+    "WE'RE|I'M|IT'S|I'VE|WE'VE|YOU'VE|THEY'VE|HE'S|SHE'S|DON'T|DIDN'T|WON'T|CAN'T|"
+    "LIKE|LOVE|HATE|WANT|NEED|KNOW|THINK|FEEL|SEE|SAW|LOOK|WATCH|GOT|GET|"
+    "MAKE|MADE|TAKE|TOOK|GIVE|GAVE|PUT|SAY|SAID|TELL|TOLD|FIND|FOUND|LET|KEEP|TRY|TRIED|USE|USED"
+)
+
+DANGLING_HOOK_END_RE = re.compile(rf"\b({TRANSITIVE_OR_DANGLING_WORDS})\s*[.!?]*$", re.I)
+
+CLICKBAIT_FORBIDDEN_IF_UNSPOKEN_RE = re.compile(
+    r"\b(GLITCH(?:ES)?|HACK(?:S|ED|ING)?|EXPLOIT(?:S|ED)?|MOD(?:S|DED)?|SECRET\s+CODE|INFINITE\s+MONEY|INFINITE|BANNED|CHEAT(?:S|ING)?)\b",
+    re.I,
+)
+
+WEAK_TAIL_FILLER_RE = re.compile(
+    r"^(?:ok(?:ay)?|alright|anyway|yeah|yep|yup|no|uh+|um+|let'?s\s+see|hold\s+on|wait|one\s+sec(?:ond)?|hmm+)[.!?,\s]*$",
     re.I,
 )
 
@@ -163,12 +179,13 @@ def build_prompt_text(summary_doc: dict, candidates: list, meme_files: list, min
         "   - Nudity, strip clubs, sexually explicit M-rated scenes, or graphic TOS-violating gore.\n"
         "   - Chrome/Edge browsers, Twitch/YouTube chat dashboards, Discord, pause/ESC/settings menus, or static non-gameplay screens.\n"
         "   - Boring opening title cards or slow exposition cutscenes without massive streamer shock.\n"
-        f"2. SINGLE-SCENE CONTIGUITY & TARGET CLIP COUNT: Pick the BEST {min_clips} to {max_clips} distinct candidates.\n"
+        f"2. SINGLE-SCENE CONTIGUITY & LONG-FORM TARGET (34s-55s): Pick the BEST {min_clips} to {max_clips} distinct candidates.\n"
         "   Each clip MUST stay strictly inside ONE candidate's [window_start, window_end]. NEVER stitch minutes apart!\n"
-        "   Prefer 1 continuous segment `[start_time, end_time]` (22s-44s). Split into 2 segments ONLY inside that same\n"
-        "   window to drop a >4.0s dead silent driving/walking pause gap.\n"
-        "3. BOUNDARY INTEGRITY: Snap start and end to natural Whisper sentence/reaction boundaries, keeping 2.0s-4.5s aftermath after payoff.\n"
-        "4. GTA 6 LAUNCH ARCHETYPES (Pick distinct archetypes across clips):\n"
+        "   Target 34.0s to 55.0s total duration (sweet spot 38s-50s) with >= 2 story beats (Setup/Escalation -> Payoff).\n"
+        "   Split into 2 segments inside that same candidate window ONLY to drop a >4.0s dead silent driving/walking pause.\n"
+        "3. BOUNDARY INTEGRITY & ANTI-MUMBLE ENDINGS: Snap start and end cleanly to terminal sentences, keeping 2.5s-4.5s\n"
+        "   aftermath after payoff. NEVER end on weak filler ('Okay.', 'Alright.', 'Anyway.') or trailing silence > 1.8s.\n"
+        "4. GTA 6 LAUNCH ARCHETYPES (Pick distinct archetypes across clips — NEVER repeat the same archetype twice when 3+ clips!):\n"
         "   - `OPEN_WORLD_CHAOS_OR_COP_CHASE`: 6-star chases, stunts, crashes, gator attacks, explosions.\n"
         "   - `LEONIDA_NPC_ENCOUNTER_OR_ROAST`: crazy Florida/Leonida NPC behavior (`[NPC_OR_OTHER_VOICE]`) or roast.\n"
         "   - `HOW_TO_TIP_OR_SECRET_DISCOVERY`: hidden location/trick/weapon/myth test (prioritize if `[CHAT_QUESTION_CLUSTER]` present).\n"
@@ -176,8 +193,9 @@ def build_prompt_text(summary_doc: dict, candidates: list, meme_files: list, min
         "   - `COMEDIC_BANTER_OR_SARCASM`: storytelling or voice-chat punchline.\n"
         "   - `STORY_CUTSCENE_OR_TWIST_REACTION`: Lucia & Jason twist + explosive shock (MUST set `is_story_spoiler: true` and NEVER spoil in `hook_caption`!).\n"
         "5. COMPLETE METADATA IN ONE PASS (No downstream merge agent exists!):\n"
-        "   - `title`: Catchy 3-7 word YouTube Short title specifically describing THIS clip's action/joke (NEVER use generic titles like 'GTA6_Peak_Clip_1' or 'Gaming Clip').\n"
-        "   - `hook_caption`: 3-5 WORDS ALL CAPS (<=28 chars), COMPLETE thought with zero dangling endings (never end on TO/THE/A/IN/ON/I/LIKE), grounded in the 3x3 grid + speech!\n"
+        "   - `title`: Catchy 3-7 word YouTube Short title specifically describing THIS clip's action/joke. NEVER use fake clickbait words\n"
+        "     like 'Glitch', 'Hack', 'Exploit', 'Mod', 'Secret Code', 'Infinite Money', or 'Banned' unless actually spoken in transcript!\n"
+        "   - `hook_caption`: Punchy 3-5 WORDS ALL CAPS headline (<=28 chars) summarizing the visual stakes/event, NEVER slicing a raw clause mid-sentence or ending on a transitive verb (LIKE/WANT/SEE/KNOW/GOT/TO/THE/IN)!\n"
         "   - `short_description`: 2-3 engaging sentences written specifically for THIS Short describing what happens visually in THIS scene and what the streamer/NPCs say (do NOT summarize unrelated parts of the stream!).\n"
         "   - `visual_value_note`: short 1-line transformative tip or 'Watch for...' callout specific to this clip.\n"
         "   - `comment_bait_question`: fun specific question for comments directly about THIS clip (never generic).\n"
@@ -238,12 +256,12 @@ def _interleave_vision_parts(summary_doc: dict, candidates: list, meme_files: li
         "   - Nudity, strip clubs, sexually explicit M-rated scenes, or graphic TOS-violating gore.\n"
         "   - Chrome/Edge browsers, Twitch/YouTube chat dashboards, Discord, pause/ESC/settings menus, or static non-gameplay screens.\n"
         "   - Boring opening title cards or slow exposition cutscenes without massive streamer shock.\n"
-        f"2. SINGLE-SCENE CONTIGUITY & TARGET CLIP COUNT: Pick the BEST {min_clips} to {max_clips} distinct candidates.\n"
+        f"2. SINGLE-SCENE CONTIGUITY & LONG-FORM TARGET (34s-55s): Pick the BEST {min_clips} to {max_clips} distinct candidates.\n"
         "   Each clip MUST stay strictly inside ONE candidate's [window_start, window_end]. NEVER stitch minutes apart!\n"
-        "   Prefer 1 continuous segment `[start_time, end_time]` (22s-44s). Split into 2 segments ONLY inside that same\n"
-        "   window to drop a >4.0s dead silent driving/walking pause gap.\n"
-        "3. BOUNDARY INTEGRITY: Snap start and end to natural Whisper sentence/reaction boundaries, keeping 2.0s-4.5s aftermath after payoff.\n"
-        "4. GTA 6 LAUNCH ARCHETYPES (Pick distinct archetypes across clips):\n"
+        "   Target 34.0s to 55.0s total duration (sweet spot 38s-50s) with >= 2 story beats (Setup/Escalation -> Payoff).\n"
+        "   Split into 2 segments ONLY inside that same window to drop a >4.0s dead silent pause gap.\n"
+        "3. BOUNDARY INTEGRITY & ANTI-MUMBLE ENDINGS: Snap start and end to natural Whisper sentence/reaction boundaries, keeping 2.5s-4.5s aftermath.\n"
+        "4. GTA 6 LAUNCH ARCHETYPES (Pick distinct archetypes — NEVER repeat twice when 3+ clips!):\n"
         "   - `OPEN_WORLD_CHAOS_OR_COP_CHASE`: 6-star chases, stunts, crashes, gator attacks, explosions.\n"
         "   - `LEONIDA_NPC_ENCOUNTER_OR_ROAST`: crazy Florida/Leonida NPC behavior (`[NPC_OR_OTHER_VOICE]`) or roast.\n"
         "   - `HOW_TO_TIP_OR_SECRET_DISCOVERY`: hidden location/trick/weapon/myth test (prioritize if `[CHAT_QUESTION_CLUSTER]` present).\n"
@@ -251,8 +269,8 @@ def _interleave_vision_parts(summary_doc: dict, candidates: list, meme_files: li
         "   - `COMEDIC_BANTER_OR_SARCASM`: storytelling or voice-chat punchline.\n"
         "   - `STORY_CUTSCENE_OR_TWIST_REACTION`: Lucia & Jason twist + explosive shock (MUST set `is_story_spoiler: true` and NEVER spoil in `hook_caption`!).\n"
         "5. COMPLETE METADATA IN ONE PASS (No downstream merge agent exists!):\n"
-        "   - `title`: Catchy 3-7 word YouTube Short title specifically describing THIS clip (NEVER 'GTA6_Peak_Clip_1').\n"
-        "   - `hook_caption`: 3-5 WORDS ALL CAPS (<=28 chars), COMPLETE thought with zero dangling endings (never end on TO/THE/A/IN/ON/I/LIKE), grounded in the 3x3 grid + speech!\n"
+        "   - `title`: Catchy 3-7 word YouTube Short title specifically describing THIS clip (NEVER 'GTA6_Peak_Clip_1'; NEVER say 'Glitch'/'Hack'/'Exploit'/'Mod'/'Banned' unless spoken verbatim!).\n"
+        "   - `hook_caption`: Punchy 3-5 WORDS ALL CAPS headline (<=28 chars), COMPLETE thought with zero transitive verb or dangling endings (never end on LIKE/WANT/KNOW/SEE/GOT/TO/THE/IN)!\n"
         "   - `short_description`: 2-3 engaging sentences written specifically for THIS Short describing what happens in THIS clip and why it's viral.\n"
         "   - `visual_value_note`: short 1-line transformative tip or 'Watch for...' callout for this clip.\n"
         "   - `comment_bait_question`: fun question directly referencing THIS clip.\n"
@@ -416,28 +434,48 @@ def call_gemini_vision(parts_or_prompt, candidates: list, api_keys: list, models
     }).encode("utf-8")
 
     last_err = None
-    for model in models:
-        for key in api_keys:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
-            req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-            try:
-                with urllib.request.urlopen(req, timeout=60) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
-                txt = data["candidates"][0]["content"]["parts"][0]["text"]
-                return txt, {"provider": "gemini_vision", "model": model, "grids_attached": attached}
-            except urllib.error.HTTPError as he:
-                last_err = f"HTTP {he.code} ({model})"
-                if he.code in (429, 500, 502, 503, 504):
+    saw_rate_limit = False
+    for attempt in range(2):
+        if attempt > 0:
+            if not saw_rate_limit:
+                break
+            time.sleep(15.0)
+        for model in models:
+            for key in api_keys:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
+                req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+                try:
+                    with urllib.request.urlopen(req, timeout=60) as resp:
+                        data = json.loads(resp.read().decode("utf-8"))
+                    txt = data["candidates"][0]["content"]["parts"][0]["text"]
+                    return txt, {"provider": "gemini_vision", "model": model, "grids_attached": attached}
+                except urllib.error.HTTPError as e:
+                    if e.code in (429, 503):
+                        saw_rate_limit = True
+                    last_err = f"{model}: HTTP {e.code}"
                     continue
-            except Exception as ex:
-                last_err = f"{type(ex).__name__}: {ex}"
-                continue
-    return None, {"provider": "none", "error": last_err or "no_keys", "grids_attached": attached}
+                except Exception as ex:
+                    last_err = f"{model}: {ex}"
+                    continue
+    return None, {"provider": "none", "error": last_err or "no_api_response", "grids_attached": attached}
+
+
+def _strip_unspoken_clickbait(text: str, transcript_text: str) -> str:
+    """Part 1.4: Remove GLITCH/HACK/EXPLOIT/MOD/BANNED/INFINITE unless spoken verbatim in transcript."""
+    t_low = str(transcript_text or "").lower()
+
+    def _rep(m):
+        tok = m.group(0).lower()
+        return m.group(0) if tok in t_low else ""
+
+    cleaned = CLICKBAIT_FORBIDDEN_IF_UNSPOKEN_RE.sub(_rep, str(text or ""))
+    return re.sub(r"\s+", " ", cleaned).strip()
 
 
 def _guard_and_format_hook(raw_hook: str, raw_text: str, title: str) -> str:
-    """Fix 1.4: 3-6 words (<=28-32 chars), semantic homophone cleanup, and zero dangling function endings."""
-    clean = re.sub(r"[^A-Za-z0-9'\s!?-]", " ", str(raw_hook or "")).upper()
+    """Part 1.3: Punchy 3-5 word headline (<=28 chars), zero dangling transitive verbs/auxiliaries, zero ungrounded clickbait."""
+    de_baited = _strip_unspoken_clickbait(str(raw_hook or ""), raw_text)
+    clean = re.sub(r"[^A-Za-z0-9'\s!?-]", " ", de_baited).upper()
     clean = re.sub(r"[-]+", " ", clean)
     clean = re.sub(r"\s+", " ", clean).strip()
     ctx = f"{title} {raw_text}".lower()
@@ -450,35 +488,62 @@ def _guard_and_format_hook(raw_hook: str, raw_text: str, title: str) -> str:
         words.pop(0)
     if re.match(r"^(PEAK MOMENT|CLIP)\b", " ".join(words)):
         words = []
-    if len(words) > 6:
-        words = words[:6]
+    if len(words) > 5:
+        words = words[:5]
     while words and len(" ".join(words)) > 28 and len(words) > 3:
         words.pop()
     while words and DANGLING_HOOK_END_RE.match(words[-1]) and len(words) > 3:
         words.pop()
-    while words and len(" ".join(words)) > 32 and len(words) > 1:
+    while words and len(" ".join(words)) > 28 and len(words) > 1:
         words.pop()
-    if not words or len(words) < 3 or len(" ".join(words)) > 32 or DANGLING_HOOK_END_RE.match(words[-1]):
-        return _safe_hook_from_text(raw_text, title)
+    if (
+        not words
+        or len(words) < 3
+        or len(words) > 5
+        or len(" ".join(words)) > 28
+        or DANGLING_HOOK_END_RE.match(words[-1])
+    ):
+        return _safe_hook_from_text(raw_text, _strip_unspoken_clickbait(title, raw_text))
     return " ".join(words)
 
 
 def _safe_hook_from_text(text: str, title: str) -> str:
-    clean_words = re.findall(r"[A-Za-z0-9']+", str(text or ""))
-    stop = {"AND", "THE", "THIS", "THAT", "WITH", "JUST", "LIKE", "YEAH", "OKAY", "UH", "UM", "IF", "OR", "TO", "OF", "IN", "ON", "A", "AN", "FOR", "AT", "BECAUSE", "SO", "BUT"}
-    kept = [w.upper() for w in clean_words if w.upper() not in stop and len(w) <= 12][:5]
+    """Synthesize a clean 3-5 word (<=28 char) grounded headline without mid-clause truncation or dangling verbs."""
+    t_clean = _strip_unspoken_clickbait(title, text)
+    # Try clean title words first if headline-like (not generic)
+    t_words = [
+        w.upper() for w in re.findall(r"[A-Za-z0-9']+", str(t_clean or ""))
+        if not re.match(r"^(PEAK|CLIP|MOMENT|GAMING)$", w, re.I)
+    ][:5]
+    while t_words and DANGLING_HOOK_END_RE.match(t_words[-1]) and len(t_words) > 3:
+        t_words.pop()
+    while t_words and len(" ".join(t_words)) > 28 and len(t_words) > 3:
+        t_words.pop()
+    if 3 <= len(t_words) <= 5 and len(" ".join(t_words)) <= 28 and not DANGLING_HOOK_END_RE.match(t_words[-1]):
+        return " ".join(t_words)
+
+    clean_words = re.findall(r"[A-Za-z0-9']+", _strip_unspoken_clickbait(text, text))
+    stop = {
+        "AND", "THE", "THIS", "THAT", "WITH", "JUST", "LIKE", "YEAH", "OKAY", "UH", "UM",
+        "IF", "OR", "TO", "OF", "IN", "ON", "A", "AN", "FOR", "AT", "BECAUSE", "SO", "BUT",
+        "IT", "ITS", "IT'S", "IS", "ARE", "WAS", "WERE", "BE", "BEEN", "I", "IM", "I'M", "YOU", "WE", "THEY", "HE", "SHE", "MY", "YOUR",
+    }
+    kept = []
+    for w in clean_words:
+        wu = w.upper()
+        if wu in stop or len(wu) > 10:
+            continue
+        if wu not in kept:
+            kept.append(wu)
+        if len(kept) >= 5:
+            break
     while kept and DANGLING_HOOK_END_RE.match(kept[-1]) and len(kept) > 3:
         kept.pop()
-    while kept and len(" ".join(kept)) > 30 and len(kept) > 3:
+    while kept and len(" ".join(kept)) > 28 and len(kept) > 3:
         kept.pop()
-    while kept and len(" ".join(kept)) > 32 and len(kept) > 1:
-        kept.pop()
-    if len(kept) >= 3 and len(" ".join(kept)) <= 32 and not DANGLING_HOOK_END_RE.match(kept[-1]):
+    if 3 <= len(kept) <= 5 and len(" ".join(kept)) <= 28 and not DANGLING_HOOK_END_RE.match(kept[-1]):
         return " ".join(kept)
-    t_words = [w.upper() for w in re.findall(r"[A-Za-z0-9']+", str(title or "")) if len(w) <= 12][:5]
-    while t_words and (DANGLING_HOOK_END_RE.match(t_words[-1]) or len(" ".join(t_words)) > 32) and len(t_words) > 3:
-        t_words.pop()
-    return " ".join(t_words)[:32] if (len(t_words) >= 3 and len(" ".join(t_words)) <= 32) else "WILD STREAMER REACTION MOMENT"
+    return "LIVE STREAM CHAOS REACTION"
 
 
 def _strip_speaker_prefix(line: str) -> str:
@@ -554,7 +619,7 @@ def _words_text(words: list, t0: float, t1: float) -> str:
 
 
 def _trim_leading_dead_air(st: float, en: float, words: list, payoff_t: float) -> tuple[float, float]:
-    """Advance clip start past >4.2s internal silent gaps when sufficient spoken duration remains before payoff."""
+    """Advance clip start past >4.2s internal silent gaps only when >=34.0s duration remains before payoff."""
     if not words:
         return st, en
     seg_ws = [w for w in words if float(w.get("end", 0.0)) >= st and float(w.get("start", 0.0)) <= en]
@@ -564,10 +629,10 @@ def _trim_leading_dead_air(st: float, en: float, words: list, payoff_t: float) -
         g = float(seg_ws[i + 1].get("start", 0.0)) - float(seg_ws[i].get("end", 0.0))
         if g > 4.2:
             after_start = float(seg_ws[i + 1].get("start", st)) - 0.10
-            if (en - after_start) >= 21.0 and after_start <= payoff_t - 6.0:
+            if (en - after_start) >= 34.0 and after_start <= payoff_t - 10.0:
                 return round(after_start, 2), en
             before_end = float(seg_ws[i].get("end", en)) + 0.15
-            if (before_end - st) >= 21.0 and payoff_t <= before_end + 1.0:
+            if (before_end - st) >= 34.0 and payoff_t <= before_end + 1.0:
                 return st, round(before_end, 2)
     return st, en
 
@@ -582,9 +647,9 @@ def _snap_boundary_with_words(
     hi_bound: float,
 ) -> tuple[float, float, str, str, str]:
     """
-    Snap [st, en] cleanly to Whisper word/sentence boundaries:
+    Part 1.1 & 1.5: Snap [st, en] cleanly to Whisper word/sentence boundaries targeting 34.0s-55.0s:
     - Start on terminal punctuation [.!?] or pause >= 0.42s without leading filler/ellipsis.
-    - End on terminal punctuation [.!?] or pause >= 0.42s preserving 2.0s-4.5s aftermath past payoff_t.
+    - End on terminal punctuation [.!?] preserving 2.5s-4.5s aftermath, <= 1.8s trailing silence, zero weak mumble tails.
     """
     if not words:
         return round(st, 2), round(en, 2), "", "", ""
@@ -593,64 +658,97 @@ def _snap_boundary_with_words(
     max_end = float(words[-1].get("end", hi_bound))
     lo = max(3.0, lo_bound - 4.0)
     hi = min(max_end, hi_bound + 6.0)
+    if words:
+        first_win_w = next((w for w in words if float(w.get("end", 0.0)) >= lo), None)
+        last_win_w = next((w for w in reversed(words) if float(w.get("start", 0.0)) <= hi), None)
+        if first_win_w and float(first_win_w.get("start", lo)) - lo > 2.5:
+            lo = max(lo, float(first_win_w["start"]) - 0.15)
+        if last_win_w and hi - float(last_win_w.get("end", hi)) > 2.5:
+            hi = min(hi, float(last_win_w["end"]) + 0.45)
+        st = max(lo, st)
 
-    # 1. Find clean start candidate near `st` (search wider window [lo, st+10] to avoid mid-sentence or ellipsis starts)
+    # Target ~42s start lead if window currently <36s
+    if payoff_t > 0.0 and (en - st) < 36.0:
+        st = max(lo, min(st, payoff_t - 40.0))
+
+    # 1. Find clean start candidate near `st`
     clean_starts = []
-    idx0 = max(0, bisect_left(w_starts, max(lo, st - 8.0)))
+    idx0 = max(0, bisect_left(w_starts, max(lo, st - 10.0)))
     for i in range(idx0, len(words)):
         ws = float(words[i].get("start", 0.0))
-        if ws > st + 10.5:
+        if ws > st + 12.0:
             break
+        if ws < lo - 0.1:
+            continue
         tok = str(words[i].get("word", "")).strip()
         if "..." in tok or "…" in tok:
             continue
         if i == 0:
-            clean_starts.append((abs(ws - st), ws))
+            clean_starts.append((abs(ws - st), max(lo, ws)))
             continue
         prev_tok = str(words[i - 1].get("word", "")).strip()
         prev_end = float(words[i - 1].get("end", ws))
         gap = max(0.0, ws - prev_end)
         ends_term = bool(re.search(r"(?<!\.)[.!?][\"'\)]*$", prev_tok)) and ("..." not in prev_tok and "…" not in prev_tok)
         if (ends_term or gap >= 0.42) and not FILLER_OPENERS_RE.match(tok) and not tok.startswith("..."):
-            # Also ensure next 4 words don't contain an orphan ellipsis break (`...`)
             lookahead = " ".join(str(words[k].get("word", "")).strip() for k in range(i, min(len(words), i + 5)))
             ell_pen = 50.0 if ("..." in lookahead or "…" in lookahead) else 0.0
-            if (max(en, st + 28.0) - ws) >= 20.0:
-                clean_starts.append((abs(ws - st) + (0.0 if ends_term else 2.5) + ell_pen, max(3.0, ws - 0.08)))
+            span_ok = (hi - ws) >= 34.0 or ws <= lo + 3.0
+            if span_ok:
+                clean_starts.append((abs(ws - st) + (0.0 if ends_term else 2.5) + ell_pen, max(lo, max(3.0, ws - 0.08))))
     if clean_starts:
         clean_starts.sort(key=lambda x: x[0])
         st = round(clean_starts[0][1], 2)
 
-    # 2. Ensure payoff aftermath (target 2.2s - 4.5s after payoff_t) and clean terminal ending
-    min_target_end = max(st + 22.0, payoff_t + 2.2 if payoff_t > st else st + 22.0)
-    min_target_end = min(hi, min_target_end, st + 43.0)
-    max_target_end = min(hi, st + 44.5)
+    # 2. Ensure payoff aftermath (target 2.5s - 4.5s after payoff_t), duration 34.0s-55.0s, and strong terminal sentence
+    min_dur_end = st + 34.5
+    pref_end = max(min_dur_end, (payoff_t + 3.5) if payoff_t > st else (st + 44.0))
+    max_target_end = min(hi, st + 54.5)
+    min_target_end = min(max_target_end, min_dur_end)
 
     clean_ends = []
-    idx_e = max(0, bisect_left(w_starts, st + 16.0))
+    idx_e = max(0, bisect_left(w_starts, st + 28.0))
     for i in range(idx_e, len(words)):
         we = float(words[i].get("end", words[i].get("start", 0.0)))
         if we > max_target_end:
             break
-        if we < st + 20.5:
+        if we < st + 32.5 and max_target_end >= st + 34.0:
             continue
         tok = str(words[i].get("word", "")).strip()
+        # Look back up to 3 words to avoid ending on a weak 1-3 word filler sentence like "Okay." / "Alright."
+        sent_tail_words = []
+        for k in range(i, max(-1, i - 4), -1):
+            w_k = str(words[k].get("word", "")).strip()
+            if k < i and re.search(r"[.!?]$", w_k):
+                break
+            sent_tail_words.insert(0, w_k)
+        tail_phrase = " ".join(sent_tail_words).strip()
+        is_weak_mumble = bool(WEAK_TAIL_FILLER_RE.match(tail_phrase))
         next_start = float(words[i + 1].get("start", we + 4.0)) if i + 1 < len(words) else (we + 4.0)
         gap_after = max(0.0, next_start - we)
         ends_term = bool(re.search(r"(?<!\.)[.!?][\"'\)]*$", tok)) and ("..." not in tok and "…" not in tok)
-        dangling_end = bool(re.search(r"(?:--|—|,|:|\.\.\.|…|\b(?:and|but|so|or|to|the|a|an|if|that|with|for|of|in|on|at|like))$", tok, re.I))
+        dangling_end = bool(re.search(r"(?:--|—|,|:|\.\.\.|…|\b(?:and|but|so|or|to|the|a|an|if|that|with|for|of|in|on|at|like|want|know|see))$", tok, re.I))
         if (ends_term or gap_after >= 0.42) and not dangling_end:
-            pref = max(min_target_end, min(max_target_end, payoff_t + 3.2 if payoff_t > st else en))
-            pen = (0.0 if ends_term else 3.0) + (8.0 if (payoff_t > st and we < payoff_t + 1.9 and we < max_end - 2.0) else 0.0)
-            clean_ends.append((abs(we - pref) + pen, min(max_end, we + 0.12)))
+            pen = (0.0 if ends_term else 3.0) + (18.0 if is_weak_mumble else 0.0) + (8.0 if (payoff_t > st and we < payoff_t + 2.2 and we < max_end - 2.0) else 0.0)
+            clean_ends.append((abs(we - min(max_target_end, pref_end)) + pen, min(hi, we + 0.35)))
     if clean_ends:
         clean_ends.sort(key=lambda x: x[0])
         en = round(clean_ends[0][1], 2)
     else:
         en = round(min(max_target_end, max(min_target_end, en)), 2)
 
-    if en - st < 20.0:
-        en = round(min(max_end, st + 24.0), 2)
+    # Trim trailing dead air > 1.8s past last spoken word unconditionally (never pad silent tail)
+    tail_ws = [w for w in words if st <= float(w.get("end", 0.0)) <= en]
+    if tail_ws:
+        last_w_end = float(tail_ws[-1].get("end", en))
+        if en - last_w_end > 1.8:
+            en = round(last_w_end + 0.45, 2)
+
+    if en - st < 34.0 and st - lo > 1.0:
+        need = 34.5 - (en - st)
+        new_st_cand = max(lo, st - need)
+        if new_st_cand < st - 0.5:
+            st = round(new_st_cand, 2)
 
     pre_words = [
         str(w.get("word", "")).strip()
@@ -740,13 +838,15 @@ def deterministic_candidate_fallback(
     clips = []
     for idx, c in enumerate(candidates[:max_clips], start=1):
         w0 = float(c.get("window_start", 10.0))
-        w1 = float(c.get("window_end", w0 + 36.0))
+        w1 = float(c.get("window_end", w0 + 85.0))
         tp = float(c.get("peak_time", (w0 + w1) * 0.5))
-        # Clamp cleanly to 24-38s contiguous arc before/after peak, snapped to Whisper sentences
-        st = max(w0, round(tp - 26.0, 2))
+        # Part 1.1: Target 34.0s-55.0s long-form Shorts arc (sweet spot 38s-50s) centered before payoff
+        st = max(w0, round(tp - 38.0, 2))
         en = min(w1, round(tp + 4.0, 2))
-        if en - st < 24.0:
-            st = max(w0, round(en - 28.0, 2))
+        if en - st < 38.0:
+            st = max(w0, round(en - 44.0, 2))
+            if en - st < 34.0:
+                en = min(w1, round(st + 42.0, 2))
         spoken_seg, pre_ctx, post_ctx = c.get("raw_text") or "", "", ""
         if w_list:
             st, en, spoken_seg, pre_ctx, post_ctx = _snap_boundary_with_words(st, en, w_list, w_starts, tp, w0, w1)
@@ -766,11 +866,11 @@ def deterministic_candidate_fallback(
         climax_q = ""
         for ln in reversed(lines):
             stripped = _strip_speaker_prefix(ln)
-            if stripped and len(stripped.split()) >= 3:
+            if stripped and len(stripped.split()) >= 3 and not WEAK_TAIL_FILLER_RE.match(stripped):
                 climax_q = stripped[:70]
                 break
-        hook = _guard_and_format_hook(climax_q or raw_txt, raw_txt, f"PEAK MOMENT {idx}")
-        smart_title = _smart_clip_title(hook, raw_txt, climax_q, arch, idx)
+        smart_title = _strip_unspoken_clickbait(_smart_clip_title("", raw_txt, climax_q, arch, idx), raw_txt) or f"Crazy Leonida Moment {idx}"
+        hook = _guard_and_format_hook(smart_title, raw_txt, smart_title)
         clean_segs = [{
             "start": round(st, 2),
             "end": round(en, 2),
@@ -885,21 +985,58 @@ def normalize_director_clips(
             clean_segs[0]["start"], clean_segs[0]["end"] = ns0, ns1
             clean_segs[0]["spoken_text"] = sp_txt or (cand or {}).get("raw_text", "")
         else:
-            for cs in clean_segs:
-                cs["spoken_text"] = _words_text(w_list, cs["start"], cs["end"]) if w_list else ""
+            if len(clean_segs) == 2 and (clean_segs[1]["start"] - clean_segs[0]["end"]) < 4.0:
+                clean_segs = [{
+                    "start": clean_segs[0]["start"],
+                    "end": max(clean_segs[0]["end"], clean_segs[1]["end"]),
+                    "role": "CONTINUOUS_ARC",
+                }]
+            if w_list and len(clean_segs) == 1:
+                ns0, ns1, sp_txt, pre_ctx, post_ctx = _snap_boundary_with_words(
+                    clean_segs[0]["start"], clean_segs[0]["end"], w_list, w_starts, payoff_t, w0, w1
+                )
+                clean_segs[0]["start"], clean_segs[0]["end"] = ns0, ns1
+                clean_segs[0]["spoken_text"] = sp_txt or (cand or {}).get("raw_text", "")
+            else:
+                if w_list and len(clean_segs) == 2:
+                    s0_a, _, _, pre_ctx, _ = _snap_boundary_with_words(
+                        clean_segs[0]["start"], clean_segs[0]["end"], w_list, w_starts, clean_segs[0]["end"], w0, clean_segs[0]["end"]
+                    )
+                    _, s1_b, _, _, post_ctx = _snap_boundary_with_words(
+                        clean_segs[1]["start"], clean_segs[1]["end"], w_list, w_starts, payoff_t, clean_segs[1]["start"], w1
+                    )
+                    if clean_segs[0]["end"] - s0_a >= 6.0:
+                        clean_segs[0]["start"] = s0_a
+                    if s1_b - clean_segs[1]["start"] >= 6.0:
+                        clean_segs[1]["end"] = s1_b
+                for cs in clean_segs:
+                    cs["spoken_text"] = _words_text(w_list, cs["start"], cs["end"]) if w_list else ""
 
         total_dur = sum(s["end"] - s["start"] for s in clean_segs)
-        if total_dur < 22.0 and cand:
-            clean_segs[-1]["end"] = round(min(w1 + 4.0, clean_segs[-1]["end"] + (24.0 - total_dur)), 2)
+        if total_dur < 34.0 and cand:
+            word_min = float(w_list[0].get("start", w0)) if w_list else max(3.0, w0 - 6.0)
+            word_max = float(w_list[-1].get("end", w1)) + 0.45 if w_list else (w1 + 6.0)
+            need = 36.0 - total_dur
+            new_st = max(max(3.0, word_min, w0 - 6.0), clean_segs[0]["start"] - need * 0.7)
+            rem = max(0.0, need - (clean_segs[0]["start"] - new_st))
+            clean_segs[0]["start"] = round(new_st, 2)
+            if rem > 0.2:
+                clean_segs[-1]["end"] = round(min(word_max, w1 + 6.0, clean_segs[-1]["end"] + rem), 2)
+            for cs in clean_segs:
+                cs["spoken_text"] = _words_text(w_list, cs["start"], cs["end"]) if w_list else cs.get("spoken_text", "")
 
         for cs in clean_segs:
             cs["duration"] = round(cs["end"] - cs["start"], 2)
             cs["signal_tags_in_window"] = list((cand or {}).get("signal_tags") or [])
 
+        arch_val = str(cl.get("narrative_archetype") or "OPEN_WORLD_CHAOS_OR_COP_CHASE")
         assembled = " ".join(cs.get("spoken_text") or "" for cs in clean_segs).strip() or (cand or {}).get("raw_text", "")
-        hook = _guard_and_format_hook(str(cl.get("hook_caption") or ""), assembled, cl.get("title", f"CLIP {idx}"))
+        raw_title = _strip_unspoken_clickbait(str(cl.get("title") or "").strip(), assembled)
+        if not raw_title or re.match(r"^(?:GTA6_Peak_Clip_\d+|GTA6_Clip_\d+|clip|output_clip)$", raw_title, re.I):
+            raw_title = _strip_unspoken_clickbait(_smart_clip_title(str(cl.get("hook_caption") or ""), assembled, str(cl.get("climax_quote") or ""), arch_val, idx), assembled)
+        hook = _guard_and_format_hook(str(cl.get("hook_caption") or ""), assembled, raw_title or f"CLIP {idx}")
         if bool(BANNED_HOOK_RE.match(hook)):
-            hook = _safe_hook_from_text(assembled, cl.get("title", f"CLIP {idx}"))
+            hook = _safe_hook_from_text(assembled, raw_title or f"CLIP {idx}")
 
         memes_out = []
         for m in (cl.get("memes") or []):
@@ -916,7 +1053,6 @@ def normalize_director_clips(
         if not memes_out:
             memes_out = [{"timestamp": _map_meme_timestamp(payoff_t, clean_segs, cand or {}, payoff_t), "file": default_sfx, "volume": 0.30}]
 
-        arch_val = str(cl.get("narrative_archetype") or "OPEN_WORLD_CHAOS_OR_COP_CHASE")
         used_arches = {vc["narrative_archetype"] for vc in valid_clips}
         if len(raw_clips) >= 3 and arch_val in used_arches and len(used_arches) < 3:
             lines_c = (cand or {}).get("transcript_lines") or []
@@ -937,9 +1073,7 @@ def normalize_director_clips(
         if len(cause_setup) < 20:
             cause_setup = f"Setup in window [{w0:.1f}s-{w1:.1f}s] builds into live reaction payoff."
 
-        raw_title = str(cl.get("title") or "").strip()
-        if not raw_title or re.match(r"^(?:GTA6_Peak_Clip_\d+|GTA6_Clip_\d+|clip|output_clip)$", raw_title, re.I):
-            raw_title = _smart_clip_title(hook, assembled, str(cl.get("climax_quote") or ""), arch_val, idx)
+        raw_title = _strip_unspoken_clickbait(raw_title or _smart_clip_title(hook, assembled, str(cl.get("climax_quote") or ""), arch_val, idx), assembled) or "Wild GTA 6 Stream Moment"
         visual_note = str(cl.get("visual_value_note") or "").strip()
         if not visual_note or "Watch for the peak moment mid-clip" in visual_note:
             visual_note = str(cl.get("visual_evidence") or "").strip() or "Watch the live streamer reaction unfold here."

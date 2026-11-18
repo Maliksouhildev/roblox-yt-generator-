@@ -407,6 +407,8 @@ def extract_top_candidates(
     chat_info: dict,
     face_info: dict,
     top_k: int = 8,
+    slice_lo: float = None,
+    slice_hi: float = None,
 ) -> list:
     """Compute 1s V(t), suppress intro/outro/housekeeping, select Top K isolated peaks & snap windows."""
     max_sec = max(30, int(math.floor(duration)))
@@ -430,9 +432,15 @@ def extract_top_candidates(
 
     # 1-second multimodal virality curve V(t)
     v_curve = [0.0] * (max_sec + 1)
-    intro_guard = 15
-    outro_guard = max(20, max_sec - 20)
-    for sec in range(intro_guard, max(intro_guard, outro_guard)):
+    lo_bound = max(3.0, float(slice_lo)) if slice_lo is not None else 3.0
+    hi_bound = min(float(duration), float(slice_hi)) if slice_hi is not None else float(duration)
+    intro_guard = max(15, int(math.floor(lo_bound)) + 10)
+    outro_guard = min(max(intro_guard + 1, max_sec - 20), int(math.floor(hi_bound)) - 10)
+    if outro_guard <= intro_guard:
+        intro_guard = max(3, int(math.floor(lo_bound)))
+        outro_guard = min(max_sec, max(intro_guard + 1, int(math.floor(hi_bound))))
+
+    for sec in range(intro_guard, outro_guard):
         if sec in suppressed_secs:
             continue
         a_sc = float((raw_bins.get(sec) or {}).get("audio_score", 0.0))
@@ -444,8 +452,21 @@ def extract_top_candidates(
         v = 0.42 * local_a + 0.38 * c_sc + 0.20 * f_sc + txt_sc
         v_curve[sec] = round(v, 4)
 
-    min_spacing = 90.0 if duration >= 1200.0 else 40.0
+    eff_span = max(60.0, hi_bound - lo_bound)
+    min_spacing = 90.0 if eff_span >= 1200.0 else 40.0
     ranked_secs = sorted(range(intro_guard, max(intro_guard + 1, outro_guard)), key=lambda t: v_curve[t], reverse=True)
+
+    dense_tx = len(sentences) >= 6 and sum(int(s.get("word_count", 0)) for s in sentences) >= 60
+
+    # Helper: verify candidate window actually contains substantive speech when sentences exist
+    def _has_window_speech(sec_pt: int, min_wc: int = 25) -> bool:
+        if not sentences:
+            return True
+        eff_min = min_wc if dense_tx else 1
+        w0 = max(lo_bound, float(sec_pt) - 52.0)
+        w1 = min(hi_bound, float(sec_pt) + 33.0)
+        wc_w = sum(int(s.get("word_count", 0)) for s in sentences if float(s["end"]) >= w0 and float(s["start"]) <= w1)
+        return wc_w >= eff_min
 
     selected_peaks = []
     for spacing_step in (min_spacing, max(25.0, min_spacing * 0.6)):
@@ -454,25 +475,37 @@ def extract_top_candidates(
                 break
             if v_curve[sec] <= 0.0 and len(selected_peaks) > 0:
                 continue
+            if not _has_window_speech(sec, 25):
+                continue
             if any(abs(sec - p) < spacing_step for p in selected_peaks):
                 continue
             selected_peaks.append(sec)
         if len(selected_peaks) >= top_k:
             break
 
-    # Fallback evenly spaced candidates if a synthetic silent fixture has all-zero V(t)
+    # Fallback: prefer sentence anchors when sparse audio/flat V(t)
     if not selected_peaks:
-        step = max(20, int((duration - 25.0) // max(1, top_k)))
-        selected_peaks = [min(max_sec - 10, 20 + i * step) for i in range(top_k) if 20 + i * step < max_sec]
+        if sentences:
+            step_s = max(1, len(sentences) // max(1, top_k))
+            for idx_s in range(0, len(sentences), step_s):
+                st_s = int(round(float(sentences[idx_s]["start"])))
+                if intro_guard <= st_s < outro_guard and _has_window_speech(st_s, 15):
+                    if all(abs(st_s - p) >= 25.0 for p in selected_peaks):
+                        selected_peaks.append(st_s)
+                if len(selected_peaks) >= top_k:
+                    break
+        if not selected_peaks:
+            step = max(20, int((hi_bound - lo_bound - 25.0) // max(1, top_k)))
+            selected_peaks = [min(outro_guard, intro_guard + i * step) for i in range(top_k) if intro_guard + i * step < outro_guard]
 
     sent_starts = [s["start"] for s in sentences] if sentences else []
     candidates = []
     for idx, t_peak in enumerate(selected_peaks[:top_k], start=1):
-        w_start = max(3.0, float(t_peak) - 32.0)
-        w_end = min(float(duration), float(t_peak) + 18.0)
+        # Part 1.1: Wide 85.0s candidate window [peak - 52s, peak + 33s] for complete 34s-55s story arcs
+        w_start = max(lo_bound, float(t_peak) - 52.0)
+        w_end = min(hi_bound, float(t_peak) + 33.0)
 
-        # Snap start/end cleanly to complete Whisper sentences (up to +-6.0s guard),
-        # preferring clean pauses / terminal punctuation breaks over mid-sentence cuts
+        # Snap start/end cleanly to complete Whisper sentences (up to +-6.0s guard)
         if sentences:
             pos_l = bisect.bisect_right(sent_starts, w_start) - 1
             if 0 <= pos_l < len(sentences):
@@ -480,35 +513,70 @@ def extract_top_candidates(
                 prev_s = sentences[pos_l - 1] if pos_l > 0 else None
                 prev_ends_term = bool(prev_s and re.search(r"(?<!\.)[.!?][\"'\)]*$", str(prev_s.get("text") or "").strip()))
                 gap_prev = (float(cand_s["start"]) - float(prev_s["end"])) if prev_s else 1.0
-                if cand_s["end"] > w_start and cand_s["start"] >= max(3.0, w_start - 6.0) and (prev_ends_term or gap_prev >= 0.35 or pos_l == 0):
-                    w_start = max(3.0, float(cand_s["start"]))
-                elif pos_l + 1 < len(sentences) and float(sentences[pos_l + 1]["start"]) < float(t_peak) - 8.0:
-                    w_start = max(3.0, float(sentences[pos_l + 1]["start"]))
+                if cand_s["end"] > w_start and cand_s["start"] >= max(lo_bound, w_start - 6.0) and (prev_ends_term or gap_prev >= 0.35 or pos_l == 0):
+                    w_start = max(lo_bound, float(cand_s["start"]))
+                elif pos_l + 1 < len(sentences) and float(sentences[pos_l + 1]["start"]) < float(t_peak) - 16.0:
+                    w_start = max(lo_bound, float(sentences[pos_l + 1]["start"]))
             pos_r = bisect.bisect_left(sent_starts, w_end) - 1
             if 0 <= pos_r < len(sentences):
                 cand_e = sentences[pos_r]
-                if cand_e["start"] < w_end < cand_e["end"] and cand_e["end"] <= min(float(duration), w_end + 6.0):
-                    w_end = min(float(duration), float(cand_e["end"]))
-                elif cand_e["start"] > float(t_peak) + 2.0 and cand_e["end"] <= w_end:
-                    w_end = min(float(duration), float(cand_e["end"]))
-
-        if w_end - w_start < 20.0:
-            w_end = min(float(duration), w_start + 32.0)
+                if cand_e["start"] < w_end < cand_e["end"] and cand_e["end"] <= min(hi_bound, w_end + 6.0):
+                    w_end = min(hi_bound, float(cand_e["end"]))
+                elif cand_e["start"] > float(t_peak) + 3.0 and cand_e["end"] <= w_end:
+                    w_end = min(hi_bound, float(cand_e["end"]))
 
         win_sents = [s for s in sentences if s["end"] >= w_start - 0.1 and s["start"] <= w_end + 0.1]
+        if win_sents and dense_tx:
+            # Never carry >3.5s leading/trailing dead air inside dense multi-hour windows
+            first_sp = max(lo_bound, float(win_sents[0]["start"]) - 0.35)
+            last_sp = min(hi_bound, float(win_sents[-1]["end"]) + 0.65)
+            if first_sp - w_start > 3.5:
+                w_start = first_sp
+            if w_end - last_sp > 3.5:
+                w_end = last_sp
+        elif w_end - w_start < 40.0 and (hi_bound - lo_bound) >= 45.0:
+            w_start = max(lo_bound, min(w_start, float(w_end) - 48.0))
+            w_end = min(hi_bound, max(w_end, w_start + 55.0))
+
+        win_sents = [s for s in sentences if s["end"] >= w_start - 0.1 and s["start"] <= w_end + 0.1]
+        if dense_tx and sum(int(s.get("word_count", 0)) for s in win_sents) < 20:
+            continue
         cm = chat_meta.get(t_peak) or {}
         q_cluster = bool(cm.get("question_cluster", False))
         lines = []
         win_tags = []
         rb = raw_bins.get(t_peak) or {}
         peak_z_db = float(rb.get("z_db", 0.0))
+        peak_z_chat = float(chat_scores.get(t_peak, 0.0))
+        peak_z_face = float(face_scores.get(t_peak, 0.0))
+
+        # Sustained Multi-Beat Arc check: >=2 distinct beats >=6s apart inside a 45s escalation span
+        beat_secs = []
+        b_lo = max(3, int(t_peak) - 40)
+        b_hi = min(max_sec, int(t_peak) + 8)
+        for bs in range(b_lo, b_hi + 1):
+            rb_b = raw_bins.get(bs) or {}
+            b_hit = (
+                float(rb_b.get("z_db", 0.0)) >= 1.5
+                or float(chat_scores.get(bs, 0.0)) >= 1.2
+                or float(face_scores.get(bs, 0.0)) >= 1.0
+                or float(shock_secs.get(bs, 0.0)) > 0.0
+            )
+            if b_hit and (not beat_secs or (bs - beat_secs[-1]) >= 6):
+                beat_secs.append(bs)
+        # Also treat distinct high-WPM sentence transitions (>=15 words/min cluster) as setup beat
+        if len(beat_secs) < 2 and len(win_sents) >= 4:
+            early_sents = [s for s in win_sents if float(s["end"]) < float(t_peak) - 6.0 and int(s.get("word_count", 0)) >= 5]
+            if early_sents and (beat_secs or any(SHOCK_SPEECH_RE.search(s.get("text", "")) for s in win_sents)):
+                beat_secs.insert(0, int(early_sents[0]["start"]))
+
         if peak_z_db >= 2.8:
             win_tags.append(f"[SCREAM:Z={peak_z_db:.1f}]")
         elif peak_z_db >= 2.0:
             win_tags.append(f"[dB_PEAK:Z={peak_z_db:.1f}]")
-        if float(chat_scores.get(t_peak, 0.0)) > 0.0:
-            win_tags.append(f"[CHAT_BURST:Z={float(chat_scores.get(t_peak, 0.0)):.1f}]")
-        if float(face_scores.get(t_peak, 0.0)) >= 1.2:
+        if peak_z_chat > 0.0:
+            win_tags.append(f"[CHAT_BURST:Z={peak_z_chat:.1f}]")
+        if peak_z_face >= 1.2:
             win_tags.append("[FACE:SHOCK_OR_REACTION]")
         word_sum = sum(int(s.get("word_count", 0)) for s in win_sents)
         wpm_val = word_sum / max(1.0, (w_end - w_start) / 60.0)
@@ -524,6 +592,18 @@ def extract_top_candidates(
                 if tg not in win_tags:
                     win_tags.append(tg)
 
+        shock_hits = sum(1 for s in win_sents if SHOCK_SPEECH_RE.search(str(s.get("text") or "")))
+        sig_strength = (
+            (1.15 if peak_z_db >= 2.8 else (0.85 if peak_z_db >= 2.1 else (0.35 if peak_z_db >= 1.4 else 0.0)))
+            + (0.75 if peak_z_chat >= 2.0 else (0.35 if peak_z_chat >= 1.0 else 0.0))
+            + (0.65 if peak_z_face >= 1.2 else 0.0)
+            + (0.65 if wpm_val >= 145.0 else (0.35 if wpm_val >= 125.0 else 0.0))
+            + (0.45 if shock_hits >= 2 else (0.20 if shock_hits >= 1 else 0.0))
+        )
+        est_virality = min(9.9, round(6.5 + min(1.8, v_curve[t_peak] * 0.48) + (0.95 if len(beat_secs) >= 2 else 0.0) + min(1.45, sig_strength), 2))
+        if len(beat_secs) >= 2:
+            win_tags.append(f"[MULTI_BEAT:{len(beat_secs)}]")
+
         candidates.append({
             "rank": idx,
             "candidate_id": f"cand_{idx}",
@@ -532,10 +612,13 @@ def extract_top_candidates(
             "window_end": round(w_end, 2),
             "window_duration": round(w_end - w_start, 2),
             "virality_score": round(v_curve[t_peak], 3),
+            "est_virality_10": est_virality,
+            "multi_beat_count": len(beat_secs),
+            "beat_timestamps": beat_secs[:5],
             "z_db": round(peak_z_db, 2),
             "spec_boost": float(rb.get("spec_boost", 0.0)),
-            "z_chat_lagged": float(chat_scores.get(t_peak, 0.0)),
-            "z_face": float(face_scores.get(t_peak, 0.0)),
+            "z_chat_lagged": peak_z_chat,
+            "z_face": peak_z_face,
             "signal_tags": win_tags,
             "chat_question_cluster": bool(cm.get("question_cluster", False)),
             "chat_samples": cm.get("msgs") or [],
@@ -558,7 +641,7 @@ def get_adaptive_clip_targets(duration_sec: float) -> tuple[int, int, int]:
 
 
 def is_grid_mostly_static(grid_path: str) -> bool:
-    """Return True when >70% of central gameplay tiles across the 3x3 storyboard are static."""
+    """Return True when >55% of central gameplay tiles across the 3x3 storyboard lack real scene progression."""
     if not grid_path or not os.path.exists(grid_path):
         return False
     try:
@@ -576,12 +659,15 @@ def is_grid_mostly_static(grid_path: str) -> bool:
             roi = cv2.cvtColor(cv2.resize(img[y0:y1, x0:x1], (120, 68)), cv2.COLOR_BGR2GRAY)
             tiles.append(roi.astype(np.float32))
     static_pairs = 0
+    low_prog_pairs = 0
     for i in range(1, len(tiles)):
         mae = float(np.mean(np.abs(tiles[i] - tiles[i - 1])))
-        if mae < 2.2:
+        if mae < 2.5:
             static_pairs += 1
-    # 8 consecutive transitions; >=6 (<2.2 MAE) means >70% of frames are frozen/static
-    return (static_pairs / 8.0) > 0.70
+        if mae < 4.5:
+            low_prog_pairs += 1
+    # Reject frozen/paused screens (>55% static) or monotonous single-room/menu staring (>70% low progression)
+    return (static_pairs / 8.0) > 0.55 or (low_prog_pairs / 8.0) > 0.72
 
 
 def render_3x3_grid(video_path: str, cand: dict, grid_dir: str, font_path: str) -> dict:
@@ -640,6 +726,7 @@ def main():
     parser.add_argument("--out", default="/files/temp/gta6_candidates.json")
     parser.add_argument("--grid-dir", default="/files/temp")
     parser.add_argument("--top-k", type=int, default=0, help="Candidate count (0=adaptive by stream duration)")
+    parser.add_argument("--min-virality", type=float, default=0.0, help="Drop candidates with est_virality_10 below threshold (e.g. 8.8 in live production)")
     parser.add_argument("--slice-start", type=float, default=None, help="Optional slice start sec")
     parser.add_argument("--slice-end", type=float, default=None, help="Optional slice end sec")
     parser.add_argument("--skip-grids", action="store_true")
@@ -694,9 +781,17 @@ def main():
     tx_dur = float(transcript_doc.get("duration") or index_doc.get("duration") or index_doc.get("stream_duration_sec") or 0.0)
     aud_dur = _probe_duration(audio_path)
     video_hint = args.video or override_doc.get("video_path") or ""
-    video_path = video_hint if (video_hint and os.path.exists(video_hint)) else _auto_discover_video(tx_dur or aud_dur)
+    if video_hint and os.path.exists(video_hint):
+        video_path = video_hint
+    elif not args.skip_grids:
+        video_path = _auto_discover_video(tx_dur or aud_dur)
+    else:
+        video_path = ""
+    vid_dur = _probe_duration(video_path) if video_path else 0.0
+    if not video_hint and video_path and tx_dur > 0 and vid_dur > 0 and abs(vid_dur - tx_dur) > max(30.0, 0.25 * max(vid_dur, tx_dur)):
+        video_path = ""
+        vid_dur = 0.0
     active_stream = os.path.basename(video_path) if video_path else os.path.basename(tx_path or "")
-    vid_dur = _probe_duration(video_path)
 
     # Fix 1.1: Validate cached telemetry against active stream_file header & purge mismatched caches
     if active_stream and video_path:
@@ -779,9 +874,17 @@ def main():
     adap_k, rec_min_clips, rec_max_clips = get_adaptive_clip_targets(slice_span)
     eff_top_k = args.top_k if args.top_k > 0 else adap_k
 
-    raw_candidates = extract_top_candidates(s_hi if (slice_lo is not None or slice_hi is not None) else duration, sentences, audio_info, chat_info, face_info, top_k=eff_top_k + 4)
+    raw_candidates = extract_top_candidates(
+        s_hi if (slice_lo is not None or slice_hi is not None) else duration,
+        sentences, audio_info, chat_info, face_info,
+        top_k=eff_top_k + 4,
+        slice_lo=s_lo if (slice_lo is not None or slice_hi is not None) else None,
+        slice_hi=s_hi if (slice_lo is not None or slice_hi is not None) else None,
+    )
     if slice_lo is not None or slice_hi is not None:
-        raw_candidates = [c for c in raw_candidates if c["window_start"] >= max(0.0, s_lo - 5.0) and c["window_end"] <= s_hi + 5.0] or raw_candidates
+        raw_candidates = [c for c in raw_candidates if c["window_start"] >= max(0.0, s_lo - 5.0) and c["window_end"] <= s_hi + 5.0]
+    if args.min_virality > 0.0:
+        raw_candidates = [c for c in raw_candidates if float(c.get("est_virality_10", 0.0)) >= args.min_virality and int(c.get("multi_beat_count", 0)) >= 2]
 
     os.makedirs(args.grid_dir, exist_ok=True)
     font_path = _pick_font()

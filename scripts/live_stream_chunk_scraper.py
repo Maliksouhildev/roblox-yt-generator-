@@ -69,7 +69,7 @@ STATE_PATH = "/files/temp/live_chunks_state.json"
 LOCK_PATH = "/files/temp/live_chunk_scraper.lock"
 ARCHIVE_PATH = "/files/downloaded.txt"
 
-CHUNK_SEC = 3000            # 50 minutes max per chunk (35-50m slices)
+CHUNK_SEC = 3000            # 50 minutes max per chunk (targets 2700s-3600s DVR chunks)
 MIN_LIVE_BUFFER_SEC = 0     # Never sleep-wait for fresh streams; capture immediately
 MIN_LIVE_DVR_ELAPSED_SEC = 1800  # >=30m live -> --live-from-start -N 8 with 180s cap
 DVR_FETCH_TIMEOUT_SEC = 180      # 3-minute max yt-dlp network fetch (SIGINT remux)
@@ -81,7 +81,7 @@ MAX_WAIT_SEC = 0
 MAX_VOD_DUR_SEC = 36000
 MIN_VALID_BYTES = 5 * 1024 * 1024
 MIN_VALID_DUR_SEC = 600.0
-MIN_LIVE_CHUNK_DUR_SEC = 150.0
+MIN_LIVE_CHUNK_DUR_SEC = 1200.0
 MIN_SLICE_DUR_SEC = 30.0
 PROBE_WORKERS = 8
 
@@ -1011,41 +1011,55 @@ def _finalize_separated_video_audio(raw_base: str, out_mp4: str) -> bool:
     if os.path.exists(out_mp4) and os.path.getsize(out_mp4) > 1024 * 1024:
         return True
 
-    # Find video and audio files
-    v_cand = None
-    a_cand = None
+    # Find largest valid video and audio files (skip tiny per-fragment .part-FragN artifacts)
+    v_cands = []
+    a_cands = []
+    part_cands = []
     for p in glob.glob(raw_base + "*"):
-        lower = p.lower()
-        if "info.json" in lower or lower.endswith(".ytdl"):
+        if not os.path.isfile(p):
             continue
+        lower = p.lower()
+        if "info.json" in lower or lower.endswith(".ytdl") or ".part-frag" in lower:
+            continue
+        sz = os.path.getsize(p)
         if any(tag in lower for tag in [".f299", ".f137", ".f136", "bestvideo", "video"]):
-            v_cand = p
+            if sz > 512 * 1024:
+                v_cands.append((sz, p))
         elif any(tag in lower for tag in [".f140", ".f251", "bestaudio", "audio"]):
-            a_cand = p
+            if sz > 50 * 1024:
+                a_cands.append((sz, p))
+        elif ".part" in lower and sz > 5 * 1024 * 1024:
+            part_cands.append((sz, p))
 
-    if v_cand and a_cand:
+    if v_cands and a_cands:
+        v_cand = max(v_cands, key=lambda x: x[0])[1]
+        a_cand = max(a_cands, key=lambda x: x[0])[1]
         cmd = [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
             "-i", v_cand, "-i", a_cand,
-            "-c:v", "copy", "-c:a", "aac",
-            "-movflags", "+faststart",
+            "-c", "copy",
             out_mp4
         ]
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-        if res.returncode == 0 and os.path.exists(out_mp4) and os.path.getsize(out_mp4) > 1024 * 1024:
-            return True
-
-    # Check for single combined part file
-    for p in glob.glob(raw_base + "*.part*"):
-        if os.path.isfile(p) and os.path.getsize(p) > 5 * 1024 * 1024:
-            cmd = [
-                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-                "-i", p, "-c", "copy", "-movflags", "+faststart",
-                out_mp4
-            ]
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=240)
             if res.returncode == 0 and os.path.exists(out_mp4) and os.path.getsize(out_mp4) > 1024 * 1024:
                 return True
+        except Exception as exc:
+            print(f"[scraper] Video+audio remux warning: {exc}")
+
+    # Check for single combined part file
+    for _, p in sorted(part_cands, reverse=True):
+        cmd = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-i", p, "-c", "copy",
+            out_mp4
+        ]
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=240)
+            if res.returncode == 0 and os.path.exists(out_mp4) and os.path.getsize(out_mp4) > 1024 * 1024:
+                return True
+        except Exception as exc:
+            print(f"[scraper] Single-part remux warning: {exc}")
 
     return False
 

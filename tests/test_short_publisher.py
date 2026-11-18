@@ -169,9 +169,17 @@ async function runCodeNode(nodeName, items, extraNodes = {}) {
     fs.writeFileSync(path.join(outputsDir, 'already_pub_by_name.json'), JSON.stringify({ virality_score: 9.9 }));
     fs.writeFileSync(path.join(outputsDir, 'renamed_dup.mp4'), dupBytes);
     fs.writeFileSync(path.join(outputsDir, 'renamed_dup.json'), JSON.stringify({ virality_score: 9.9 }));
+    fs.writeFileSync(path.join(outputsDir, 'overlap_vod_dup.mp4'), Buffer.from('overlap-dup-video-bytes'));
+    fs.writeFileSync(path.join(outputsDir, 'overlap_vod_dup.json'), JSON.stringify({
+      virality_score: 9.9,
+      source_stream_id: 'xqc_321206426716_chunk1',
+      vod_start_time: 15.0,
+      vod_end_time: 52.0,
+    }));
     fs.writeFileSync(historyPath, JSON.stringify([
       { filename: 'already_pub_by_name.mp4', sha256: '0000', videoId: 'old1' },
       { filename: 'original_name.mp4', sha256: dupHash, videoId: 'old2' },
+      { filename: 'prior_xqc.mp4', sha256: '9999', videoId: '0_gJF6asdO0', source_stream_id: 'xqc_321206426716_chunk1', vod_start_time: 0, vod_end_time: 183 },
     ]));
 
     // Active ranked clips
@@ -240,6 +248,8 @@ async function runCodeNode(nodeName, items, extraNodes = {}) {
     assert.strictEqual(fs.existsSync(path.join(outputsDir, 'renamed_dup.mp4')), false, 'duplicate by sha256 moved out of outputsDir');
     assert.strictEqual(fs.existsSync(path.join(outputsDir, 'archive', 'already_pub_by_name.mp4')), true, 'duplicate archived cleanly');
     assert.strictEqual(fs.existsSync(path.join(outputsDir, 'archive', 'renamed_dup.mp4')), true, 'sha256 duplicate archived cleanly');
+    assert.strictEqual(fs.existsSync(path.join(outputsDir, 'overlap_vod_dup.mp4')), false, 'VOD timestamp overlap duplicate deleted');
+    assert.strictEqual(fs.existsSync(path.join(outputsDir, 'overlap_vod_dup.json')), false, 'VOD timestamp overlap sidecar deleted');
 
     assert.strictEqual(j.queue_empty, false);
     assert.strictEqual(j.queue_count, 4, '4 non-published clips');
@@ -371,9 +381,9 @@ async function runCodeNode(nodeName, items, extraNodes = {}) {
     assert.strictEqual(fs.existsSync(path.join(outputsDir, 'archive', 'clip_b.mp4')), true, 'clip_b.mp4 archived cleanly');
     assert.strictEqual(fs.existsSync(path.join(outputsDir, 'archive', 'clip_b.json')), true, 'clip_b.json archived cleanly');
     const histAfter = JSON.parse(fs.readFileSync(historyPath, 'utf8'));
-    assert.strictEqual(histAfter.length, 3);
-    assert.strictEqual(histAfter[2].videoId, 'YT_SHORT_999');
-    assert.strictEqual(histAfter[2].sha256, prepOut[0].json.top_clip.sha256);
+    assert.strictEqual(histAfter.length, 4);
+    assert.strictEqual(histAfter[3].videoId, 'YT_SHORT_999');
+    assert.strictEqual(histAfter[3].sha256, prepOut[0].json.top_clip.sha256);
 
     // Evaluate all key n8n expression strings cleanly
     function evalExpr(exprStr, $json, extra = {}) {

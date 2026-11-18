@@ -342,8 +342,9 @@ class TestGta6PeakAndVisionLogic(unittest.TestCase):
         self.assertIn(200.0, peaks)
         self.assertNotIn(250.0, peaks)  # Within 90s of 200s
         self.assertGreater(cands[0]["z_chat_lagged"], 3.0)
-        # Sentence at 165.0 overlaps w_start (200-32=168.0) and snaps cleanly outward to 165.0!
-        self.assertEqual(cands[0]["window_start"], 165.0)
+        # Wide 85.0s window: peak at 200 -> w_start = 148.0, covering complete setup + payoff
+        self.assertEqual(cands[0]["window_start"], 148.0)
+        self.assertGreaterEqual(cands[0]["window_duration"], 75.0)
 
     def test_vision_director_normalization_and_bracket_strip(self):
         cands = [{
@@ -446,6 +447,51 @@ class TestGta6PeakAndVisionLogic(unittest.TestCase):
         static_img = frames[0].copy()
         static_frames = [static_img.copy(), static_img.copy(), static_img.copy()]
         self.assertTrue(cam_detector.is_static_png_overlay(static_frames, cluster, 1920, 1080, active_indices={0, 1, 2}))
+
+    def test_part1_part2_longform_auditor_and_gates(self):
+        import sys
+        sys.path.insert(0, os.path.join(ROOT, "scripts"))
+        import gta6_edl_auditor as gta6_auditor
+
+        # 1) Verify director strips unspoken clickbait ("Glitch") & transitive verb cutoff ("I LIKE")
+        clean_title = vision_director._strip_unspoken_clickbait("Easy 500 Dollar Payout Glitch", "I got 500 bucks what a chap.")
+        self.assertNotIn("Glitch", clean_title)
+        clean_hook = vision_director._guard_and_format_hook("HE BUCKED ME HARD I LIKE", "He bucked me hard I like that.", "Five Hundred Dollar Payout")
+        self.assertLessEqual(len(clean_hook), 28)
+        self.assertLessEqual(len(clean_hook.split()), 5)
+        self.assertFalse(gta6_auditor.DANGLING_HOOK_END_RE.search(clean_hook))
+
+        # 2) Verify gta6_edl_auditor enforces -25 (<32s), -15 (DANGLING_HOOK_VERB), -15 (clickbait), -20 (weak ending)
+        words = [{"word": w, "start": 10.0 + i * 0.4, "end": 10.35 + i * 0.4} for i, w in enumerate(["Bro", "look", "at", "this", "500", "bucks.", "Okay."])]
+        w_starts = [w["start"] for w in words]
+        bad_clip = {
+            "clip_number": 1,
+            "title": "500 Dollar Glitch",
+            "narrative_archetype": "HUBRIS_WAGER_WASTED_KARMA",
+            "final_top_hook_caption": "HE BUCKED ME HARD I LIKE",
+            "cause_and_effect_setup": "Short clip without enough narrative arc.",
+            "assembled_spoken_script": "Bro look at this 500 bucks. Okay.",
+            "visual_event_description": "Streamer looking at phone.",
+            "edl_segments": [{"segment_order": 0, "start": 10.0, "end": 24.0, "duration": 14.0, "spoken_text": "Bro look at this 500 bucks. Okay.", "signal_tags_in_window": ["[dB_PEAK:Z=2.5]"]}],
+            "total_duration_sec": 14.0,
+        }
+        rep = gta6_auditor.score_clip(bad_clip, words, w_starts, [], {"game": "GTA 6"})
+        self.assertIn("CLIP_TOO_SHORT_UNDER_32S", rep["flags"])
+        self.assertIn("DANGLING_HOOK_VERB", rep["flags"])
+        self.assertIn("HALLUCINATED_CLICKBAIT_TITLE", rep["flags"])
+        self.assertIn("WEAK_MUMBLE_OR_SILENT_ENDING", rep["flags"])
+        self.assertIn("SINGLE_SPIKE_NO_STORY_ARC", rep["flags"])
+        self.assertEqual(rep["clip_score_95"], 0.0)
+
+        # 3) Verify Create Subtitle Binary throws ABORT_CLIP_TOO_SHORT when clipDur < 32.0
+        with open(os.path.join(ROOT, "workflows", "gta6_vision_shorts_workflow.json"), "r", encoding="utf-8") as f:
+            wf_doc = json.load(f)
+        csb = next(n for n in wf_doc["nodes"] if n["name"] == "Create Subtitle Binary")
+        self.assertIn("ABORT_CLIP_TOO_SHORT", csb["parameters"]["jsCode"])
+        ws = next(n for n in wf_doc["nodes"] if n["name"] == "Write Sidecar JSON")
+        self.assertIn("source_stream_id", ws["parameters"]["command"])
+        self.assertIn("vod_start_time", ws["parameters"]["command"])
+        self.assertIn("vod_end_time", ws["parameters"]["command"])
 
 
 if __name__ == "__main__":
