@@ -236,6 +236,10 @@ async function runCodeNode(nodeName, items, extraNodes = {}) {
     assert.strictEqual(fs.existsSync(path.join(outputsDir, 'ANTIGRAVITY_EDL_BREAKDOWN_REPORT.md')), true, 'ANTIGRAVITY report preserved');
     assert.strictEqual(fs.existsSync(path.join(outputsDir, 'ANTIGRAVITY_ITERATIONS_FULL_LOG.json')), true, 'ANTIGRAVITY log preserved');
     assert.strictEqual(fs.existsSync(path.join(outputsDir, 'player_blacklist.json')), true, 'player_blacklist preserved');
+    assert.strictEqual(fs.existsSync(path.join(outputsDir, 'already_pub_by_name.mp4')), false, 'duplicate by filename moved out of outputsDir');
+    assert.strictEqual(fs.existsSync(path.join(outputsDir, 'renamed_dup.mp4')), false, 'duplicate by sha256 moved out of outputsDir');
+    assert.strictEqual(fs.existsSync(path.join(outputsDir, 'archive', 'already_pub_by_name.mp4')), true, 'duplicate archived cleanly');
+    assert.strictEqual(fs.existsSync(path.join(outputsDir, 'archive', 'renamed_dup.mp4')), true, 'sha256 duplicate archived cleanly');
 
     assert.strictEqual(j.queue_empty, false);
     assert.strictEqual(j.queue_count, 4, '4 non-published clips');
@@ -360,8 +364,12 @@ async function runCodeNode(nodeName, items, extraNodes = {}) {
     assert.strictEqual(recOut[0].json.uploads_today, 3);
     assert.strictEqual(recOut[0].json.deleted_mp4, true);
     assert.strictEqual(recOut[0].json.deleted_json, true);
-    assert.strictEqual(fs.existsSync(path.join(outputsDir, 'clip_b.mp4')), false, 'clip_b.mp4 deleted after publish');
-    assert.strictEqual(fs.existsSync(path.join(outputsDir, 'clip_b.json')), false, 'clip_b.json deleted after publish');
+    assert.strictEqual(recOut[0].json.archived_mp4, true);
+    assert.strictEqual(recOut[0].json.archived_json, true);
+    assert.strictEqual(fs.existsSync(path.join(outputsDir, 'clip_b.mp4')), false, 'clip_b.mp4 removed from active queue after publish');
+    assert.strictEqual(fs.existsSync(path.join(outputsDir, 'clip_b.json')), false, 'clip_b.json removed from active queue after publish');
+    assert.strictEqual(fs.existsSync(path.join(outputsDir, 'archive', 'clip_b.mp4')), true, 'clip_b.mp4 archived cleanly');
+    assert.strictEqual(fs.existsSync(path.join(outputsDir, 'archive', 'clip_b.json')), true, 'clip_b.json archived cleanly');
     const histAfter = JSON.parse(fs.readFileSync(historyPath, 'utf8'));
     assert.strictEqual(histAfter.length, 3);
     assert.strictEqual(histAfter[2].videoId, 'YT_SHORT_999');
