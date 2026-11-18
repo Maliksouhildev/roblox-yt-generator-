@@ -79,10 +79,10 @@ PROBE_TIMEOUT_SEC = 6
 POLL_INTERVAL_SEC = 60
 MAX_WAIT_SEC = 0
 MAX_VOD_DUR_SEC = 36000
-MIN_VALID_BYTES = 20 * 1024 * 1024
-MIN_VALID_DUR_SEC = 600.0
-MIN_LIVE_CHUNK_DUR_SEC = 180.0
-MIN_SLICE_DUR_SEC = 60.0
+MIN_VALID_BYTES = 5 * 1024 * 1024
+MIN_VALID_DUR_SEC = 60.0
+MIN_LIVE_CHUNK_DUR_SEC = 60.0
+MIN_SLICE_DUR_SEC = 30.0
 PROBE_WORKERS = 8
 
 
@@ -978,6 +978,50 @@ def slice_and_copy_sidecars(
     return True, actual_dur, end_sec, slice_dur
 
 
+def _finalize_separated_video_audio(raw_base: str, out_mp4: str) -> bool:
+    """If yt-dlp was stopped via SIGINT before remuxing, combine separate .f299/.f140 or .part files."""
+    if os.path.exists(out_mp4) and os.path.getsize(out_mp4) > 1024 * 1024:
+        return True
+
+    # Find video and audio files
+    v_cand = None
+    a_cand = None
+    for p in glob.glob(raw_base + "*"):
+        lower = p.lower()
+        if "info.json" in lower or lower.endswith(".ytdl"):
+            continue
+        if any(tag in lower for tag in [".f299", ".f137", ".f136", "bestvideo", "video"]):
+            v_cand = p
+        elif any(tag in lower for tag in [".f140", ".f251", "bestaudio", "audio"]):
+            a_cand = p
+
+    if v_cand and a_cand:
+        cmd = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-i", v_cand, "-i", a_cand,
+            "-c:v", "copy", "-c:a", "aac",
+            "-movflags", "+faststart",
+            out_mp4
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if res.returncode == 0 and os.path.exists(out_mp4) and os.path.getsize(out_mp4) > 1024 * 1024:
+            return True
+
+    # Check for single combined part file
+    for p in glob.glob(raw_base + "*.part*"):
+        if os.path.isfile(p) and os.path.getsize(p) > 5 * 1024 * 1024:
+            cmd = [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-i", p, "-c", "copy", "-movflags", "+faststart",
+                out_mp4
+            ]
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if res.returncode == 0 and os.path.exists(out_mp4) and os.path.getsize(out_mp4) > 1024 * 1024:
+                return True
+
+    return False
+
+
 def _remove_prefix_files(prefix: str) -> None:
     for p in glob.glob(prefix + "*"):
         try:
@@ -1104,6 +1148,7 @@ def run_scraper(
             except Exception as ex:
                 print(f"[LiveScraper] YT live DVR notice: {ex}", file=sys.stderr)
 
+            _finalize_separated_video_audio(raw_base, raw_mp4)
             if os.path.exists(raw_mp4):
                 actual_dur = probe_duration(raw_mp4)
                 slice_start = float(last_end_sec) if (used_dvr and actual_dur > last_end_sec + MIN_SLICE_DUR_SEC) else 0.0
@@ -1134,6 +1179,7 @@ def run_scraper(
             subprocess.run(tw_cmd, timeout=LIVE_EDGE_RECORD_SEC + 45)
         except Exception as ex:
             print(f"[LiveScraper] Twitch live notice: {ex}", file=sys.stderr)
+        _finalize_separated_video_audio(tw_tmp_base, tw_tmp_mp4)
         normalize_chat_sidecar(tw_tmp_base)
         ok, dur, size = validate_chunk_file(tw_tmp_mp4, min_dur=MIN_LIVE_CHUNK_DUR_SEC)
         if ok:
