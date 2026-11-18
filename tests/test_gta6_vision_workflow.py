@@ -26,6 +26,9 @@ class TestGta6WorkflowStructure(unittest.TestCase):
     def test_identity_and_original_workflow_untouched(self):
         self.assertEqual(self.wf["id"], "Gta6VisionShortsV1")
         self.assertEqual(self.wf["name"], "GTA 6 Viral Shorts Engine (Peak + 3x3 Vision Edition)")
+        self.assertIs(self.wf["active"], True)
+        self.assertTrue(self.nodes_by_name["Schedule Trigger"].get("disabled", False))
+        self.assertFalse(self.nodes_by_name["Webhook"].get("disabled", False))
         self.assertEqual(self.orig_wf["id"], "D2hITsyjP5dVsqBZ")
         self.assertEqual(self.orig_wf["name"], "YouTube Short Automation (Bypassed Version)")
         orig_names = {n["name"] for n in self.orig_wf["nodes"]}
@@ -109,9 +112,29 @@ class TestGta6WorkflowStructure(unittest.TestCase):
             self.assertIn(handle.lower(), prs_js.lower())
 
         fd_cmd = self.nodes_by_name["Fallback Download"]["parameters"]["command"]
-        self.assertIn("duration <= 36000", fd_cmd)
-        self.assertIn("--write-info-json", fd_cmd)
-        self.assertIn("--sub-langs live_chat", fd_cmd)
+        self.assertIn("live_stream_chunk_scraper.py", fd_cmd)
+        fs_cmd = self.nodes_by_name["Find Stream"]["parameters"]["command"]
+        self.assertIn(".processing.info.json", fs_cmd)
+        self.assertIn(".processing.live_chat.json", fs_cmd)
+        self.assertIn(".en.live_chat.json", fs_cmd)
+        self.assertNotIn("cp -f", fs_cmd)
+
+        # Resolve Creator Handle wired inline after Edit Fields and checks .processing.info.json first
+        self.assertEqual(self.conns["Edit Fields"]["main"][0][0]["node"], "Resolve Creator Handle")
+        self.assertEqual(self.conns["Resolve Creator Handle"]["main"][0][0]["node"], "Get Reference Frame")
+        rch_js = self.nodes_by_name["Resolve Creator Handle"]["parameters"]["jsCode"]
+        self.assertLess(rch_js.index(".processing.info.json"), rch_js.index("stem + '.info.json'"))
+        self.assertIn("sf + '.info.json'", rch_js)
+
+        cfg_assigns = {
+            a["name"]: a["value"]
+            for a in self.nodes_by_name["Config"]["parameters"]["assignments"]["assignments"]
+        }
+        self.assertIn(".processing.info.json", cfg_assigns["streamer_name"])
+        self.assertIn(".processing.info.json", cfg_assigns["creator_credit"])
+        self.assertIn(".processing.info.json", self.nodes_by_name["Write Sidecar JSON"]["parameters"]["command"])
+        self.assertIn(".processing.live_chat.json", self.nodes_by_name["Run Multimodal Fusion"]["parameters"]["command"])
+        self.assertIn("GTA 6 Load Cached Telemetry", self.nodes_by_name["1. Global Summary AI"]["parameters"]["text"])
 
         for wname in ("3. Groq Whisper", "3. Groq Whisper Fallback", "7d. Get Subtitles (SRT)"):
             params = self.nodes_by_name[wname]["parameters"]["bodyParameters"]["parameters"]
@@ -140,7 +163,113 @@ class TestGta6WorkflowStructure(unittest.TestCase):
         self.assertEqual(self.conns["Pick Random Streamer"]["main"][0][0]["node"], "If Download Allowed?")
         self.assertEqual(self.conns["If Download Allowed?"]["main"][0][0]["node"], "Fallback Download")
         self.assertIn("If Bypass Loop Sandbox", self.nodes_by_name["Loop Clips"]["parameters"]["options"].get("reset", ""))
-        self.assertIn("$('Edit Fields').last()", self.nodes_by_name["Delete Source VOD"]["parameters"]["command"])
+        del_cmd = self.nodes_by_name["Delete Source VOD"]["parameters"]["command"]
+        self.assertIn("$('Edit Fields').last()", del_cmd)
+        self.assertIn(".processing.info.json", del_cmd)
+        self.assertIn(".processing.live_chat.json", del_cmd)
+        self.assertIn(".en.live_chat.json", del_cmd)
+
+    def test_processing_sidecar_and_creator_credit_in_node(self):
+        import subprocess
+        js_test = r"""
+const fs = require('fs');
+const path = require('path');
+const assert = require('assert');
+const { execFileSync } = require('child_process');
+const wf = JSON.parse(fs.readFileSync('/files/workflows/gta6_vision_shorts_workflow.json', 'utf8'));
+const byName = Object.fromEntries(wf.nodes.map(n => [n.name, n]));
+
+const tmpDir = fs.mkdtempSync('/tmp/gta6_wire_');
+try {
+  const inputsDir = path.join(tmpDir, 'inputs');
+  const tempDir = path.join(tmpDir, 'temp');
+  fs.mkdirSync(inputsDir, { recursive: true });
+  fs.mkdirSync(tempDir, { recursive: true });
+
+  // 1. Test Find Stream + Delete Source VOD against isolated tmpDir
+  const stem = 'TypicalGamer_dQw4w9WgXcQ_chunk1';
+  fs.writeFileSync(path.join(inputsDir, stem + '.mp4'), 'video-bytes');
+  fs.writeFileSync(path.join(inputsDir, stem + '.info.json'), JSON.stringify({ uploader_id: '@TypicalGamer', uploader: 'TypicalGamer' }));
+  fs.writeFileSync(path.join(inputsDir, stem + '.en.live_chat.json'), '{"replayChatItemAction":{}}\n');
+
+  const fsCmd = byName['Find Stream'].parameters.command
+    .replaceAll('/files/inputs/', inputsDir + '/')
+    .replaceAll('/files/temp/', tempDir + '/');
+  const procOut = execFileSync('sh', ['-c', fsCmd], { encoding: 'utf8' }).trim();
+  assert.strictEqual(procOut, stem + '.processing.mp4');
+  assert.strictEqual(fs.existsSync(path.join(inputsDir, stem + '.processing.mp4')), true);
+  assert.strictEqual(fs.existsSync(path.join(inputsDir, stem + '.processing.info.json')), true);
+  assert.strictEqual(fs.existsSync(path.join(inputsDir, stem + '.processing.live_chat.json')), true);
+  assert.strictEqual(fs.existsSync(path.join(inputsDir, stem + '.info.json')), false, '.info.json moved not copied');
+  assert.strictEqual(fs.existsSync(path.join(inputsDir, stem + '.en.live_chat.json')), false, '.en.live_chat.json moved');
+
+  const delRaw = byName['Delete Source VOD'].parameters.command
+    .replace(/^=/, '')
+    .replace("{{ $('Edit Fields').last().json.stream_file }}", procOut)
+    .replace('/files/inputs/', inputsDir + '/');
+  execFileSync('sh', ['-c', delRaw], { encoding: 'utf8' });
+  assert.strictEqual(fs.readdirSync(inputsDir).length, 0, 'Delete Source VOD removes all processing & unrenamed sidecars');
+
+  // 2. Test Resolve Creator Handle + Config + Write Sidecar JSON filename & .processing.info.json extraction
+  const rchFn = new Function('$input', '$', 'require', byName['Resolve Creator Handle'].parameters.jsCode);
+  const resChunk = rchFn(
+    { all: () => [{ json: { stream_file: 'CaseOh__abc_def1234_chunk2.processing.mp4' } }] },
+    () => ({ last: () => ({ json: {} }), first: () => ({ json: {} }) }),
+    require
+  );
+  assert.strictEqual(resChunk[0].json.streamer_handle, 'CaseOh_');
+  assert.strictEqual(resChunk[0].json.creator_credit, '🎥 @CaseOh_');
+
+  const cfgAssigns = Object.fromEntries(
+    byName['Config'].parameters.assignments.assignments.map(a => [a.name, a.value])
+  );
+  const evalExpr = (expr, $json, nodes, reqFn = require) => {
+    const code = String(expr).replace(/^=/, '').replace(/^\{\{/, '').replace(/\}\}$/, '').trim();
+    const $ = (nm) => ({ last: () => nodes[nm] || { json: {} }, first: () => nodes[nm] || { json: {} }, item: nodes[nm] || { json: {} } });
+    return (new Function('$json', '$', 'require', 'return (' + code + ');'))($json, $, reqFn);
+  };
+  const cfgNodes = { 'Resolve Creator Handle': resChunk[0], 'Edit Fields': { json: { stream_file: 'CaseOh__abc_def1234_chunk2.processing.mp4' } } };
+  assert.strictEqual(evalExpr(cfgAssigns.streamer_name, {}, cfgNodes), 'CaseOh_');
+  assert.strictEqual(evalExpr(cfgAssigns.creator_credit, {}, cfgNodes), '🎥 @CaseOh_');
+
+  // Write Sidecar JSON extraction using <stem>.processing.info.json (intercepted to tmpDir)
+  const realInputsDir = inputsDir;
+  const mockStem = 'MockCreator_xyz98765432_chunk1';
+  fs.writeFileSync(path.join(realInputsDir, mockStem + '.processing.info.json'), JSON.stringify({ uploader_id: 'UC1234567890123456789012', uploader: 'DarkViperAU' }));
+  const fsProxy = Object.assign({}, fs, {
+    existsSync: (p) => fs.existsSync(String(p).startsWith('/files/inputs/') ? path.join(realInputsDir, path.basename(p)) : p),
+    readFileSync: (p, enc) => fs.readFileSync(String(p).startsWith('/files/inputs/') ? path.join(realInputsDir, path.basename(p)) : p, enc),
+  });
+  const reqProxy = (m) => (m === 'fs' ? fsProxy : require(m));
+  const sidecarNodes = {
+    'Loop Clips': { json: { title: 'Test_Clip', hook_caption: 'INSANE CHASE', virality_score: 9.2, stream_file: mockStem + '.processing.mp4', start_time: 10, end_time: 40 } },
+    'Resolve Creator Handle': { json: { streamer_handle: 'Streamer', creator_credit: '🎥 @Streamer' } },
+    'Edit Fields': { json: { stream_file: mockStem + '.processing.mp4' } },
+    'GTA 6 Load Cached Telemetry': { json: {} },
+    'Config': { json: { streamer_name: 'malik' } },
+  };
+  const wsCmd = evalExpr(byName['Write Sidecar JSON'].parameters.command, {}, sidecarNodes, reqProxy);
+  // Extract JSON payload written to SIDECAR_EOF
+  const mJson = wsCmd.match(/SIDECAR_EOF'\s*>\s*"[^"]+"\n([\s\S]*?)\nSIDECAR_EOF/);
+  assert.ok(mJson, 'sidecar JSON block generated');
+  const meta = JSON.parse(mJson[1]);
+  assert.strictEqual(meta.streamer_handle, 'DarkViperAU');
+  assert.strictEqual(meta.creator_credit, '🎥 @DarkViperAU');
+  console.log('ALL_GTA6_WIRING_SANDBOX_CHECKS_PASSED');
+} finally {
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+}
+"""
+        proc = subprocess.run(
+            ["docker", "exec", "-i", "-e", "NODE_FUNCTION_ALLOW_BUILTIN=*", "ai_clipper-n8n-1", "node", "-"],
+            input=js_test,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            timeout=60,
+        )
+        self.assertEqual(proc.returncode, 0, f"STDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}")
+        self.assertIn("ALL_GTA6_WIRING_SANDBOX_CHECKS_PASSED", proc.stdout)
 
 
 class TestGta6PeakAndVisionLogic(unittest.TestCase):

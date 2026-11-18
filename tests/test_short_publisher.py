@@ -93,6 +93,10 @@ class TestShortPublisherStructure(unittest.TestCase):
         self.assertIn("Gta6VisionShortsV1", trig_cmd)
         self.assertIn("NODE_FUNCTION_ALLOW_BUILTIN=*", trig_cmd)
         self.assertIn("NODE_FUNCTION_ALLOW_EXTERNAL=*", trig_cmd)
+        self.assertIn("/files/temp/gen_run.log", trig_cmd)
+        scan_js = self.nodes_by_name["Scan & Rank Output Queue"]["parameters"]["jsCode"]
+        self.assertIn("1500", scan_js)
+        self.assertNotIn("7200", scan_js)
 
         prep_js = self.nodes_by_name["Prepare YouTube Upload"]["parameters"]["jsCode"]
         self.assertIn("privacyStatus: 'public'", prep_js)
@@ -218,6 +222,7 @@ async function runCodeNode(nodeName, items, extraNodes = {}) {
       _test_inputs_dir: inputsDir,
       _test_quota_state_path: quotaPath,
       _test_excess_state_path: excessPath,
+      _test_scraper_lock_path: path.join(tempDir, 'nonexistent_scraper.lock'),
       _test_history_path: historyPath,
       _test_now_ms: t0755Algiers,
     };
@@ -386,11 +391,15 @@ async function runCodeNode(nodeName, items, extraNodes = {}) {
     const cmdIdle = evalExpr(byName['Trigger GTA6 Generator'].parameters.command, res[0].json);
     assert.ok(cmdIdle.includes('WF_ID=Gta6VisionShortsV1'), 'uses shell variable WF_ID');
     assert.ok(cmdIdle.includes('"[n]8n execute --id=$WF_ID"'), 'uses bracketed pgrep pattern');
+    assert.ok(cmdIdle.includes('/files/temp/gen_run.log'), 'logs to /files/temp/gen_run.log');
     assert.ok(!cmdIdle.includes('n8n execute --id=Gta6VisionShortsV1'), 'avoids literal self-match string in sh -c');
-    // Execute the exact guard inside Alpine BusyBox sh -c (swapping only the nohup launch payload + test pidfile)
+    // Execute the exact guard inside Alpine BusyBox sh -c (isolating pidfile/lockfile & swapping only the nohup launch payload)
     const testPidFile = path.join(tempDir, 'test_trigger.pid');
+    const testLockFile = path.join(tempDir, 'nonexistent_scraper.lock');
     const guardCmd = cmdIdle
       .replace('/files/temp/gta6_auto_trigger.pid', testPidFile)
+      .replace('/files/temp/live_chunk_scraper.lock', testLockFile)
+      .replace('/files/inputs/*.processing.mp4', path.join(inputsDir, '*.processing.mp4'))
       .replace(/nohup .*?echo "LAUNCHED_PID:\$!"/, 'echo "WOULD_LAUNCH"');
     const shOut = execFileSync('sh', ['-c', guardCmd], { encoding: 'utf8' }).trim();
     assert.strictEqual(shOut, 'WOULD_LAUNCH', 'BusyBox pgrep -f must NOT self-match sh -c');
@@ -401,6 +410,7 @@ async function runCodeNode(nodeName, items, extraNodes = {}) {
       { 'Scan & Rank Output Queue': { json: res[0].json } }
     );
     assert.ok(emptyEmailHtml.includes('LAUNCHED_PID:12345'));
+    assert.ok(emptyEmailHtml.includes('/files/temp/gen_run.log'));
 
     fs.writeFileSync(path.join(inputsDir, 'stream_active.processing.mp4'), Buffer.from('proc'));
     res = await runCodeNode('Scan & Rank Output Queue', [{ json: { ...baseInput, _test_now_ms: t0900Algiers + 130 * 60000 } }]);
@@ -409,6 +419,24 @@ async function runCodeNode(nodeName, items, extraNodes = {}) {
     const cmdBusy = evalExpr(byName['Trigger GTA6 Generator'].parameters.command, res[0].json);
     assert.ok(cmdBusy.includes('SKIPPED_PROCESSING'));
     assert.ok(!cmdBusy.includes('n8n execute'));
+
+    // Also verify live_chunk_scraper.lock blocks auto-trigger (< 1500s) and auto-expires (>= 1500s / 25m)
+    fs.unlinkSync(path.join(inputsDir, 'stream_active.processing.mp4'));
+    const lockPath = path.join(tempDir, 'live_chunk_scraper.lock');
+    const testNowMs = t0900Algiers + 130 * 60000;
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, started_epoch: Math.floor(testNowMs / 1000) - 1490 }));
+    res = await runCodeNode('Scan & Rank Output Queue', [{ json: { ...baseInput, _test_scraper_lock_path: lockPath, _test_now_ms: testNowMs } }]);
+    assert.strictEqual(res[0].json.is_scraper_locked, true);
+    assert.strictEqual(res[0].json.is_generator_processing, true);
+    const cmdLocked = evalExpr(byName['Trigger GTA6 Generator'].parameters.command, res[0].json);
+    assert.ok(cmdLocked.includes('SKIPPED_PROCESSING:live_chunk_scraper.lock'));
+    assert.ok(!cmdLocked.includes('n8n execute'));
+
+    // Lock older than 25 minutes (1500s) must auto-expire even if PID is alive
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, started_epoch: Math.floor(testNowMs / 1000) - 1501 }));
+    res = await runCodeNode('Scan & Rank Output Queue', [{ json: { ...baseInput, _test_scraper_lock_path: lockPath, _test_now_ms: testNowMs } }]);
+    assert.strictEqual(res[0].json.is_scraper_locked, false, 'scraper lock auto-expires after 1500s (25m)');
+    assert.strictEqual(res[0].json.is_generator_processing, false);
 
     console.log('ALL_SANDBOX_ASSERTIONS_PASSED');
   } finally {
