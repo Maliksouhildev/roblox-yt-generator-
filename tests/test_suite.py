@@ -850,6 +850,85 @@ class TestPipelineComprehensive(unittest.TestCase):
         self.assertIn("45.0", tfi_src)
         self.assertIn("top_k=20", tfi_src)
 
+    def test_stream_retry_on_zero_shorts_and_loop_reset(self):
+        """Ensure 0-short runs (e.g. all clips rejected by Screen UI audit) clean up and retry a new stream."""
+        conns = self.wf["connections"]
+        self.assertEqual(conns["Delete Source VOD"]["main"][0][0]["node"], "Check Stream Shorts Created")
+        self.assertEqual(conns["Check Stream Shorts Created"]["main"][0][0]["node"], "IF: Retry Next Stream?")
+        self.assertEqual(conns["IF: Retry Next Stream?"]["main"][0][0]["node"], "Find Stream")
+        self.assertEqual(conns["1. Extract Audio"]["main"][1][0]["node"], "Delete Source VOD")
+        self.assertEqual(conns["Pick Random Streamer"]["main"][0][0]["node"], "If Download Allowed?")
+        self.assertEqual(conns["If Download Allowed?"]["main"][0][0]["node"], "Fallback Download")
+
+        # Loop nodes must reset on re-entry across stream retries
+        self.assertIn("If Bypass Loop Sandbox", self.nodes["Loop Clips"]["parameters"]["options"].get("reset", ""))
+        self.assertIn("1. Prepare Scout Prompt", self.nodes["Scout Loop"]["parameters"]["options"].get("reset", ""))
+
+        # Stream-scoped Edit Fields references must prefer .last() rather than bare .first()
+        for nm in ("Delete Source VOD", "Cut & Concat All Segments", "1. Extract Audio", "Get Reference Frame", "Run Multimodal Fusion"):
+            params_str = json.dumps(self.nodes[nm]["parameters"])
+            self.assertIn("$('Edit Fields').last()", params_str, f"{nm} must use .last() on Edit Fields")
+            if self.nodes[nm]["type"] != "n8n-nodes-base.code":
+                self.assertNotIn("$('Edit Fields').first()", params_str, f"{nm} must not hardcode .first() on Edit Fields")
+
+        # Runtime check of Check Stream Shorts Created Code node
+        check_js = self.nodes["Check Stream Shorts Created"]["parameters"]["jsCode"]
+        harness = (
+            "function runCheck(flagText, statSize, attempts) {\n"
+            "  const fs = {\n"
+            "    existsSync: (p) => p === '/files/temp/stream_shorts_created.flag' && flagText !== null,\n"
+            "    readFileSync: () => flagText || '',\n"
+            "    statSync: () => ({ size: statSize })\n"
+            "  };\n"
+            "  const $items = (nm, o, r) => (nm === 'Find Stream' && r < attempts) ? [{ json: {} }] : [];\n"
+            "  const $ = () => ({ last: () => ({ json: { stream_file: 'test.processing.mp4' } }) });\n"
+            "  const require = (m) => m === 'fs' ? fs : {};\n"
+            "  return (function(){\n" + check_js + "\n  })();\n"
+            "}\n"
+            "console.log(JSON.stringify([\n"
+            "  runCheck(null, 0, 1)[0].json,\n"
+            "  runCheck('short1.mp4\\n', 250000, 1)[0].json,\n"
+            "  runCheck(null, 0, 10)[0].json\n"
+            "]));\n"
+        )
+        with tempfile.NamedTemporaryFile('w', suffix='.js', delete=False, encoding='utf-8') as tf:
+            tf.write(harness)
+            cpath = tf.name
+        try:
+            res = subprocess.run(['node', cpath], capture_output=True, text=True)
+            self.assertEqual(res.returncode, 0, f"Check Stream Shorts Created failed: {res.stderr}")
+            r0, r1, r2 = json.loads(res.stdout.strip())
+            self.assertTrue(r0["should_retry_stream"])
+            self.assertEqual(r0["shorts_created"], 0)
+            self.assertFalse(r1["should_retry_stream"])
+            self.assertEqual(r1["shorts_created"], 1)
+            self.assertFalse(r2["should_retry_stream"])
+        finally:
+            if os.path.exists(cpath):
+                os.remove(cpath)
+
+        # Runtime check: 5. Split Clips must never return [] when all AI clips get filtered out
+        split_js = self.nodes["5. Split Clips"]["parameters"]["jsCode"]
+        bad_payload = {"clips": [{"clip_number": 1, "title": "Short", "hook_caption": "TOO SHORT", "segments": [{"start": 10.0, "end": 16.0, "role": "CONTINUOUS_ARC"}]}]}
+        harness_sp = (
+            "const $input = { all: () => [{ json: { text: " + json.dumps(json.dumps(bad_payload)) + " } }] };\n"
+            "const $ = () => ({ item: { json: {} }, last: () => ({ json: { dry_run: false, streamer_name: 'Test' } }), first: () => ({ json: {} }) });\n"
+            "const $items = () => [];\n"
+            "function runSplit() {\n" + split_js + "\n}\n"
+            "console.log(JSON.stringify(runSplit()));\n"
+        )
+        with tempfile.NamedTemporaryFile('w', suffix='.js', delete=False, encoding='utf-8') as tf:
+            tf.write(harness_sp)
+            spath = tf.name
+        try:
+            res = subprocess.run(['node', spath], capture_output=True, text=True)
+            self.assertEqual(res.returncode, 0, f"5. Split Clips failed: {res.stderr}")
+            out_sp = json.loads(res.stdout.strip())
+            self.assertGreaterEqual(len(out_sp), 1, "5. Split Clips must emit >= 1 fallback clip when all candidates filter out")
+        finally:
+            if os.path.exists(spath):
+                os.remove(spath)
+
 if __name__ == '__main__':
     unittest.main()
 

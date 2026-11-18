@@ -133,6 +133,15 @@ class TestGta6WorkflowStructure(unittest.TestCase):
         self.assertIn("GTA6_PROMPT_ECHO_RE", swt_js)
         self.assertTrue(peak_builder._is_whisper_prompt_hallucination("Grand Theft Auto VI, Vice City, Leonida, Lucia"))
 
+        # Stream-retry loop on 0 shorts created
+        self.assertEqual(self.conns["Delete Source VOD"]["main"][0][0]["node"], "Check Stream Shorts Created")
+        self.assertEqual(self.conns["Check Stream Shorts Created"]["main"][0][0]["node"], "IF: Retry Next Stream?")
+        self.assertEqual(self.conns["IF: Retry Next Stream?"]["main"][0][0]["node"], "Find Stream")
+        self.assertEqual(self.conns["Pick Random Streamer"]["main"][0][0]["node"], "If Download Allowed?")
+        self.assertEqual(self.conns["If Download Allowed?"]["main"][0][0]["node"], "Fallback Download")
+        self.assertIn("If Bypass Loop Sandbox", self.nodes_by_name["Loop Clips"]["parameters"]["options"].get("reset", ""))
+        self.assertIn("$('Edit Fields').last()", self.nodes_by_name["Delete Source VOD"]["parameters"]["command"])
+
 
 class TestGta6PeakAndVisionLogic(unittest.TestCase):
     def test_peak_separation_and_speaker_tagging(self):

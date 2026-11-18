@@ -274,7 +274,7 @@ export class YoutubeShortAutomationBypassedVersionWorkflow {
     })
     FindStream = {
         command:
-            'file=$(ls -1 /files/inputs/ | grep "\\.mp4$" | grep -v "\\.processing\\.mp4$" | head -n 1); if [ -z "$file" ]; then stale=$(ls -1 /files/inputs/ | grep "\\.processing\\.mp4$" | head -n 1); if [ -n "$stale" ]; then mv "/files/inputs/$stale" "/files/inputs/${stale%.processing.mp4}.mp4"; file="${stale%.processing.mp4}.mp4"; fi; fi; if [ -n "$file" ]; then rm -f /files/temp/transcript.json /files/temp/unified_timeline_index.json /files/temp/viral_anchors.json /files/temp/audio_energy.json /files/temp/chat_laughter_clusters.json /files/temp/face_emotions.json /files/temp/comedic_beats.json; mv "/files/inputs/$file" "/files/inputs/${file%.mp4}.processing.mp4"; echo "${file%.mp4}.processing.mp4"; else echo ""; fi',
+            'rm -f /files/temp/stream_shorts_created.flag; file=""; for cand in $(ls -1 /files/inputs/ | grep "\\.mp4$" | grep -v "\\.processing\\.mp4$"); do if [ -s "/files/inputs/$cand" ]; then file="$cand"; break; else rm -f "/files/inputs/$cand"; fi; done; if [ -z "$file" ]; then for stale in $(ls -1 /files/inputs/ | grep "\\.processing\\.mp4$"); do if [ -s "/files/inputs/$stale" ]; then mv "/files/inputs/$stale" "/files/inputs/${stale%.processing.mp4}.mp4"; file="${stale%.processing.mp4}.mp4"; break; else rm -f "/files/inputs/$stale"; fi; done; fi; if [ -n "$file" ]; then rm -f /files/temp/transcript.json /files/temp/unified_timeline_index.json /files/temp/viral_anchors.json /files/temp/audio_energy.json /files/temp/chat_laughter_clusters.json /files/temp/face_emotions.json /files/temp/comedic_beats.json /files/temp/global_summary.json /files/temp/screams.json /files/temp/cam_config.json /files/temp/cam_ref_grid.jpg /files/temp/ref_*.jpg /files/temp/audio.mp3 /files/temp/concatenated_clip.mp4 /files/temp/clip_audio.mp3 /files/temp/subs.ass /files/temp/active_stream.txt /files/temp/gta6_candidates.json /files/temp/gta6_cand_*_grid.jpg /files/temp/gta6_vision_director_out.json /files/temp/stream_shorts_created.flag; mv "/files/inputs/$file" "/files/inputs/${file%.mp4}.processing.mp4"; echo "${file%.mp4}.processing.mp4"; else echo ""; fi',
     };
 
     @node({
@@ -348,7 +348,7 @@ export class YoutubeShortAutomationBypassedVersionWorkflow {
         position: [-95440, 26280],
     })
     CamVisionPrep = {
-        jsCode: `const base64Data = $('Read Reference').first().binary.data.data.replace(/\\s/g, "");
+        jsCode: `const base64Data = $('Read Reference').last().binary.data.data.replace(/\\s/g, "");
 return [{ pairedItem: { item: 0 }, json: { cam_vision_payload: { 
     contents: [{
         parts: [
@@ -456,7 +456,7 @@ return [{
         position: [-94200, 26320],
     })
     VisionPrep = {
-        jsCode: `const base64Data = $('Read Reference').first().binary.data.data.replace(/\\s/g, "");
+        jsCode: `const base64Data = $('Read Reference').last().binary.data.data.replace(/\\s/g, "");
 return [{ pairedItem: { item: 0 }, json: { cam_vision_payload: { 
     contents: [{
         parts: [
@@ -479,7 +479,7 @@ return [{ pairedItem: { item: 0 }, json: { cam_vision_payload: {
         position: [-93340, 26000],
     })
     VisionPrep1 = {
-        jsCode: `const base64Data = $('Read Reference').first().binary.data.data.replace(/\\s/g, "");
+        jsCode: `const base64Data = $('Read Reference').last().binary.data.data.replace(/\\s/g, "");
 return [{ pairedItem: { item: 0 }, json: { vision_payload: { 
     contents: [{
         parts: [
@@ -536,6 +536,7 @@ return [{ pairedItem: { item: 0 }, json: { vision_payload: {
         retryOnFail: true,
         maxTries: 4,
         waitBetweenTries: 5000,
+        onError: 'continueRegularOutput',
     })
     _3GroqWhisper = {
         method: 'POST',
@@ -583,7 +584,9 @@ return [{ pairedItem: { item: 0 }, json: { vision_payload: {
     })
     LoopClips = {
         batchSize: 1,
-        options: {},
+        options: {
+            reset: "={{ $prevNode.name === 'If Bypass Loop Sandbox' }}",
+        },
     };
 
     @node({
@@ -615,13 +618,13 @@ if (annotatedSentences.length === 0) {
 }
 if (words.length === 0) {
   try {
-    const w1 = $('3. Groq Whisper').first().json;
+    const w1 = $('3. Groq Whisper').last().json;
     words = w1.words || (w1.x_groq && w1.x_groq.words) || [];
   } catch(e) {}
 }
 if (words.length === 0) {
   try {
-    const w2 = $('3. Groq Whisper Fallback').first().json;
+    const w2 = $('3. Groq Whisper Fallback').last().json;
     words = w2.words || (w2.x_groq && w2.x_groq.words) || [];
   } catch(e) {}
 }
@@ -1281,7 +1284,7 @@ return allOut;`,
     CutConcatAllSegments = {
         jsCode: `const all = $input.all().map(item => item.json).sort((a, b) => a.segment_order - b.segment_order);
 const clipTitle = all[0].clip_title;
-const streamFile = $('Edit Fields').first().json.stream_file;
+const streamFile = $('Edit Fields').last().json.stream_file;
 
 // Drop segments shorter than 0.15s - keeps quick punchlines/reactions without ffmpeg choking
 const segments = all.filter(s => (s.end - s.start) >= 0.15);
@@ -2043,6 +2046,7 @@ return [{json: {command: cmd}, binary: {data: {data: Buffer.from(assContent).toS
         type: 'n8n-nodes-base.executeCommand',
         version: 1,
         position: [-81640, 26640],
+        onError: 'continueRegularOutput',
     })
     _7fFinalRender = {
         command: '={{ $json.command }}',
@@ -2081,7 +2085,7 @@ return [{json: {command: cmd}, binary: {data: {data: Buffer.from(assContent).toS
     })
     _1GlobalSummaryAi = {
         promptType: 'define',
-        text: "={{ (function(){ let t=''; try{ t=$('Save Whisper Transcript').first().json.text||''; }catch(e){} if(!t){ try{ t=$('3. Groq Whisper').first().json.text||''; }catch(e2){} } if(!t){ try{ t=$('3. Groq Whisper Fallback').first().json.text||''; }catch(e3){} } if(!t){ try{ t=$('Load Cached Telemetry').first().json.text||''; }catch(e4){} } return String(t).substring(0,40000); })() }}",
+        text: "={{ (function(){ let t=''; try{ t=$('Save Whisper Transcript').last().json.text||''; }catch(e){} if(!t){ try{ t=$('3. Groq Whisper').last().json.text||''; }catch(e2){} } if(!t){ try{ t=$('3. Groq Whisper Fallback').last().json.text||''; }catch(e3){} } if(!t){ try{ t=$('Load Cached Telemetry').first().json.text||''; }catch(e4){} } return String(t).substring(0,40000); })() }}",
         options: {
             systemMessage: `You are the Lead Narrative Director for a top gaming creator. Your task is to analyze the entire VOD transcript and provide a profound, hallucination-free Global Summary.
 
@@ -2266,7 +2270,7 @@ return files.map(f => ({ json: { file: f } }));`,
     })
     _1GlobalSummaryFallback = {
         promptType: 'define',
-        text: "={{ (function(){ let t=''; try{ t=$('Save Whisper Transcript').first().json.text||''; }catch(e){} if(!t){ try{ t=$('3. Groq Whisper').first().json.text||''; }catch(e2){} } if(!t){ try{ t=$('3. Groq Whisper Fallback').first().json.text||''; }catch(e3){} } if(!t){ try{ t=$('Load Cached Telemetry').first().json.text||''; }catch(e4){} } return String(t).substring(0,40000); })() }}",
+        text: "={{ (function(){ let t=''; try{ t=$('Save Whisper Transcript').last().json.text||''; }catch(e){} if(!t){ try{ t=$('3. Groq Whisper').last().json.text||''; }catch(e2){} } if(!t){ try{ t=$('3. Groq Whisper Fallback').last().json.text||''; }catch(e3){} } if(!t){ try{ t=$('Load Cached Telemetry').first().json.text||''; }catch(e4){} } return String(t).substring(0,40000); })() }}",
         options: {
             systemMessage: `You are the Lead Narrative Director for a top gaming creator. Your task is to analyze the entire VOD transcript and provide a profound, hallucination-free Global Summary.
 
@@ -2594,13 +2598,13 @@ if (!whisperData) {
 }
 if (!whisperData) {
   try {
-    const w = $('3. Groq Whisper').first().json;
+    const w = $('3. Groq Whisper').last().json;
     if (w && w.text && w.text.length > 10) whisperData = w;
   } catch(e) {}
 }
 if (!whisperData) {
   try {
-    const w2 = $('3. Groq Whisper Fallback').first().json;
+    const w2 = $('3. Groq Whisper Fallback').last().json;
     if (w2 && w2.text && w2.text.length > 10) whisperData = w2;
   } catch(e) {}
 }
@@ -2664,7 +2668,7 @@ const numberedLines = sentences.length > 0 ? sentences : (rawText.match(/[^.!?]+
 let viralAnchors = whisperData.anchors || [];
 if (viralAnchors.length === 0) {
   try {
-    const fusionItem = $('Run Multimodal Fusion').first();
+    const fusionItem = $('Run Multimodal Fusion').last();
     if (fusionItem && fusionItem.json && fusionItem.json.stdout) {
       const parsed = JSON.parse(fusionItem.json.stdout);
       if (parsed && parsed.anchors && parsed.anchors.length > 0) {
@@ -2757,7 +2761,17 @@ for (let i = 0; i < numChunks; i++) {
     '--- CHUNK ' + (i+1) + '/' + numChunks + ' ---\n' +
     chunkText;
 
-  results.push({ json: { prompt, chunk_index: i+1, dry_run: isDryRun } });
+const _countScoutRuns = (nm) => {
+  let c = 0;
+  while (true) { try { const it = $items(nm, 0, c); if (!it || !it.length) break; c++; } catch(e) { break; } }
+  return c;
+};
+const _scout_start_runs = {
+  "2. Basic LLM Chain (Scout)": _countScoutRuns("2. Basic LLM Chain (Scout)"),
+  "2. Basic LLM Chain (Scout Fallback)": _countScoutRuns("2. Basic LLM Chain (Scout Fallback)"),
+  "2. Basic LLM Chain (Scout Mistral Fallback)": _countScoutRuns("2. Basic LLM Chain (Scout Mistral Fallback)")
+};
+  results.push({ json: { prompt, chunk_index: i+1, dry_run: isDryRun, _scout_start_runs } });
 }
 
 return results;`,
@@ -2811,7 +2825,9 @@ return results;`,
         position: [-88080, 26240],
     })
     ScoutLoop = {
-        options: {},
+        options: {
+            reset: "={{ $prevNode.name === '1. Prepare Scout Prompt' }}",
+        },
     };
 
     @node({
@@ -2855,8 +2871,10 @@ const cleanScoutText = (raw) => {
   return lines.join('\\n').trim();
 };
 
+let _scoutStartRuns = {};
+try { _scoutStartRuns = $('1. Prepare Scout Prompt').last().json._scout_start_runs || {}; } catch(e) {}
 for (const nodeName of ["2. Basic LLM Chain (Scout)", "2. Basic LLM Chain (Scout Fallback)", "2. Basic LLM Chain (Scout Mistral Fallback)"]) {
-  let runIdx = 0;
+  let runIdx = Number(_scoutStartRuns[nodeName]) || 0;
   while (true) {
     try {
       const items = $items(nodeName, 0, runIdx);
@@ -2877,7 +2895,7 @@ for (const nodeName of ["2. Basic LLM Chain (Scout)", "2. Basic LLM Chain (Scout
 const validItems = allItems.filter(it => String(it.json.output || it.json.text || '').trim().length >= 120);
 const out = validItems.length > 0 ? validItems : (allItems.length > 0 ? allItems : $items("2. Basic LLM Chain (Scout)"));
 let isDryRun = false;
-try { isDryRun = Boolean($('1. Prepare Scout Prompt').first().json.dry_run); } catch(e) {}
+try { isDryRun = Boolean($('1. Prepare Scout Prompt').last().json.dry_run); } catch(e) {}
 return out.map(it => ({ json: { ...it.json, dry_run: isDryRun } }));`,
     };
 
@@ -2901,13 +2919,13 @@ if (allSnippets.length > 16000) allSnippets = allSnippets.substring(0, 16000);
 
 let isDryRun = items.some(it => Boolean(it.json && it.json.dry_run));
 if (!isDryRun) {
-  try { isDryRun = Boolean($('1. Prepare Scout Prompt').first().json.dry_run); } catch(e) {}
+  try { isDryRun = Boolean($('1. Prepare Scout Prompt').last().json.dry_run); } catch(e) {}
 }
 
 // Pull Proven Multimodal Anchors (with disk fallback for <10s Sandbox runs)
 let anchorsList = [];
 try {
-  const fusionItem = $('Run Multimodal Fusion').first();
+  const fusionItem = $('Run Multimodal Fusion').last();
   if (fusionItem && fusionItem.json && fusionItem.json.stdout) {
     const parsed = JSON.parse(fusionItem.json.stdout);
     if (parsed && parsed.anchors) anchorsList = parsed.anchors;
@@ -2946,7 +2964,7 @@ try {
   let summaryRaw = "";
   for (const sNode of ['1. Global Summary AI', '1. Global Summary Fallback', '1. Global Summary Mistral Fallback']) {
     if (summaryRaw) break;
-    try { summaryRaw = $(sNode).first().json.output || $(sNode).first().json.text || ""; } catch(e0) {}
+    try { summaryRaw = $(sNode).last().json.output || $(sNode).last().json.text || ""; } catch(e0) {}
   }
   if (!summaryRaw && fs.existsSync('/files/temp/global_summary.json')) {
     summaryRaw = fs.readFileSync('/files/temp/global_summary.json', 'utf8');
@@ -3030,7 +3048,16 @@ const prompt =
   '--- SCOUTED SNIPPETS ---\n' +
   allSnippets;
 
-return [{ pairedItem: { item: 0 }, json: { prompt, targetClips, dry_run: isDryRun } }];`,
+const _countDirRuns = (nm) => {
+  let c = 0;
+  while (true) { try { const it = $items(nm, 0, c); if (!it || !it.length) break; c++; } catch(e) { break; } }
+  return c;
+};
+const _director_start_runs = {
+  '4. Basic LLM Chain (Director Fallback)': _countDirRuns('4. Basic LLM Chain (Director Fallback)'),
+  '4. Basic LLM Chain (Director)': _countDirRuns('4. Basic LLM Chain (Director)')
+};
+return [{ pairedItem: { item: 0 }, json: { prompt, targetClips, dry_run: isDryRun, _director_start_runs } }];`,
     };
 
     @node({
@@ -3270,8 +3297,11 @@ if (allClips.length < 3) {
       return Array.isArray(arr) ? arr.filter(c => c && (c.start_time !== undefined || (Array.isArray(c.segments) && c.segments.length > 0))) : [];
     } catch (e) { return []; }
   };
+  let _dirStartRuns = {};
+  try { _dirStartRuns = $('3. Prepare Director Prompt').last().json._director_start_runs || {}; } catch(e) {}
   for (const prevNode of ['4. Basic LLM Chain (Director Fallback)', '4. Basic LLM Chain (Director)']) {
-    for (let r = 2; r >= 0 && allClips.length < 5; r--) {
+    const _minR = Number(_dirStartRuns[prevNode]) || 0;
+    for (let r = _minR + 2; r >= _minR && allClips.length < 5; r--) {
       try {
         const resItems = $items(prevNode, 0, r) || [];
         for (const ri of resItems) {
@@ -3510,7 +3540,7 @@ function snapSegmentBounds(st, en, role, minBound, maxBound) {
 const streamMaxDur = whisperWords.length > 0 ? Number(whisperWords[whisperWords.length - 1].end || 600) : 3600;
 const minPayoffGap = streamMaxDur > 1200 ? 50.0 : 35.0;
 
-return allClips.map((clip, index) => {
+const _finalClips = allClips.map((clip, index) => {
   // Validate 1..4 archetype blueprint segments without forced splitting
   let rawSegs = [];
   if (clip.segments && Array.isArray(clip.segments)) {
@@ -3746,7 +3776,63 @@ return allClips.map((clip, index) => {
   delete item.json._is_outro;
   item.json.clip_number = idx + 1;
   return item;
-});`,
+});
+// _fallback_guard_applied: never emit 0 items (which silently halts n8n before Loop Clips / Delete Source VOD)
+if (_finalClips.length > 0) return _finalClips;
+
+let _fbAnchors = [];
+try { _fbAnchors = $('Load Cached Telemetry').last().json.anchors || []; } catch(e) {}
+if (_fbAnchors.length === 0) {
+  try {
+    if (fs.existsSync('/files/temp/unified_timeline_index.json')) {
+      _fbAnchors = JSON.parse(fs.readFileSync('/files/temp/unified_timeline_index.json', 'utf8')).anchors || [];
+    }
+  } catch(e) {}
+}
+const _fbOut = [];
+for (const anc of _fbAnchors) {
+  const pk = Number(anc.peak_time || anc.start || 60);
+  if (_fbOut.every(p => Math.abs(Number(p.payoff_time || 0) - pk) >= 90.0)) {
+    const s0 = Math.max(10.0, Number((pk - 24.0).toFixed(2)));
+    const e0 = Number((pk + 4.0).toFixed(2));
+    _fbOut.push({
+      dry_run: isDryRun,
+      clip_number: _fbOut.length + 1,
+      start_time: s0,
+      end_time: e0,
+      payoff_time: pk,
+      segments: [{ start: s0, end: e0, role: 'CONTINUOUS_ARC' }],
+      narrative_archetype: anc.recommended_archetype || 'CONTINUOUS_GAMEPLAY_CLUTCH_OR_FAIL',
+      title: 'Highlight Moment #' + (_fbOut.length + 1),
+      hook_caption: 'WAIT FOR THIS MOMENT',
+      virality_score: Number(anc.virality_score || 8.0) / 10,
+      theme: 'Gaming',
+      structure_type: 'Continuous Arc',
+      assembled_spoken_script: '',
+      signal_justification: {},
+      cause_and_effect_setup: 'Peak multimodal reaction moment detected in stream.',
+      entity_continuity_check: { passed: true, mode: 'anchor_fallback_guard' }
+    });
+    if (_fbOut.length >= 3) break;
+  }
+}
+if (_fbOut.length > 0) return _fbOut.map(c => ({ json: c }));
+
+return [{ pairedItem: { item: 0 }, json: {
+  dry_run: isDryRun,
+  clip_number: 1,
+  start_time: 3.0,
+  end_time: 32.0,
+  payoff_time: 28.5,
+  segments: [{ start: 3.0, end: 32.0, role: 'CONTINUOUS_ARC' }],
+  title: (typeof streamerName !== 'undefined' ? streamerName : 'Streamer') + '_Backup_Clip',
+  hook_caption: 'WATCH THIS CLIP NOW',
+  narrative_archetype: 'CONTINUOUS_GAMEPLAY_CLUTCH_OR_FAIL',
+  virality_score: 0,
+  structure_type: 'Continuous Arc',
+  cause_and_effect_setup: 'Emergency single-segment fallback.',
+  entity_continuity_check: { passed: true, mode: 'emergency_fallback_guard' }
+} }];`,
     };
 
     @node({
@@ -3935,7 +4021,16 @@ SIDECAR_EOF\`;
   'https://www.twitch.tv/bandites'
 ];
 const randomUrl = streamers[Math.floor(Math.random() * streamers.length)];
-return [{ pairedItem: { item: 0 }, json: { url: randomUrl } }];`,
+let dlAttempt = 0;
+while (true) {
+  try {
+    const it = $items('Pick Random Streamer', 0, dlAttempt);
+    if (!it || it.length === 0) break;
+    dlAttempt++;
+  } catch (e) { break; }
+}
+const _allow_download = dlAttempt <= 5;
+return [{ pairedItem: { item: 0 }, json: { url: randomUrl, dl_attempt: dlAttempt, _allow_download } }];`,
     };
 
     @node({
@@ -3943,12 +4038,12 @@ return [{ pairedItem: { item: 0 }, json: { url: randomUrl } }];`,
         name: 'Fallback Download',
         type: 'n8n-nodes-base.executeCommand',
         version: 1,
-        position: [-96160, 26480],
+        position: [-95940, 26480],
         onError: 'continueErrorOutput',
     })
     FallbackDownload = {
         command:
-            '=sleep 600 && if ! command -v python3 &> /dev/null; then apk add --no-cache python3 || echo "Warning: apk add failed"; fi && if [ ! -f /files/yt-dlp ]; then wget -O /files/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp && chmod a+rx /files/yt-dlp; fi && python3 /files/yt-dlp --download-archive "/files/downloaded.txt" -f "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" --playlist-items 1-50 --match-filter "is_live != true & duration <= 14400" -o "/files/inputs/%(title)s.%(ext)s" "{{ $json.url }}"',
+            '=sleep 5 && if ! command -v python3 &> /dev/null; then apk add --no-cache python3 || echo "Warning: apk add failed"; fi && if [ ! -f /files/yt-dlp ]; then wget -O /files/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp && chmod a+rx /files/yt-dlp; fi && python3 /files/yt-dlp --download-archive "/files/downloaded.txt" -f "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" --playlist-items 1-50 --max-downloads 1 --match-filter "is_live != true & duration >= 300 & duration <= 14400" -o "/files/inputs/%(title)s.%(ext)s" "{{ $json.url }}"',
     };
 
     @node({
@@ -4405,7 +4500,7 @@ return $input.all().map((it, idx) => {
     })
     _1GlobalSummaryMistralFallback = {
         promptType: 'define',
-        text: "={{ (function(){ let t=''; try{ t=$('Save Whisper Transcript').first().json.text||''; }catch(e){} if(!t){ try{ t=$('3. Groq Whisper').first().json.text||''; }catch(e2){} } if(!t){ try{ t=$('3. Groq Whisper Fallback').first().json.text||''; }catch(e3){} } if(!t){ try{ t=$('Load Cached Telemetry').first().json.text||''; }catch(e4){} } return String(t).substring(0,40000); })() }}",
+        text: "={{ (function(){ let t=''; try{ t=$('Save Whisper Transcript').last().json.text||''; }catch(e){} if(!t){ try{ t=$('3. Groq Whisper').last().json.text||''; }catch(e2){} } if(!t){ try{ t=$('3. Groq Whisper Fallback').last().json.text||''; }catch(e3){} } if(!t){ try{ t=$('Load Cached Telemetry').first().json.text||''; }catch(e4){} } return String(t).substring(0,40000); })() }}",
         options: {
             systemMessage: `You are the Lead Narrative Director for a top gaming creator. Your task is to analyze the entire VOD transcript and provide a profound, hallucination-free Global Summary.
 
@@ -4537,6 +4632,7 @@ return $input.all().map((it, idx) => {
         type: 'n8n-nodes-base.executeCommand',
         version: 1,
         position: [-92740, 25900],
+        onError: 'continueErrorOutput',
     })
     _1ExtractAudio = {
         command:
@@ -5452,6 +5548,118 @@ return previews.map(p => ({ json: p }));`,
     };
 
     @links()
+
+    @node({
+        id: 'check-stream-shorts-created-id',
+        name: 'Check Stream Shorts Created',
+        type: 'n8n-nodes-base.code',
+        version: 2,
+        position: [-85040, 26080],
+    })
+    CheckStreamShortsCreated = {
+        jsCode: `const fs = require('fs');
+const flagPath = '/files/temp/stream_shorts_created.flag';
+let createdFiles = [];
+try {
+  if (fs.existsSync(flagPath)) {
+    createdFiles = fs.readFileSync(flagPath, 'utf8')
+      .split(/\\r?\\n/)
+      .map(s => s.trim())
+      .filter(Boolean)
+      .filter(fname => {
+        try { return fs.statSync('/files/outputs/' + fname).size > 10000; } catch (e) { return false; }
+      });
+  }
+} catch (e) {}
+
+let streamAttempt = 0;
+while (true) {
+  try {
+    const fItems = $items('Find Stream', 0, streamAttempt);
+    if (!fItems || fItems.length === 0) break;
+    streamAttempt++;
+  } catch (e) {
+    break;
+  }
+}
+streamAttempt = Math.max(1, streamAttempt);
+const MAX_STREAM_RETRIES = 10;
+const shortsCreated = createdFiles.length;
+const shouldRetryStream = (shortsCreated === 0) && (streamAttempt < MAX_STREAM_RETRIES);
+
+let streamFile = '';
+try { streamFile = $('Edit Fields').last().json.stream_file || ''; } catch (e) {}
+
+return [{
+  json: {
+    shorts_created: shortsCreated,
+    created_files: createdFiles,
+    stream_attempt: streamAttempt,
+    max_stream_retries: MAX_STREAM_RETRIES,
+    should_retry_stream: shouldRetryStream,
+    stream_file: streamFile
+  }
+}];`,
+    };
+
+    @node({
+        id: 'if-retry-next-stream-id',
+        name: 'IF: Retry Next Stream?',
+        type: 'n8n-nodes-base.if',
+        version: 2.2,
+        position: [-84800, 26080],
+    })
+    IfRetryNextStream = {
+        conditions: {
+            options: {
+                caseSensitive: true,
+                typeValidation: 'strict',
+            },
+            conditions: [
+                {
+                    id: 'cond-retry-stream',
+                    leftValue: '={{ $json.should_retry_stream === true }}',
+                    rightValue: true,
+                    operator: {
+                        type: 'boolean',
+                        operation: 'true',
+                    },
+                },
+            ],
+            combinator: 'and',
+        },
+        options: {},
+    };
+
+    @node({
+        id: 'if-download-allowed-id',
+        name: 'If Download Allowed?',
+        type: 'n8n-nodes-base.if',
+        version: 2.2,
+        position: [-96160, 26480],
+    })
+    IfDownloadAllowed = {
+        conditions: {
+            options: {
+                caseSensitive: true,
+                typeValidation: 'strict',
+            },
+            conditions: [
+                {
+                    id: 'cond-allow-dl',
+                    leftValue: '={{ $json._allow_download !== false }}',
+                    rightValue: true,
+                    operator: {
+                        type: 'boolean',
+                        operation: 'true',
+                    },
+                },
+            ],
+            combinator: 'and',
+        },
+        options: {},
+    };
+
     defineRouting() {
         this.ScheduleTrigger.out(0).to(this.FindStream.in(0));
         this.WhenClickingTestWorkflow.out(0).to(this.FindStream.in(0));
@@ -5571,10 +5779,12 @@ return previews.map(p => ({ json: p }));`,
         this.IfBypassLoopSandbox.out(0).to(this._6ExtractViralSegments.in(0));
         this.IfBypassLoopSandbox.out(1).to(this.LoopClips.in(0));
         this.WriteSidecarJson.out(0).to(this.LoopClips.in(0));
-        this.PickRandomStreamer.out(0).to(this.FallbackDownload.in(0));
+        this.PickRandomStreamer.out(0).to(this.IfDownloadAllowed.in(0));
+        this.IfDownloadAllowed.out(0).to(this.FallbackDownload.in(0));
         this.FallbackDownload.out(0).to(this.FindStream.in(0));
         this.FallbackDownload.out(1).to(this.FindStream.in(0));
         this._1ExtractAudio.out(0).to(this._2ReadAudioFile.in(0));
+        this._1ExtractAudio.out(1).to(this.DeleteSourceVod.in(0));
         this.WaitSummaryError.out(0).to(this._1GlobalSummaryAi.in(0));
         this.WaitSummaryFallbackError.out(0).to(this._1GlobalSummaryFallback.in(0));
         this.WaitMergeError.out(0).to(this.ContextMergeAgent.in(0));
@@ -5586,6 +5796,9 @@ return previews.map(p => ({ json: p }));`,
         this.WaitHffaceError.out(0).to(this.RestoreHffaceInput.in(0));
         this.RestoreHffaceInput.out(0).to(this.ReadReference.in(0));
         this.WaitGroqVisionError.out(0).to(this.VisionPrep1.in(0));
+        this.DeleteSourceVod.out(0).to(this.CheckStreamShortsCreated.in(0));
+        this.CheckStreamShortsCreated.out(0).to(this.IfRetryNextStream.in(0));
+        this.IfRetryNextStream.out(0).to(this.FindStream.in(0));
 
         this._1GlobalSummaryAi.uses({
             ai_languageModel: this.GeminiModel1.output,
