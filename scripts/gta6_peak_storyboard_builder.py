@@ -654,7 +654,16 @@ def main():
 
     for idx, c in enumerate(candidates, start=1):
         c["rank"] = idx
+        old_id = c.get("candidate_id")
         c["candidate_id"] = f"cand_{idx}"
+        gp = c.get("grid_path", "")
+        if gp and os.path.exists(gp) and old_id != c["candidate_id"]:
+            new_gp = os.path.join(args.grid_dir, f"gta6_{c['candidate_id']}_grid.jpg")
+            try:
+                os.replace(gp, new_gp)
+                c["grid_path"] = new_gp
+            except Exception:
+                pass
 
     payload = {
         "stream_file": active_stream,

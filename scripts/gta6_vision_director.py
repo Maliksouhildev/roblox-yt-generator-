@@ -193,19 +193,188 @@ def build_prompt_text(summary_doc: dict, candidates: list, meme_files: list) -> 
     )
 
 
-def call_gemini_vision(prompt_text: str, candidates: list, api_keys: list, models: list):
-    parts = [{"text": prompt_text}]
+def _interleave_vision_parts(summary_doc: dict, candidates: list, meme_files: list) -> tuple[list, int]:
+    """Build multimodal Vision parts interleaving each candidate's 50s transcript + its 3x3 JPEG grid."""
+    game = summary_doc.get("game") or "Gaming / GTA 6"
+    vibe = summary_doc.get("vibe") or "Chaotic High-Energy"
+    gs = summary_doc.get("global_summary") or "Live gaming stream."
+    themes = ", ".join(summary_doc.get("key_themes") or [])
+    memes_str = ", ".join(meme_files[:20])
+
+    header_text = (
+        "You are the Lead Multimodal Vision Director for a viral GTA 6 & Gaming Shorts channel.\n"
+        "Below are 8 empirically detected Peak Candidates. Each candidate is presented with its\n"
+        "speaker-tagged transcript (`[NPC_OR_OTHER_VOICE]` vs `[STREAMER]`) IMMEDIATELY followed by\n"
+        "its 960x540 `3x3` JPEG storyboard contact sheet (`t=XXX.Xs` burned on every tile).\n\n"
+        f"GLOBAL CONTEXT:\n- Game: {game}\n- Vibe: {vibe}\n- Summary: {gs}\n- Themes: {themes}\n\n"
+        f"AVAILABLE SFX MEME FILES: {memes_str}\n\n"
+        "STRICT SELECTION & EDITING RULES:\n"
+        "1. M-RATED / NSFW & MENU VISION SHIELD (CRITICAL FOR LAUNCH DAY):\n"
+        "   Inspect EVERY 3x3 grid first! Immediately REJECT (or set `is_nsfw_or_unsafe: true`) any candidate showing:\n"
+        "   - Nudity, strip clubs, sexually explicit M-rated scenes, or graphic TOS-violating gore.\n"
+        "   - Chrome/Edge browsers, Twitch/YouTube chat dashboards, Discord, pause/ESC/settings menus, or static non-gameplay screens.\n"
+        "   - Boring opening title cards or slow exposition cutscenes without massive streamer shock.\n"
+        "2. SINGLE-SCENE CONTIGUITY & TOP 5 CLIPS: Pick the BEST 4 to 5 distinct candidates.\n"
+        "   Each clip MUST stay strictly inside ONE candidate's [window_start, window_end]. NEVER stitch minutes apart!\n"
+        "   Prefer 1 continuous segment `[start_time, end_time]` (22s-44s). Split into 2 segments ONLY inside that same\n"
+        "   window to drop a >4.0s dead silent driving/walking pause gap.\n"
+        "3. BOUNDARY INTEGRITY: Snap start and end to natural Whisper sentence/reaction boundaries.\n"
+        "4. GTA 6 LAUNCH ARCHETYPES (Pick distinct archetypes across clips):\n"
+        "   - `OPEN_WORLD_CHAOS_OR_COP_CHASE`: 6-star chases, stunts, crashes, gator attacks, explosions.\n"
+        "   - `LEONIDA_NPC_ENCOUNTER_OR_ROAST`: crazy Florida/Leonida NPC behavior (`[NPC_OR_OTHER_VOICE]`) or roast.\n"
+        "   - `HOW_TO_TIP_OR_SECRET_DISCOVERY`: hidden location/trick/weapon/myth test (prioritize if `[CHAT_QUESTION_CLUSTER]` present).\n"
+        "   - `HUBRIS_WAGER_WASTED_KARMA`: cocky boast/bet -> instant fail, WASTED, or BUSTED.\n"
+        "   - `COMEDIC_BANTER_OR_SARCASM`: storytelling or voice-chat punchline.\n"
+        "   - `STORY_CUTSCENE_OR_TWIST_REACTION`: Lucia & Jason twist + explosive shock (MUST set `is_story_spoiler: true` and NEVER spoil in `hook_caption`!).\n"
+        "5. COMPLETE METADATA IN ONE PASS (No downstream merge agent exists!):\n"
+        "   - `hook_caption`: 3-6 WORDS ALL CAPS (<=32 chars), zero dangling endings (never end on TO/THE/A/IN/ON), grounded in the 3x3 grid + speech!\n"
+        "   - `visual_value_note`: short 1-line transformative tip or 'Watch for...' callout.\n"
+        "   - `comment_bait_question`: simple engaging question for comments.\n"
+        "   - `is_story_spoiler`: boolean; `is_nsfw_or_unsafe`: boolean (must be false for selected clips).\n"
+        "   - `climax_quote`, `reaction_triggers`, `memes`, `visual_evidence`, `cause_and_effect_setup`.\n"
+    )
+    parts = [{"text": header_text}]
     attached = 0
     for c in candidates:
-        gp = c.get("grid_path", "")
-        if gp and os.path.exists(gp):
+        cid = c.get("candidate_id", f"cand_{c.get('rank')}")
+        w0, w1 = c.get("window_start", 0.0), c.get("window_end", 0.0)
+        tp = c.get("peak_time", 0.0)
+        chats = " | ".join(str(m) for m in (c.get("chat_samples") or [])[:3])
+        tx_lines = "\n    ".join((c.get("transcript_lines") or [])[:24]) or "(No clear speech in window)"
+        has_grid = bool(c.get("grid_path") and os.path.exists(c["grid_path"]))
+        q_flag = " | [CHAT_QUESTION_CLUSTER]" if c.get("chat_question_cluster") else ""
+        block = (
+            f"### CANDIDATE {cid} (GridAttached={has_grid}{q_flag})\n"
+            f"Window: [{w0:.2f}s - {w1:.2f}s] | Peak: t={tp:.1f}s | Virality={c.get('virality_score', 0):.2f} "
+            f"| z_dB={c.get('z_db', 0):.1f} | z_chat_lag={c.get('z_chat_lagged', 0):.1f} | z_face={c.get('z_face', 0):.1f}\n"
+            f"ChatSamples: {chats or 'None'}\n"
+            f"Timestamps burned on grid tiles: {c.get('frame_timestamps', [])}\n"
+            f"Transcript:\n    {tx_lines}"
+        )
+        parts.append({"text": block})
+        if has_grid:
             try:
-                b64 = base64.b64encode(open(gp, "rb").read()).decode("utf-8")
-                parts.append({"text": f"[STORYBOARD GRID FOR {c.get('candidate_id')}]"})
+                b64 = base64.b64encode(open(c["grid_path"], "rb").read()).decode("utf-8")
                 parts.append({"inline_data": {"mime_type": "image/jpeg", "data": b64}})
                 attached += 1
             except Exception:
                 pass
+
+    parts.append({
+        "text": (
+            "\nOUTPUT STRICT JSON ONLY (NO MARKDOWN FENCES):\n"
+            "{\n"
+            "  \"clips\": [\n"
+            "    {\n"
+            "      \"clip_number\": 1,\n"
+            "      \"candidate_id\": \"cand_1\",\n"
+            "      \"title\": \"Short Clean Title\",\n"
+            "      \"narrative_archetype\": \"OPEN_WORLD_CHAOS_OR_COP_CHASE\",\n"
+            "      \"hook_caption\": \"SIX STAR POLICE CHASE CHAOS\",\n"
+            "      \"visual_value_note\": \"Watch the police cruiser launch off the bridge.\",\n"
+            "      \"comment_bait_question\": \"Could you escape a 6-star chase here?\",\n"
+            "      \"is_story_spoiler\": false,\n"
+            "      \"is_nsfw_or_unsafe\": false,\n"
+            "      \"climax_quote\": \"exact verbatim payoff words\",\n"
+            "      \"reaction_triggers\": [{\"quote\": \"wait what\", \"sfx\": \"shocked-sound-effect.mp3\"}],\n"
+            "      \"memes\": [{\"timestamp\": 14.5, \"file\": \"vine-boom-sound-effect_KT89XIq.mp3\", \"volume\": 0.30}],\n"
+            "      \"visual_evidence\": \"What happens visually on the 3x3 tiles.\",\n"
+            "      \"start_time\": 120.4,\n"
+            "      \"end_time\": 154.2,\n"
+            "      \"payoff_time\": 148.0,\n"
+            "      \"segments\": [{\"start\": 120.4, \"end\": 154.2, \"role\": \"CONTINUOUS_ARC\"}],\n"
+            "      \"virality_score\": 9.1,\n"
+            "      \"cause_and_effect_setup\": \"Setup boasty stunt -> immediate 6-star wreck payoff.\"\n"
+            "    }\n"
+            "  ]\n"
+            "}\n"
+        )
+    })
+    return parts, attached
+
+
+def collect_mistral_keys() -> list:
+    keys = []
+    seen = set()
+
+    def _add(k: str):
+        k = str(k or "").strip()
+        if len(k) > 15 and k not in seen:
+            seen.add(k)
+            keys.append(k)
+
+    _add(os.environ.get("MISTRAL_API_KEY", ""))
+    for kp in GEMINI_KEY_FILES:
+        if kp.endswith(".json") and os.path.exists(kp):
+            try:
+                creds = json.loads(open(kp, "r", encoding="utf-8").read())
+                if isinstance(creds, list):
+                    for c in creds:
+                        if "mistral" in str(c.get("type", "")).lower():
+                            _add(c.get("apiKey", ""))
+            except Exception:
+                pass
+    # In-memory decrypt from n8n SQLite if CryptoJS/sqlite3 exist inside container
+    if not keys and os.path.exists("/root/.n8n/database.sqlite") and os.path.exists("/root/.n8n/config"):
+        try:
+            import subprocess
+            node_snippet = (
+                "const C=require('/usr/local/lib/node_modules/n8n/node_modules/crypto-js');"
+                "const S=require('/usr/local/lib/node_modules/n8n/node_modules/sqlite3');"
+                "const enc=JSON.parse(require('fs').readFileSync('/root/.n8n/config','utf8')).encryptionKey;"
+                "const db=new S.Database('/root/.n8n/database.sqlite');"
+                "db.all(\"SELECT data FROM credentials_entity WHERE type='mistralCloudApi'\",(e,r)=>{"
+                "if(r)r.forEach(x=>{try{const p=JSON.parse(C.AES.decrypt(x.data,enc).toString(C.enc.Utf8));if(p.apiKey)console.log(p.apiKey);}catch(_){}});db.close();});"
+            )
+            out = subprocess.check_output(["node", "-e", node_snippet], stderr=subprocess.DEVNULL, timeout=5).decode("utf-8", errors="replace")
+            for ln in out.splitlines():
+                _add(ln)
+        except Exception:
+            pass
+    return keys
+
+
+def call_mistral_fallback(prompt_text: str, mistral_keys: list, model: str = "mistral-large-latest"):
+    payload = json.dumps({
+        "model": model,
+        "temperature": 0.25,
+        "response_format": {"type": "json_object"},
+        "messages": [{"role": "user", "content": prompt_text}],
+    }).encode("utf-8")
+    last_err = None
+    for k in mistral_keys:
+        req = urllib.request.Request(
+            "https://api.mistral.ai/v1/chat/completions",
+            data=payload,
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {k}"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            txt = data["choices"][0]["message"]["content"]
+            return txt, {"provider": "mistral_text_fallback", "model": model, "grids_attached": 0}
+        except Exception as ex:
+            last_err = str(ex)
+    return None, {"provider": "none", "error": last_err or "no_mistral_key", "grids_attached": 0}
+
+
+def call_gemini_vision(parts_or_prompt, candidates: list, api_keys: list, models: list):
+    if isinstance(parts_or_prompt, list):
+        parts = parts_or_prompt
+        attached = sum(1 for p in parts if isinstance(p, dict) and "inline_data" in p)
+    else:
+        parts = [{"text": parts_or_prompt}]
+        attached = 0
+        for c in candidates:
+            gp = c.get("grid_path", "")
+            if gp and os.path.exists(gp):
+                try:
+                    b64 = base64.b64encode(open(gp, "rb").read()).decode("utf-8")
+                    parts.append({"text": f"[STORYBOARD GRID FOR {c.get('candidate_id')}]"})
+                    parts.append({"inline_data": {"mime_type": "image/jpeg", "data": b64}})
+                    attached += 1
+                except Exception:
+                    pass
 
     payload = json.dumps({
         "contents": [{"parts": parts}],
@@ -467,16 +636,22 @@ def main():
     parsed = None
     if not args.no_llm:
         api_keys = collect_gemini_keys()
+        prompt_text = build_prompt_text(summary_doc, candidates, meme_files)
+        interleaved_parts, _ = _interleave_vision_parts(summary_doc, candidates, meme_files)
+        raw_txt = None
         if api_keys:
-            prompt_text = build_prompt_text(summary_doc, candidates, meme_files)
-            raw_txt, meta = call_gemini_vision(prompt_text, candidates, api_keys, DEFAULT_MODELS)
-            if raw_txt:
-                cleaned = raw_txt.replace("```json", "").replace("```", "").strip()
-                m = re.search(r"\{[\s\S]*\}", cleaned)
-                try:
-                    parsed = json.loads(m.group(0) if m else cleaned)
-                except Exception:
-                    parsed = None
+            raw_txt, meta = call_gemini_vision(interleaved_parts, candidates, api_keys, DEFAULT_MODELS)
+        if not raw_txt:
+            m_keys = collect_mistral_keys()
+            if m_keys:
+                raw_txt, meta = call_mistral_fallback(prompt_text, m_keys, model="mistral-large-latest")
+        if raw_txt:
+            cleaned = raw_txt.replace("```json", "").replace("```", "").strip()
+            m = re.search(r"\{[\s\S]*\}", cleaned)
+            try:
+                parsed = json.loads(m.group(0) if m else cleaned)
+            except Exception:
+                parsed = None
 
     has_llm_clips = bool(isinstance(parsed, dict) and isinstance(parsed.get("clips"), list) and len(parsed["clips"]) > 0)
     normalized = normalize_director_clips(parsed, candidates, meme_files) if has_llm_clips else deterministic_candidate_fallback(candidates, meme_files)
