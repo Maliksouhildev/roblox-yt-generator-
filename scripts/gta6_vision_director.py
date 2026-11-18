@@ -10,6 +10,7 @@ and deterministic fallback), and outputs rich clip objects directly compatible
 with `5. Split Clips` and `Create Subtitle Binary` (eliminating Context Merge Agent).
 """
 
+from bisect import bisect_left
 import argparse
 import base64
 import json
@@ -46,9 +47,11 @@ GTA6_ARCHETYPES = [
 
 DANGLING_HOOK_END_RE = re.compile(
     r"\b(TO|A|AN|THE|OF|IN|ON|AT|FOR|WITH|FROM|BY|AND|OR|BUT|IF|IS|ARE|WAS|WERE|"
-    r"DO|DOES|DID|NOT|WANT|GOING|HAVE|HAS|MY|YOUR|OUR|THEIR|THIS|THAT|I|ME|HE|SHE|WE|THEY|LIKE)$",
+    r"DO|DOES|DID|NOT|WANT|GOING|HAVE|HAS|MY|YOUR|OUR|THEIR|THIS|THAT|I|ME|HE|SHE|WE|THEY|LIKE|WE'RE|I'M|IT'S|I'VE|WE'VE|YOU'VE|THEY'VE|HE'S|SHE'S|DON'T|DIDN'T|WON'T|CAN'T)\s*$",
     re.I,
 )
+
+FILLER_OPENERS_RE = re.compile(r"^(and|so|but|then|or|because|though|uh+|um+)\b", re.I)
 
 BANNED_HOOK_RE = re.compile(
     r"^(I CALLED TIME OUT|HE ACTUALLY FELL FOR IT|THAT DOES NOT COUNT|"
@@ -56,6 +59,20 @@ BANNED_HOOK_RE = re.compile(
     r"NO AUDIO FOUND|NO TRANSCRIPT|UNDEFINED|NULL|ERROR|WATCH THIS CLIP)$",
     re.I,
 )
+
+
+def _target_clip_range(candidates: list, cand_doc: dict | None = None) -> tuple[int, int]:
+    if isinstance(cand_doc, dict) and cand_doc.get("recommended_max_clips"):
+        return (
+            int(cand_doc.get("recommended_min_clips") or 1),
+            int(cand_doc.get("recommended_max_clips") or 5),
+        )
+    max_t = max([float(c.get("window_end", 0.0)) for c in (candidates or [])] + [0.0])
+    if max_t > 0.0 and max_t < 480.0 and len(candidates) <= 4:
+        return 1, 2
+    if max_t > 0.0 and max_t <= 1500.0 and len(candidates) <= 6:
+        return 2, 3
+    return 4, 5
 
 
 def _load_json(path: str):
@@ -108,7 +125,7 @@ def list_meme_files(meme_dir: str = "/files/memes") -> list:
     return files or ["vine-boom-sound-effect_KT89XIq.mp3"]
 
 
-def build_prompt_text(summary_doc: dict, candidates: list, meme_files: list) -> str:
+def build_prompt_text(summary_doc: dict, candidates: list, meme_files: list, min_clips: int = 4, max_clips: int = 5) -> str:
     game = summary_doc.get("game") or "Gaming / GTA 6"
     vibe = summary_doc.get("vibe") or "Chaotic High-Energy"
     gs = summary_doc.get("global_summary") or "Live gaming stream."
@@ -135,7 +152,7 @@ def build_prompt_text(summary_doc: dict, candidates: list, meme_files: list) -> 
     memes_str = ", ".join(meme_files[:20])
     return (
         "You are the Lead Multimodal Vision Director for a viral GTA 6 & Gaming Shorts channel.\n"
-        "You are given 8 empirically detected Peak Candidates, each with a 3x3 JPEG storyboard grid\n"
+        f"You are given {len(candidates)} empirically detected Peak Candidates, each with a 3x3 JPEG storyboard grid\n"
         "(9 frames labeled `t=XXX.Xs` at the top-left of each tile) AND its speaker-tagged transcript\n"
         "(`[NPC_OR_OTHER_VOICE]` vs `[STREAMER]`).\n\n"
         f"GLOBAL CONTEXT:\n- Game: {game}\n- Vibe: {vibe}\n- Summary: {gs}\n- Themes: {themes}\n\n"
@@ -146,11 +163,11 @@ def build_prompt_text(summary_doc: dict, candidates: list, meme_files: list) -> 
         "   - Nudity, strip clubs, sexually explicit M-rated scenes, or graphic TOS-violating gore.\n"
         "   - Chrome/Edge browsers, Twitch/YouTube chat dashboards, Discord, pause/ESC/settings menus, or static non-gameplay screens.\n"
         "   - Boring opening title cards or slow exposition cutscenes without massive streamer shock.\n"
-        "2. SINGLE-SCENE CONTIGUITY & TOP 5 CLIPS: Pick the BEST 4 to 5 distinct candidates.\n"
+        f"2. SINGLE-SCENE CONTIGUITY & TARGET CLIP COUNT: Pick the BEST {min_clips} to {max_clips} distinct candidates.\n"
         "   Each clip MUST stay strictly inside ONE candidate's [window_start, window_end]. NEVER stitch minutes apart!\n"
         "   Prefer 1 continuous segment `[start_time, end_time]` (22s-44s). Split into 2 segments ONLY inside that same\n"
         "   window to drop a >4.0s dead silent driving/walking pause gap.\n"
-        "3. BOUNDARY INTEGRITY: Snap start and end to natural Whisper sentence/reaction boundaries.\n"
+        "3. BOUNDARY INTEGRITY: Snap start and end to natural Whisper sentence/reaction boundaries, keeping 2.0s-4.5s aftermath after payoff.\n"
         "4. GTA 6 LAUNCH ARCHETYPES (Pick distinct archetypes across clips):\n"
         "   - `OPEN_WORLD_CHAOS_OR_COP_CHASE`: 6-star chases, stunts, crashes, gator attacks, explosions.\n"
         "   - `LEONIDA_NPC_ENCOUNTER_OR_ROAST`: crazy Florida/Leonida NPC behavior (`[NPC_OR_OTHER_VOICE]`) or roast.\n"
@@ -200,7 +217,7 @@ def build_prompt_text(summary_doc: dict, candidates: list, meme_files: list) -> 
     )
 
 
-def _interleave_vision_parts(summary_doc: dict, candidates: list, meme_files: list) -> tuple[list, int]:
+def _interleave_vision_parts(summary_doc: dict, candidates: list, meme_files: list, min_clips: int = 4, max_clips: int = 5) -> tuple[list, int]:
     """Build multimodal Vision parts interleaving each candidate's 50s transcript + its 3x3 JPEG grid."""
     game = summary_doc.get("game") or "Gaming / GTA 6"
     vibe = summary_doc.get("vibe") or "Chaotic High-Energy"
@@ -210,7 +227,7 @@ def _interleave_vision_parts(summary_doc: dict, candidates: list, meme_files: li
 
     header_text = (
         "You are the Lead Multimodal Vision Director for a viral GTA 6 & Gaming Shorts channel.\n"
-        "Below are 8 empirically detected Peak Candidates. Each candidate is presented with its\n"
+        f"Below are {len(candidates)} empirically detected Peak Candidates. Each candidate is presented with its\n"
         "speaker-tagged transcript (`[NPC_OR_OTHER_VOICE]` vs `[STREAMER]`) IMMEDIATELY followed by\n"
         "its 960x540 `3x3` JPEG storyboard contact sheet (`t=XXX.Xs` burned on every tile).\n\n"
         f"GLOBAL CONTEXT:\n- Game: {game}\n- Vibe: {vibe}\n- Summary: {gs}\n- Themes: {themes}\n\n"
@@ -221,11 +238,11 @@ def _interleave_vision_parts(summary_doc: dict, candidates: list, meme_files: li
         "   - Nudity, strip clubs, sexually explicit M-rated scenes, or graphic TOS-violating gore.\n"
         "   - Chrome/Edge browsers, Twitch/YouTube chat dashboards, Discord, pause/ESC/settings menus, or static non-gameplay screens.\n"
         "   - Boring opening title cards or slow exposition cutscenes without massive streamer shock.\n"
-        "2. SINGLE-SCENE CONTIGUITY & TOP 5 CLIPS: Pick the BEST 4 to 5 distinct candidates.\n"
+        f"2. SINGLE-SCENE CONTIGUITY & TARGET CLIP COUNT: Pick the BEST {min_clips} to {max_clips} distinct candidates.\n"
         "   Each clip MUST stay strictly inside ONE candidate's [window_start, window_end]. NEVER stitch minutes apart!\n"
         "   Prefer 1 continuous segment `[start_time, end_time]` (22s-44s). Split into 2 segments ONLY inside that same\n"
         "   window to drop a >4.0s dead silent driving/walking pause gap.\n"
-        "3. BOUNDARY INTEGRITY: Snap start and end to natural Whisper sentence/reaction boundaries.\n"
+        "3. BOUNDARY INTEGRITY: Snap start and end to natural Whisper sentence/reaction boundaries, keeping 2.0s-4.5s aftermath after payoff.\n"
         "4. GTA 6 LAUNCH ARCHETYPES (Pick distinct archetypes across clips):\n"
         "   - `OPEN_WORLD_CHAOS_OR_COP_CHASE`: 6-star chases, stunts, crashes, gator attacks, explosions.\n"
         "   - `LEONIDA_NPC_ENCOUNTER_OR_ROAST`: crazy Florida/Leonida NPC behavior (`[NPC_OR_OTHER_VOICE]`) or roast.\n"
@@ -419,8 +436,9 @@ def call_gemini_vision(parts_or_prompt, candidates: list, api_keys: list, models
 
 
 def _guard_and_format_hook(raw_hook: str, raw_text: str, title: str) -> str:
-    """Fix 1.4: 3-6 words (<=32 chars), semantic homophone cleanup, and zero dangling function endings."""
+    """Fix 1.4: 3-6 words (<=28-32 chars), semantic homophone cleanup, and zero dangling function endings."""
     clean = re.sub(r"[^A-Za-z0-9'\s!?-]", " ", str(raw_hook or "")).upper()
+    clean = re.sub(r"[-]+", " ", clean)
     clean = re.sub(r"\s+", " ", clean).strip()
     ctx = f"{title} {raw_text}".lower()
     if "coolest" in ctx:
@@ -428,31 +446,39 @@ def _guard_and_format_hook(raw_hook: str, raw_text: str, title: str) -> str:
     clean = re.sub(r"\bRAGE\s+BADER\b", "RAGE BAITER", clean)
 
     words = clean.split()
+    while words and words[0] in {"AND", "SO", "BUT", "BECAUSE", "THEN", "OR", "WELL"} and len(words) > 3:
+        words.pop(0)
+    if re.match(r"^(PEAK MOMENT|CLIP)\b", " ".join(words)):
+        words = []
     if len(words) > 6:
         words = words[:6]
-    while words and len(" ".join(words)) > 32 and len(words) > 3:
+    while words and len(" ".join(words)) > 28 and len(words) > 3:
         words.pop()
     while words and DANGLING_HOOK_END_RE.match(words[-1]) and len(words) > 3:
         words.pop()
-    if not words or len(words) < 3 or DANGLING_HOOK_END_RE.match(words[-1]):
+    while words and len(" ".join(words)) > 32 and len(words) > 1:
+        words.pop()
+    if not words or len(words) < 3 or len(" ".join(words)) > 32 or DANGLING_HOOK_END_RE.match(words[-1]):
         return _safe_hook_from_text(raw_text, title)
     return " ".join(words)
 
 
 def _safe_hook_from_text(text: str, title: str) -> str:
     clean_words = re.findall(r"[A-Za-z0-9']+", str(text or ""))
-    stop = {"AND", "THE", "THIS", "THAT", "WITH", "JUST", "LIKE", "YEAH", "OKAY", "UH", "UM", "IF", "OR", "TO", "OF", "IN", "ON", "A", "AN", "FOR", "AT"}
-    kept = [w.upper() for w in clean_words if w.upper() not in stop][:5]
+    stop = {"AND", "THE", "THIS", "THAT", "WITH", "JUST", "LIKE", "YEAH", "OKAY", "UH", "UM", "IF", "OR", "TO", "OF", "IN", "ON", "A", "AN", "FOR", "AT", "BECAUSE", "SO", "BUT"}
+    kept = [w.upper() for w in clean_words if w.upper() not in stop and len(w) <= 12][:5]
     while kept and DANGLING_HOOK_END_RE.match(kept[-1]) and len(kept) > 3:
         kept.pop()
-    while kept and len(" ".join(kept)) > 32 and len(kept) > 3:
+    while kept and len(" ".join(kept)) > 30 and len(kept) > 3:
         kept.pop()
-    if len(kept) >= 3 and not DANGLING_HOOK_END_RE.match(kept[-1]):
+    while kept and len(" ".join(kept)) > 32 and len(kept) > 1:
+        kept.pop()
+    if len(kept) >= 3 and len(" ".join(kept)) <= 32 and not DANGLING_HOOK_END_RE.match(kept[-1]):
         return " ".join(kept)
-    t_words = [w.upper() for w in re.findall(r"[A-Za-z0-9']+", str(title or ""))][:5]
-    while t_words and DANGLING_HOOK_END_RE.match(t_words[-1]) and len(t_words) > 3:
+    t_words = [w.upper() for w in re.findall(r"[A-Za-z0-9']+", str(title or "")) if len(w) <= 12][:5]
+    while t_words and (DANGLING_HOOK_END_RE.match(t_words[-1]) or len(" ".join(t_words)) > 32) and len(t_words) > 3:
         t_words.pop()
-    return " ".join(t_words)[:32] if len(t_words) >= 3 else "WILD STREAMER REACTION MOMENT"
+    return " ".join(t_words)[:32] if (len(t_words) >= 3 and len(" ".join(t_words)) <= 32) else "WILD STREAMER REACTION MOMENT"
 
 
 def _strip_speaker_prefix(line: str) -> str:
@@ -512,7 +538,191 @@ def _build_short_description(cl: dict, cand_raw_txt: str = "", climax_q: str = "
     return " ".join(parts).strip() or "Unfiltered live GTA 6 reaction caught on stream."
 
 
-def deterministic_candidate_fallback(candidates: list, meme_files: list) -> dict:
+def _words_text(words: list, t0: float, t1: float) -> str:
+    if not words:
+        return ""
+    out = []
+    for w in words:
+        ws = float(w.get("start", 0.0))
+        we = float(w.get("end", ws))
+        mid = (ws + we) * 0.5
+        if t0 <= mid <= t1:
+            tok = str(w.get("word", "")).strip()
+            if tok:
+                out.append(tok)
+    return " ".join(out).strip()
+
+
+def _trim_leading_dead_air(st: float, en: float, words: list, payoff_t: float) -> tuple[float, float]:
+    """Advance clip start past >4.2s internal silent gaps when sufficient spoken duration remains before payoff."""
+    if not words:
+        return st, en
+    seg_ws = [w for w in words if float(w.get("end", 0.0)) >= st and float(w.get("start", 0.0)) <= en]
+    if len(seg_ws) < 2:
+        return st, en
+    for i in range(len(seg_ws) - 1):
+        g = float(seg_ws[i + 1].get("start", 0.0)) - float(seg_ws[i].get("end", 0.0))
+        if g > 4.2:
+            after_start = float(seg_ws[i + 1].get("start", st)) - 0.10
+            if (en - after_start) >= 21.0 and after_start <= payoff_t - 6.0:
+                return round(after_start, 2), en
+            before_end = float(seg_ws[i].get("end", en)) + 0.15
+            if (before_end - st) >= 21.0 and payoff_t <= before_end + 1.0:
+                return st, round(before_end, 2)
+    return st, en
+
+
+def _snap_boundary_with_words(
+    st: float,
+    en: float,
+    words: list,
+    w_starts: list,
+    payoff_t: float,
+    lo_bound: float,
+    hi_bound: float,
+) -> tuple[float, float, str, str, str]:
+    """
+    Snap [st, en] cleanly to Whisper word/sentence boundaries:
+    - Start on terminal punctuation [.!?] or pause >= 0.42s without leading filler/ellipsis.
+    - End on terminal punctuation [.!?] or pause >= 0.42s preserving 2.0s-4.5s aftermath past payoff_t.
+    """
+    if not words:
+        return round(st, 2), round(en, 2), "", "", ""
+    st, en = _trim_leading_dead_air(st, en, words, payoff_t)
+
+    max_end = float(words[-1].get("end", hi_bound))
+    lo = max(3.0, lo_bound - 4.0)
+    hi = min(max_end, hi_bound + 6.0)
+
+    # 1. Find clean start candidate near `st` (search wider window [lo, st+10] to avoid mid-sentence or ellipsis starts)
+    clean_starts = []
+    idx0 = max(0, bisect_left(w_starts, max(lo, st - 8.0)))
+    for i in range(idx0, len(words)):
+        ws = float(words[i].get("start", 0.0))
+        if ws > st + 10.5:
+            break
+        tok = str(words[i].get("word", "")).strip()
+        if "..." in tok or "…" in tok:
+            continue
+        if i == 0:
+            clean_starts.append((abs(ws - st), ws))
+            continue
+        prev_tok = str(words[i - 1].get("word", "")).strip()
+        prev_end = float(words[i - 1].get("end", ws))
+        gap = max(0.0, ws - prev_end)
+        ends_term = bool(re.search(r"(?<!\.)[.!?][\"'\)]*$", prev_tok)) and ("..." not in prev_tok and "…" not in prev_tok)
+        if (ends_term or gap >= 0.42) and not FILLER_OPENERS_RE.match(tok) and not tok.startswith("..."):
+            # Also ensure next 4 words don't contain an orphan ellipsis break (`...`)
+            lookahead = " ".join(str(words[k].get("word", "")).strip() for k in range(i, min(len(words), i + 5)))
+            ell_pen = 50.0 if ("..." in lookahead or "…" in lookahead) else 0.0
+            if (max(en, st + 28.0) - ws) >= 20.0:
+                clean_starts.append((abs(ws - st) + (0.0 if ends_term else 2.5) + ell_pen, max(3.0, ws - 0.08)))
+    if clean_starts:
+        clean_starts.sort(key=lambda x: x[0])
+        st = round(clean_starts[0][1], 2)
+
+    # 2. Ensure payoff aftermath (target 2.2s - 4.5s after payoff_t) and clean terminal ending
+    min_target_end = max(st + 22.0, payoff_t + 2.2 if payoff_t > st else st + 22.0)
+    min_target_end = min(hi, min_target_end, st + 43.0)
+    max_target_end = min(hi, st + 44.5)
+
+    clean_ends = []
+    idx_e = max(0, bisect_left(w_starts, st + 16.0))
+    for i in range(idx_e, len(words)):
+        we = float(words[i].get("end", words[i].get("start", 0.0)))
+        if we > max_target_end:
+            break
+        if we < st + 20.5:
+            continue
+        tok = str(words[i].get("word", "")).strip()
+        next_start = float(words[i + 1].get("start", we + 4.0)) if i + 1 < len(words) else (we + 4.0)
+        gap_after = max(0.0, next_start - we)
+        ends_term = bool(re.search(r"(?<!\.)[.!?][\"'\)]*$", tok)) and ("..." not in tok and "…" not in tok)
+        dangling_end = bool(re.search(r"(?:--|—|,|:|\.\.\.|…|\b(?:and|but|so|or|to|the|a|an|if|that|with|for|of|in|on|at|like))$", tok, re.I))
+        if (ends_term or gap_after >= 0.42) and not dangling_end:
+            pref = max(min_target_end, min(max_target_end, payoff_t + 3.2 if payoff_t > st else en))
+            pen = (0.0 if ends_term else 3.0) + (8.0 if (payoff_t > st and we < payoff_t + 1.9 and we < max_end - 2.0) else 0.0)
+            clean_ends.append((abs(we - pref) + pen, min(max_end, we + 0.12)))
+    if clean_ends:
+        clean_ends.sort(key=lambda x: x[0])
+        en = round(clean_ends[0][1], 2)
+    else:
+        en = round(min(max_target_end, max(min_target_end, en)), 2)
+
+    if en - st < 20.0:
+        en = round(min(max_end, st + 24.0), 2)
+
+    pre_words = [
+        str(w.get("word", "")).strip()
+        for w in words
+        if max(0.0, st - 15.0) <= ((float(w.get("start", 0.0)) + float(w.get("end", w.get("start", 0.0)))) * 0.5) < st - 0.02
+    ][-10:]
+    pre_ctx = " ".join(pre_words).strip()
+    post_ctx = _words_text(words, en + 0.05, min(max_end, en + 5.0))
+    spoken = _words_text(words, st, en)
+    return st, en, spoken, pre_ctx, post_ctx
+
+
+def _map_meme_timestamp(raw_ts, clean_segs: list, cand: dict, payoff_t: float) -> float:
+    """Fix 1.5: Map MM.SS float hints or stream-absolute times into clip-relative seconds deterministically."""
+    total_dur = max(2.0, sum(s["end"] - s["start"] for s in clean_segs))
+    s0 = clean_segs[0]["start"] if clean_segs else 0.0
+    try:
+        val = float(raw_ts)
+    except (TypeError, ValueError):
+        val = -1.0
+
+    # Check if MM.SS decimal encoding (e.g. 22.12 when clip starts past 1200s)
+    if val >= 0.0 and s0 > 120.0 and 0.0 < val < s0 and (val * 60.0) >= s0 - 15.0:
+        mins = int(val)
+        secs = int(round((val - mins) * 100.0))
+        if 0 <= secs < 60:
+            val = float(mins * 60 + secs)
+
+    # Check if stream-absolute timestamp inside segments
+    if val >= s0 - 1.0:
+        acc = 0.0
+        for seg in clean_segs:
+            if val <= seg["end"] + 1.0:
+                rel = acc + max(0.0, val - seg["start"])
+                return round(max(0.8, min(total_dur - 0.8, rel)), 2)
+            acc += seg["end"] - seg["start"]
+
+    # Already clip-relative?
+    if 0.8 <= val <= total_dur - 0.8:
+        return round(val, 2)
+
+    # Fallback: payoff_time relative offset
+    acc = 0.0
+    for seg in clean_segs:
+        if payoff_t <= seg["end"] + 1.0:
+            rel_p = acc + max(1.0, payoff_t - seg["start"])
+            return round(max(1.0, min(total_dur - 1.0, rel_p)), 2)
+        acc += seg["end"] - seg["start"]
+    return round(max(1.5, total_dur * 0.72), 2)
+
+
+def _signal_justification_from_cand(cand: dict, segs: list) -> dict:
+    tags = list((cand or {}).get("signal_tags") or [])
+    for s in (segs or []):
+        tags.extend(s.get("signal_tags_in_window") or [])
+    chat_t = next((t for t in tags if any(k in t for k in ("CHAT_BURST", "LAUGH_BURST", "CHAT_QUESTION_CLUSTER"))), "NONE")
+    db_t = next((t for t in tags if any(k in t for k in ("SCREAM", "dB_PEAK"))), "NONE")
+    face_t = next((t for t in tags if "FACE:" in t), "NONE")
+    return {
+        "chat_burst": chat_t,
+        "db_spike": db_t,
+        "face_emotion": face_t,
+        "viewer_voice_present": any("VIEWER_OR_GAME_VOICE" in t or "NPC_OR_OTHER_VOICE" in t for t in tags),
+    }
+
+
+def deterministic_candidate_fallback(
+    candidates: list,
+    meme_files: list,
+    words: list | None = None,
+    max_clips: int | None = None,
+) -> dict:
     """Grounded deterministic single-scene fallback spanning the 6 GTA 6 Launch Archetypes."""
     sfx = "vine-boom-sound-effect_KT89XIq.mp3" if "vine-boom-sound-effect_KT89XIq.mp3" in meme_files else meme_files[0]
     arch_pool = [
@@ -522,18 +732,28 @@ def deterministic_candidate_fallback(candidates: list, meme_files: list) -> dict
         "STORY_CUTSCENE_OR_TWIST_REACTION",
         "HOW_TO_TIP_OR_SECRET_DISCOVERY",
     ]
+    w_list = words or []
+    w_starts = [float(w.get("start", 0.0)) for w in w_list]
+    if max_clips is None:
+        _, max_clips = _target_clip_range(candidates)
+
     clips = []
-    for idx, c in enumerate(candidates[:5], start=1):
+    for idx, c in enumerate(candidates[:max_clips], start=1):
         w0 = float(c.get("window_start", 10.0))
         w1 = float(c.get("window_end", w0 + 36.0))
         tp = float(c.get("peak_time", (w0 + w1) * 0.5))
-        # Clamp strictly to 26-38s contiguous single-scene arc centered before peak
-        st = max(w0, round(tp - 24.0, 2))
-        en = min(w1, round(st + 34.0, 2))
+        # Clamp cleanly to 24-38s contiguous arc before/after peak, snapped to Whisper sentences
+        st = max(w0, round(tp - 26.0, 2))
+        en = min(w1, round(tp + 4.0, 2))
         if en - st < 24.0:
             st = max(w0, round(en - 28.0, 2))
+        spoken_seg, pre_ctx, post_ctx = c.get("raw_text") or "", "", ""
+        if w_list:
+            st, en, spoken_seg, pre_ctx, post_ctx = _snap_boundary_with_words(st, en, w_list, w_starts, tp, w0, w1)
+            spoken_seg = spoken_seg or (c.get("raw_text") or "")
+
         lines = c.get("transcript_lines") or []
-        raw_txt = c.get("raw_text") or ""
+        raw_txt = spoken_seg or (c.get("raw_text") or "")
         has_npc = any("[NPC_OR_OTHER_VOICE]" in ln for ln in lines)
         used = {cl["narrative_archetype"] for cl in clips}
         if c.get("chat_question_cluster") and "HOW_TO_TIP_OR_SECRET_DISCOVERY" not in used:
@@ -551,11 +771,22 @@ def deterministic_candidate_fallback(candidates: list, meme_files: list) -> dict
                 break
         hook = _guard_and_format_hook(climax_q or raw_txt, raw_txt, f"PEAK MOMENT {idx}")
         smart_title = _smart_clip_title(hook, raw_txt, climax_q, arch, idx)
-        rel_peak = max(3.0, min(round((en - st) - 1.5, 1), round(tp - st, 1)))
+        clean_segs = [{
+            "start": round(st, 2),
+            "end": round(en, 2),
+            "duration": round(en - st, 2),
+            "role": "CONTINUOUS_ARC",
+            "spoken_text": raw_txt,
+            "signal_tags_in_window": list(c.get("signal_tags") or []),
+        }]
+        rel_peak = _map_meme_timestamp(tp, clean_segs, c, tp)
         is_spoiler = (arch == "STORY_CUTSCENE_OR_TWIST_REACTION")
         visual_note = f'Wait for the reaction at {rel_peak:.0f}s when "{climax_q}" hits.' if climax_q else "Wait for the live reaction spike mid-clip."
         short_desc = _build_short_description({}, raw_txt, climax_q, visual_note)
+        if len(short_desc) < 20:
+            short_desc = f'High-energy {arch.replace("_", " ").lower()} reaction peaking around {tp:.0f}s on stream.'
         bait_q = f'Did you see that coming at "{climax_q[:38]}"?' if climax_q else "How would you react if this happened live?"
+        vis_ev = f"3x3 storyboard centered around reaction peak at t={tp:.1f}s with active webcam reaction."
         clips.append({
             "clip_number": idx,
             "candidate_id": c.get("candidate_id", f"cand_{idx}"),
@@ -570,48 +801,64 @@ def deterministic_candidate_fallback(candidates: list, meme_files: list) -> dict
             "climax_quote": climax_q,
             "reaction_triggers": [{"quote": climax_q[:30], "sfx": sfx}] if climax_q else [],
             "memes": [{"timestamp": rel_peak, "file": sfx, "volume": 0.30}],
-            "visual_evidence": f"Clip centered around stream reaction peak at t={tp:.1f}s.",
+            "visual_evidence": vis_ev,
+            "visual_event_description": vis_ev,
             "start_time": round(st, 2),
             "end_time": round(en, 2),
             "payoff_time": round(tp, 2),
+            "total_duration_sec": round(en - st, 2),
             "segments": [{"start": round(st, 2), "end": round(en, 2), "role": "CONTINUOUS_ARC"}],
+            "edl_segments": clean_segs,
             "virality_score": max(7.5, min(9.8, round(7.2 + float(c.get("virality_score", 1.5)) * 0.35, 1))),
             "cause_and_effect_setup": short_desc,
             "assembled_spoken_script": raw_txt,
+            "pre_hook_context_text": pre_ctx,
+            "post_payoff_context_text": post_ctx,
+            "signal_justification": _signal_justification_from_cand(c, clean_segs),
         })
     return {"clips": clips}
 
 
-def normalize_director_clips(parsed: dict, candidates: list, meme_files: list) -> dict:
+def normalize_director_clips(
+    parsed: dict,
+    candidates: list,
+    meme_files: list,
+    words: list | None = None,
+    max_clips: int | None = None,
+) -> dict:
     """Enforce single-scene window bounds, <=2 segments max, valid meme files & clean hooks."""
     cand_map = {c.get("candidate_id"): c for c in candidates}
     meme_set = set(meme_files)
     default_sfx = "vine-boom-sound-effect_KT89XIq.mp3" if "vine-boom-sound-effect_KT89XIq.mp3" in meme_set else meme_files[0]
+    w_list = words or []
+    w_starts = [float(w.get("start", 0.0)) for w in w_list]
+    if max_clips is None:
+        _, max_clips = _target_clip_range(candidates)
 
     raw_clips = parsed.get("clips") if isinstance(parsed, dict) else []
     if not isinstance(raw_clips, list) or not raw_clips:
-        return deterministic_candidate_fallback(candidates, meme_files)
+        return deterministic_candidate_fallback(candidates, meme_files, words=w_list, max_clips=max_clips)
 
     valid_clips = []
-    for idx, cl in enumerate(raw_clips[:6], start=1):
+    for idx, cl in enumerate(raw_clips[:max(6, max_clips + 1)], start=1):
         if not isinstance(cl, dict) or cl.get("is_nsfw_or_unsafe") is True:
             continue
         cid = cl.get("candidate_id") or f"cand_{idx}"
         cand = cand_map.get(cid)
         if not cand and candidates:
-            # Match closest candidate by start_time
             st_guess = float(cl.get("start_time") or (cl.get("segments") or [{}])[0].get("start", 0.0))
             cand = min(candidates, key=lambda x: abs(float(x.get("peak_time", 0.0)) - st_guess))
 
         w0 = float((cand or {}).get("window_start", 3.0))
         w1 = float((cand or {}).get("window_end", w0 + 50.0))
+        payoff_t = float(cl.get("payoff_time") or (cand or {}).get("peak_time", w1 - 4.0))
         segs = [s for s in (cl.get("segments") or []) if isinstance(s, dict)]
         if not segs:
             st = float(cl.get("start_time") or w0)
             en = float(cl.get("end_time") or min(w1, st + 34.0))
             segs = [{"start": st, "end": en, "role": "CONTINUOUS_ARC"}]
 
-        # Enforce max 2 micro-cuts inside the SAME candidate window (no multi-minute stitching!)
+        # Enforce max 2 micro-cuts inside the SAME candidate window (drop <4.0s micro-gaps into 1 continuous arc!)
         clean_segs = []
         for s in segs[:2]:
             s0 = max(max(3.0, w0 - 4.0), float(s.get("start", w0)))
@@ -623,13 +870,36 @@ def normalize_director_clips(parsed: dict, candidates: list, meme_files: list) -
             s1 = round(min(w1, s0 + 34.0), 2)
             clean_segs = [{"start": s0, "end": s1, "role": "CONTINUOUS_ARC"}]
 
+        if len(clean_segs) == 2 and (clean_segs[1]["start"] - clean_segs[0]["end"]) < 4.0:
+            clean_segs = [{
+                "start": clean_segs[0]["start"],
+                "end": max(clean_segs[0]["end"], clean_segs[1]["end"]),
+                "role": "CONTINUOUS_ARC",
+            }]
+
+        pre_ctx, post_ctx = "", ""
+        if w_list and len(clean_segs) == 1:
+            ns0, ns1, sp_txt, pre_ctx, post_ctx = _snap_boundary_with_words(
+                clean_segs[0]["start"], clean_segs[0]["end"], w_list, w_starts, payoff_t, w0, w1
+            )
+            clean_segs[0]["start"], clean_segs[0]["end"] = ns0, ns1
+            clean_segs[0]["spoken_text"] = sp_txt or (cand or {}).get("raw_text", "")
+        else:
+            for cs in clean_segs:
+                cs["spoken_text"] = _words_text(w_list, cs["start"], cs["end"]) if w_list else ""
+
         total_dur = sum(s["end"] - s["start"] for s in clean_segs)
         if total_dur < 22.0 and cand:
             clean_segs[-1]["end"] = round(min(w1 + 4.0, clean_segs[-1]["end"] + (24.0 - total_dur)), 2)
 
-        hook = _guard_and_format_hook(str(cl.get("hook_caption") or ""), (cand or {}).get("raw_text", ""), cl.get("title", f"CLIP {idx}"))
+        for cs in clean_segs:
+            cs["duration"] = round(cs["end"] - cs["start"], 2)
+            cs["signal_tags_in_window"] = list((cand or {}).get("signal_tags") or [])
+
+        assembled = " ".join(cs.get("spoken_text") or "" for cs in clean_segs).strip() or (cand or {}).get("raw_text", "")
+        hook = _guard_and_format_hook(str(cl.get("hook_caption") or ""), assembled, cl.get("title", f"CLIP {idx}"))
         if bool(BANNED_HOOK_RE.match(hook)):
-            hook = _safe_hook_from_text((cand or {}).get("raw_text", ""), cl.get("title", f"CLIP {idx}"))
+            hook = _safe_hook_from_text(assembled, cl.get("title", f"CLIP {idx}"))
 
         memes_out = []
         for m in (cl.get("memes") or []):
@@ -639,27 +909,43 @@ def normalize_director_clips(parsed: dict, candidates: list, meme_files: list) -
             if mf not in meme_set:
                 mf = default_sfx
             memes_out.append({
-                "timestamp": round(max(0.5, float(m.get("timestamp") or 10.0)), 2),
+                "timestamp": _map_meme_timestamp(m.get("timestamp"), clean_segs, cand or {}, payoff_t),
                 "file": mf,
                 "volume": float(m.get("volume") or 0.30),
             })
         if not memes_out:
-            rel_p = max(2.0, round(float((cand or {}).get("peak_time", clean_segs[0]["end"] - 2.0)) - clean_segs[0]["start"], 1))
-            memes_out = [{"timestamp": rel_p, "file": default_sfx, "volume": 0.30}]
+            memes_out = [{"timestamp": _map_meme_timestamp(payoff_t, clean_segs, cand or {}, payoff_t), "file": default_sfx, "volume": 0.30}]
 
         arch_val = str(cl.get("narrative_archetype") or "OPEN_WORLD_CHAOS_OR_COP_CHASE")
+        used_arches = {vc["narrative_archetype"] for vc in valid_clips}
+        if len(raw_clips) >= 3 and arch_val in used_arches and len(used_arches) < 3:
+            lines_c = (cand or {}).get("transcript_lines") or []
+            has_npc = any("[NPC_OR_OTHER_VOICE]" in ln for ln in lines_c)
+            alt_order = [
+                "HOW_TO_TIP_OR_SECRET_DISCOVERY",
+                "HUBRIS_WAGER_WASTED_KARMA",
+                "LEONIDA_NPC_ENCOUNTER_OR_ROAST" if has_npc else "STORY_CUTSCENE_OR_TWIST_REACTION",
+                "OPEN_WORLD_CHAOS_OR_COP_CHASE",
+                "COMEDIC_BANTER_OR_SARCASM",
+            ]
+            for alt_a in alt_order:
+                if alt_a not in used_arches:
+                    arch_val = alt_a
+                    break
         is_spoiler = bool(cl.get("is_story_spoiler", False) or arch_val == "STORY_CUTSCENE_OR_TWIST_REACTION")
         cause_setup = str(cl.get("cause_and_effect_setup") or "").strip()
-        if len(cause_setup) < 15:
-            cause_setup = f"Setup in window [{w0:.1f}s-{w1:.1f}s] builds into high-intensity payoff."
+        if len(cause_setup) < 20:
+            cause_setup = f"Setup in window [{w0:.1f}s-{w1:.1f}s] builds into live reaction payoff."
 
         raw_title = str(cl.get("title") or "").strip()
         if not raw_title or re.match(r"^(?:GTA6_Peak_Clip_\d+|GTA6_Clip_\d+|clip|output_clip)$", raw_title, re.I):
-            raw_title = _smart_clip_title(hook, (cand or {}).get("raw_text", ""), str(cl.get("climax_quote") or ""), arch_val, idx)
+            raw_title = _smart_clip_title(hook, assembled, str(cl.get("climax_quote") or ""), arch_val, idx)
         visual_note = str(cl.get("visual_value_note") or "").strip()
         if not visual_note or "Watch for the peak moment mid-clip" in visual_note:
             visual_note = str(cl.get("visual_evidence") or "").strip() or "Watch the live streamer reaction unfold here."
-        short_desc = _build_short_description(cl, (cand or {}).get("raw_text", ""), str(cl.get("climax_quote") or ""), visual_note)
+        short_desc = _build_short_description(cl, assembled, str(cl.get("climax_quote") or ""), visual_note)
+        vis_ev = str(cl.get("visual_evidence") or cl.get("visual_event_description") or f"3x3 grid storyboard at t={payoff_t:.1f}s.").strip()
+        tot_clip_dur = round(sum(cs["end"] - cs["start"] for cs in clean_segs), 2)
 
         valid_clips.append({
             "clip_number": len(valid_clips) + 1,
@@ -675,25 +961,32 @@ def normalize_director_clips(parsed: dict, candidates: list, meme_files: list) -
             "climax_quote": str(cl.get("climax_quote") or "").strip(),
             "reaction_triggers": cl.get("reaction_triggers") if isinstance(cl.get("reaction_triggers"), list) else [],
             "memes": memes_out,
-            "visual_evidence": str(cl.get("visual_evidence") or "").strip(),
+            "visual_evidence": vis_ev,
+            "visual_event_description": vis_ev,
             "start_time": clean_segs[0]["start"],
             "end_time": clean_segs[-1]["end"],
-            "payoff_time": round(float(cl.get("payoff_time") or (cand or {}).get("peak_time", clean_segs[-1]["end"] - 2.0)), 2),
-            "segments": clean_segs,
+            "payoff_time": round(payoff_t, 2),
+            "total_duration_sec": tot_clip_dur,
+            "segments": [{"start": cs["start"], "end": cs["end"], "role": cs["role"]} for cs in clean_segs],
+            "edl_segments": clean_segs,
             "virality_score": float(cl.get("virality_score") or 8.5),
             "cause_and_effect_setup": cause_setup,
-            "assembled_spoken_script": (cand or {}).get("raw_text", ""),
+            "assembled_spoken_script": assembled,
+            "pre_hook_context_text": pre_ctx,
+            "post_payoff_context_text": post_ctx,
+            "signal_justification": _signal_justification_from_cand(cand or {}, clean_segs),
         })
-        if len(valid_clips) >= 5:
+        if len(valid_clips) >= max_clips:
             break
 
-    return {"clips": valid_clips} if valid_clips else deterministic_candidate_fallback(candidates, meme_files)
+    return {"clips": valid_clips} if valid_clips else deterministic_candidate_fallback(candidates, meme_files, words=w_list, max_clips=max_clips)
 
 
 def main():
     parser = argparse.ArgumentParser(description="Run Multimodal Vision Director on GTA 6 3x3 candidate storyboards.")
     parser.add_argument("--candidates", default="/files/temp/gta6_candidates.json")
     parser.add_argument("--summary", default="/files/temp/global_summary.json")
+    parser.add_argument("--transcript", default="")
     parser.add_argument("--out", default="/files/temp/gta6_vision_director_out.json")
     parser.add_argument("--meme-dir", default="/files/memes")
     parser.add_argument("--no-llm", action="store_true", help="Skip external LLM call and run deterministic storyboard EDL fallback")
@@ -702,7 +995,13 @@ def main():
     cand_doc = _load_json(args.candidates) or {}
     candidates = cand_doc.get("candidates") or []
     summary_doc = _load_json(args.summary) or {}
+    override_doc = _load_json("/files/temp/iteration_dataset_override.json") if not args.transcript else None
+    tx_cand = args.transcript or ((override_doc or {}).get("transcript_path") if isinstance(override_doc, dict) else "")
+    tx_path = tx_cand if (tx_cand and os.path.exists(tx_cand)) else "/files/temp/transcript.json"
+    tx_doc = _load_json(tx_path) or {}
+    words = tx_doc.get("words") or (tx_doc.get("x_groq") or {}).get("words") or []
     meme_files = list_meme_files(args.meme_dir)
+    min_clips, max_clips = _target_clip_range(candidates, cand_doc)
 
     if not candidates:
         out_payload = {"clips": [], "meta": {"error": "no_candidates"}}
@@ -711,12 +1010,12 @@ def main():
         print(json.dumps({"text": json.dumps(out_payload), "meta": out_payload["meta"]}))
         return
 
-    meta = {"provider": "deterministic_fallback", "grids_attached": 0}
+    meta = {"provider": "deterministic_fallback", "grids_attached": 0, "min_clips": min_clips, "max_clips": max_clips}
     parsed = None
     if not args.no_llm:
         api_keys = collect_gemini_keys()
-        prompt_text = build_prompt_text(summary_doc, candidates, meme_files)
-        interleaved_parts, _ = _interleave_vision_parts(summary_doc, candidates, meme_files)
+        prompt_text = build_prompt_text(summary_doc, candidates, meme_files, min_clips=min_clips, max_clips=max_clips)
+        interleaved_parts, _ = _interleave_vision_parts(summary_doc, candidates, meme_files, min_clips=min_clips, max_clips=max_clips)
         raw_txt = None
         if api_keys:
             raw_txt, meta = call_gemini_vision(interleaved_parts, candidates, api_keys, DEFAULT_MODELS)
@@ -730,7 +1029,6 @@ def main():
             try:
                 parsed = json.loads(cleaned)
             except Exception:
-                # Try array or object extraction cleanly
                 m_obj = re.search(r"\{[\s\S]*\}", cleaned)
                 m_arr = re.search(r"\[[\s\S]*\]", cleaned)
                 cand_str = (m_arr.group(0) if (cleaned.startswith("[") and m_arr) else (m_obj.group(0) if m_obj else (m_arr.group(0) if m_arr else cleaned)))
@@ -742,7 +1040,11 @@ def main():
                 parsed = {"clips": parsed}
 
     has_llm_clips = bool(isinstance(parsed, dict) and isinstance(parsed.get("clips"), list) and len(parsed["clips"]) > 0)
-    normalized = normalize_director_clips(parsed, candidates, meme_files) if has_llm_clips else deterministic_candidate_fallback(candidates, meme_files)
+    normalized = (
+        normalize_director_clips(parsed, candidates, meme_files, words=words, max_clips=max_clips)
+        if has_llm_clips
+        else deterministic_candidate_fallback(candidates, meme_files, words=words, max_clips=max_clips)
+    )
     if not has_llm_clips:
         meta["fallback_used"] = True
         if meta.get("provider") == "gemini_vision":
@@ -752,7 +1054,6 @@ def main():
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump({"clips": normalized["clips"], "meta": meta}, f, indent=2)
 
-    # Print exact `{ "text": "<json_string>", "clips": ..., "meta": ... }` so `5. Split Clips` consumes `$input.all()` identically
     print(json.dumps({
         "text": json.dumps({"clips": normalized["clips"]}),
         "clips_count": len(normalized["clips"]),

@@ -49,7 +49,10 @@ SHOCK_SPEECH_RE = re.compile(
 HOUSEKEEPING_RE = re.compile(
     r"(thank you for the super\s*chat|get your entries in|enter you into the giveaway|"
     r"type [a-z0-9]+ into the chat|thank you for the raid|thanks for the raid|welcome raiders|"
-    r"we'?re going to say bye|ending the stream|see you next time|don'?t forget to subscribe)",
+    r"we'?re going to say bye|going to say bye|ending the stream|see you next time|don'?t forget to subscribe|"
+    r"make sure to subscribe|subscribe to the channel|everybody subscribe|hit the like button|"
+    r"smash (?:that |the )?like|thanks? for watching|peace out everybody|comment\b[^.?!]{0,40}\btomorrow|"
+    r"thank you so much for watching|catch you guys tomorrow|subathon timer|shoutout to the raiders)",
     re.I,
 )
 GTA6_PROMPT_HALLUCINATION_TOKENS = (
@@ -462,38 +465,65 @@ def extract_top_candidates(
         step = max(20, int((duration - 25.0) // max(1, top_k)))
         selected_peaks = [min(max_sec - 10, 20 + i * step) for i in range(top_k) if 20 + i * step < max_sec]
 
-    sent_starts = [s["start"] for s in sentences]
+    sent_starts = [s["start"] for s in sentences] if sentences else []
     candidates = []
     for idx, t_peak in enumerate(selected_peaks[:top_k], start=1):
         w_start = max(3.0, float(t_peak) - 32.0)
         w_end = min(float(duration), float(t_peak) + 18.0)
 
-        # Snap outward to complete Whisper sentences (up to +-6.0s guard)
+        # Snap start/end cleanly to complete Whisper sentences (up to +-6.0s guard),
+        # preferring clean pauses / terminal punctuation breaks over mid-sentence cuts
         if sentences:
             pos_l = bisect.bisect_right(sent_starts, w_start) - 1
             if 0 <= pos_l < len(sentences):
                 cand_s = sentences[pos_l]
-                if cand_s["end"] > w_start and cand_s["start"] >= max(3.0, w_start - 6.0):
+                prev_s = sentences[pos_l - 1] if pos_l > 0 else None
+                prev_ends_term = bool(prev_s and re.search(r"(?<!\.)[.!?][\"'\)]*$", str(prev_s.get("text") or "").strip()))
+                gap_prev = (float(cand_s["start"]) - float(prev_s["end"])) if prev_s else 1.0
+                if cand_s["end"] > w_start and cand_s["start"] >= max(3.0, w_start - 6.0) and (prev_ends_term or gap_prev >= 0.35 or pos_l == 0):
                     w_start = max(3.0, float(cand_s["start"]))
+                elif pos_l + 1 < len(sentences) and float(sentences[pos_l + 1]["start"]) < float(t_peak) - 8.0:
+                    w_start = max(3.0, float(sentences[pos_l + 1]["start"]))
             pos_r = bisect.bisect_left(sent_starts, w_end) - 1
             if 0 <= pos_r < len(sentences):
                 cand_e = sentences[pos_r]
                 if cand_e["start"] < w_end < cand_e["end"] and cand_e["end"] <= min(float(duration), w_end + 6.0):
                     w_end = min(float(duration), float(cand_e["end"]))
+                elif cand_e["start"] > float(t_peak) + 2.0 and cand_e["end"] <= w_end:
+                    w_end = min(float(duration), float(cand_e["end"]))
 
-        if w_end - w_start < 18.0:
-            w_end = min(float(duration), w_start + 30.0)
+        if w_end - w_start < 20.0:
+            w_end = min(float(duration), w_start + 32.0)
 
         win_sents = [s for s in sentences if s["end"] >= w_start - 0.1 and s["start"] <= w_end + 0.1]
         cm = chat_meta.get(t_peak) or {}
         q_cluster = bool(cm.get("question_cluster", False))
         lines = []
+        win_tags = []
+        rb = raw_bins.get(t_peak) or {}
+        peak_z_db = float(rb.get("z_db", 0.0))
+        if peak_z_db >= 2.8:
+            win_tags.append(f"[SCREAM:Z={peak_z_db:.1f}]")
+        elif peak_z_db >= 2.0:
+            win_tags.append(f"[dB_PEAK:Z={peak_z_db:.1f}]")
+        if float(chat_scores.get(t_peak, 0.0)) > 0.0:
+            win_tags.append(f"[CHAT_BURST:Z={float(chat_scores.get(t_peak, 0.0)):.1f}]")
+        if float(face_scores.get(t_peak, 0.0)) >= 1.2:
+            win_tags.append("[FACE:SHOCK_OR_REACTION]")
+        word_sum = sum(int(s.get("word_count", 0)) for s in win_sents)
+        wpm_val = word_sum / max(1.0, (w_end - w_start) / 60.0)
+        if wpm_val >= 145.0:
+            win_tags.append(f"[WPM_SPIKE:{int(round(wpm_val))}wpm]")
+        if any(SHOCK_SPEECH_RE.search(str(s.get("text") or "")) for s in win_sents) and not any("dB_PEAK" in t or "SCREAM" in t for t in win_tags):
+            win_tags.append("[WPM_SPIKE:SHOCK_EXCLAIM]")
         for si_l, s in enumerate(win_sents):
             m, sec_f = divmod(max(0.0, s["start"]), 60.0)
             q_tag = " [CHAT_QUESTION_CLUSTER]" if (q_cluster and si_l == len(win_sents) // 2) else ""
             lines.append(f"[{int(m):02d}:{sec_f:04.1f} | {s['speaker_tag']}{q_tag}] {s['text']}")
+            for tg in (s.get("tags") or []):
+                if tg not in win_tags:
+                    win_tags.append(tg)
 
-        rb = raw_bins.get(t_peak) or {}
         candidates.append({
             "rank": idx,
             "candidate_id": f"cand_{idx}",
@@ -502,10 +532,11 @@ def extract_top_candidates(
             "window_end": round(w_end, 2),
             "window_duration": round(w_end - w_start, 2),
             "virality_score": round(v_curve[t_peak], 3),
-            "z_db": float(rb.get("z_db", 0.0)),
+            "z_db": round(peak_z_db, 2),
             "spec_boost": float(rb.get("spec_boost", 0.0)),
             "z_chat_lagged": float(chat_scores.get(t_peak, 0.0)),
             "z_face": float(face_scores.get(t_peak, 0.0)),
+            "signal_tags": win_tags,
             "chat_question_cluster": bool(cm.get("question_cluster", False)),
             "chat_samples": cm.get("msgs") or [],
             "transcript_lines": lines,
@@ -515,6 +546,15 @@ def extract_top_candidates(
         })
 
     return candidates
+
+
+def get_adaptive_clip_targets(duration_sec: float) -> tuple[int, int, int]:
+    """Scale candidate extraction and target clip counts dynamically by chunk duration."""
+    if duration_sec < 480.0:
+        return 4, 1, 2
+    if duration_sec <= 1500.0:
+        return 6, 2, 3
+    return 8, 4, 5
 
 
 def is_grid_mostly_static(grid_path: str) -> bool:
@@ -599,42 +639,71 @@ def main():
     parser.add_argument("--face", default="/files/temp/face_emotions.json")
     parser.add_argument("--out", default="/files/temp/gta6_candidates.json")
     parser.add_argument("--grid-dir", default="/files/temp")
-    parser.add_argument("--top-k", type=int, default=8)
+    parser.add_argument("--top-k", type=int, default=0, help="Candidate count (0=adaptive by stream duration)")
+    parser.add_argument("--slice-start", type=float, default=None, help="Optional slice start sec")
+    parser.add_argument("--slice-end", type=float, default=None, help="Optional slice end sec")
     parser.add_argument("--skip-grids", action="store_true")
     args = parser.parse_args()
 
+    override_doc = _load_json("/files/temp/iteration_dataset_override.json") if not args.transcript else None
+    if not isinstance(override_doc, dict):
+        override_doc = {}
+
     tx_path = _first_existing([
         args.transcript,
+        override_doc.get("transcript_path"),
         "/files/temp/transcript.json",
         "/files/outputs/whisper_28754.json",
         "/files/temp/whisper_raw.json",
     ])
+    idx_path = _first_existing([
+        args.index if args.index != "/files/temp/unified_timeline_index.json" else "",
+        override_doc.get("index_path"),
+        args.index,
+    ]) or args.index
+    audio_path = _first_existing([
+        args.audio if args.audio != "/files/temp/audio.mp3" else "",
+        override_doc.get("audio_path"),
+        args.audio,
+    ]) or args.audio
+    audio_energy_path = _first_existing([
+        args.audio_energy if args.audio_energy != "/files/temp/audio_energy.json" else "",
+        override_doc.get("audio_energy_path"),
+        args.audio_energy,
+    ]) or args.audio_energy
+    face_path = _first_existing([
+        args.face if args.face != "/files/temp/face_emotions.json" else "",
+        override_doc.get("face_path"),
+        args.face,
+    ]) or args.face
     chat_path = _first_existing([
         args.chat,
+        override_doc.get("chat_path"),
         "/files/temp/chat_laughter_clusters.json",
         "/files/temp/chat_analysis.json",
         "/files/temp/test_zscore_out.json",
     ])
 
     transcript_doc = _load_json(tx_path) or {}
-    index_doc = _load_json(args.index) or {}
+    index_doc = _load_json(idx_path) or {}
     cam_cfg = _load_json(args.cam) or {}
-    audio_energy_doc = _load_json(args.audio_energy) or {}
+    audio_energy_doc = _load_json(audio_energy_path) or {}
     chat_doc = _load_json(chat_path) or {}
-    face_doc = _load_json(args.face) or {}
+    face_doc = _load_json(face_path) or {}
 
-    tx_dur = float(transcript_doc.get("duration") or index_doc.get("duration") or 0.0)
-    aud_dur = _probe_duration(args.audio)
-    video_path = args.video if (args.video and os.path.exists(args.video)) else _auto_discover_video(tx_dur or aud_dur)
-    active_stream = os.path.basename(video_path) if video_path else ""
+    tx_dur = float(transcript_doc.get("duration") or index_doc.get("duration") or index_doc.get("stream_duration_sec") or 0.0)
+    aud_dur = _probe_duration(audio_path)
+    video_hint = args.video or override_doc.get("video_path") or ""
+    video_path = video_hint if (video_hint and os.path.exists(video_hint)) else _auto_discover_video(tx_dur or aud_dur)
+    active_stream = os.path.basename(video_path) if video_path else os.path.basename(tx_path or "")
     vid_dur = _probe_duration(video_path)
 
     # Fix 1.1: Validate cached telemetry against active stream_file header & purge mismatched caches
-    if active_stream:
+    if active_stream and video_path:
         for nm_doc, p_doc, is_chat in (
             ("chat", chat_path, True),
-            ("audio_energy", args.audio_energy, False),
-            ("face", args.face, False),
+            ("audio_energy", audio_energy_path, False),
+            ("face", face_path, False),
         ):
             cur_d = chat_doc if nm_doc == "chat" else (audio_energy_doc if nm_doc == "audio_energy" else face_doc)
             if isinstance(cur_d, dict) and cur_d:
@@ -667,23 +736,59 @@ def main():
                         chat_doc = {}
                     break
 
+    # Cross-stream duration mismatch guard: never pair unrelated default /files/temp/audio.mp3 or index
+    if tx_dur > 0:
+        idx_dur = float(index_doc.get("duration") or index_doc.get("stream_duration_sec") or 0.0)
+        if not idx_dur and index_doc.get("annotated_sentences"):
+            idx_dur = max(float(s.get("end", 0.0)) for s in index_doc["annotated_sentences"])
+        if idx_dur > 0 and abs(idx_dur - tx_dur) > max(30.0, 0.25 * max(idx_dur, tx_dur)):
+            index_doc = {}
+        if aud_dur > 0 and args.audio == "/files/temp/audio.mp3" and not override_doc.get("audio_path") and abs(aud_dur - tx_dur) > max(30.0, 0.25 * max(aud_dur, tx_dur)):
+            aud_dur = 0.0
+            audio_energy_doc = {}
+        if face_doc and args.face == "/files/temp/face_emotions.json" and not override_doc.get("face_path") and tx_dur > 400 and not video_path:
+            face_doc = {}
+
     # Clamp effective timeline to overlapping duration so FFmpeg never seeks past EOF
     durs = [d for d in (vid_dur, aud_dur, tx_dur) if d > 0]
     duration = min(vid_dur, max(tx_dur, aud_dur)) if (vid_dur > 0 and (tx_dur > 0 or aud_dur > 0)) else (max(durs) if durs else 120.0)
 
-    audio_info = extract_1s_audio_features(args.audio, audio_energy_doc, duration)
+    slice_lo = args.slice_start if args.slice_start is not None else override_doc.get("slice_start_sec")
+    slice_hi = args.slice_end if args.slice_end is not None else override_doc.get("slice_end_sec")
+    slice_span = duration
+    if slice_lo is not None or slice_hi is not None:
+        s_lo = max(0.0, float(slice_lo or 0.0))
+        s_hi = min(duration, float(slice_hi or duration))
+        slice_span = max(60.0, s_hi - s_lo)
+    else:
+        s_lo, s_hi = 0.0, duration
+
+    audio_info = extract_1s_audio_features(audio_path if os.path.exists(audio_path) and aud_dur > 0 else "", audio_energy_doc, duration)
     chat_info = compute_chat_lag_map(chat_doc, int(duration) + 1)
     face_info = compute_face_motion_map(face_doc, cam_cfg)
     sentences = tag_speaker_roles(build_sentences_from_whisper(transcript_doc, index_doc), audio_info, face_info)
 
-    raw_candidates = extract_top_candidates(duration, sentences, audio_info, chat_info, face_info, top_k=args.top_k + 4)
+    # Filter sentences inside requested iteration time slice cleanly
+    if slice_lo is not None or slice_hi is not None:
+        sentences = [s for s in sentences if s["end"] >= s_lo and s["start"] <= s_hi]
+        # Shift audio bins/raw_bins? Keep original timeline coordinates & zero V(t) outside slice cleanly!
+        for sec_k in list((audio_info.get("raw_bins") or {}).keys()):
+            if sec_k < int(s_lo) or sec_k > int(s_hi):
+                del audio_info["raw_bins"][sec_k]
+
+    adap_k, rec_min_clips, rec_max_clips = get_adaptive_clip_targets(slice_span)
+    eff_top_k = args.top_k if args.top_k > 0 else adap_k
+
+    raw_candidates = extract_top_candidates(s_hi if (slice_lo is not None or slice_hi is not None) else duration, sentences, audio_info, chat_info, face_info, top_k=eff_top_k + 4)
+    if slice_lo is not None or slice_hi is not None:
+        raw_candidates = [c for c in raw_candidates if c["window_start"] >= max(0.0, s_lo - 5.0) and c["window_end"] <= s_hi + 5.0] or raw_candidates
 
     os.makedirs(args.grid_dir, exist_ok=True)
     font_path = _pick_font()
     candidates = []
     if not args.skip_grids and video_path:
-        active_batch = raw_candidates[:args.top_k]
-        reserves = raw_candidates[args.top_k:]
+        active_batch = raw_candidates[:eff_top_k]
+        reserves = raw_candidates[eff_top_k:]
         with ThreadPoolExecutor(max_workers=2) as ex:
             list(ex.map(lambda c: render_3x3_grid(video_path, c, args.grid_dir, font_path), active_batch))
         for c in active_batch:
@@ -699,7 +804,7 @@ def main():
         if not candidates:
             candidates = active_batch
     else:
-        candidates = raw_candidates[:args.top_k]
+        candidates = raw_candidates[:eff_top_k]
 
     for idx, c in enumerate(candidates, start=1):
         c["rank"] = idx
@@ -718,8 +823,10 @@ def main():
         "stream_file": active_stream,
         "video_path": video_path,
         "video_duration": round(vid_dur, 2),
-        "effective_duration": round(duration, 2),
-        "peak_spacing_sec": 90.0 if duration >= 1200.0 else 40.0,
+        "effective_duration": round(slice_span, 2),
+        "recommended_min_clips": rec_min_clips,
+        "recommended_max_clips": rec_max_clips,
+        "peak_spacing_sec": 90.0 if slice_span >= 1200.0 else 40.0,
         "candidate_count": len(candidates),
         "candidates": candidates,
     }
