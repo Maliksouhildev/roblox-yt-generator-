@@ -27,8 +27,12 @@ GEMINI_KEY_FILES = [
 ]
 
 DEFAULT_MODELS = [
+    "gemini-3.5-flash",
     "gemini-2.5-flash",
-    "gemini-3.5-flash-lite",
+    "gemini-3.8-flash",
+    "gemini-3.1-flash-lite",
+    "gemini-3.6-flash",
+    "gemini-3.7-flash",
 ]
 
 GTA6_ARCHETYPES = [
@@ -42,7 +46,7 @@ GTA6_ARCHETYPES = [
 
 DANGLING_HOOK_END_RE = re.compile(
     r"\b(TO|A|AN|THE|OF|IN|ON|AT|FOR|WITH|FROM|BY|AND|OR|BUT|IF|IS|ARE|WAS|WERE|"
-    r"DO|DOES|DID|NOT|WANT|GOING|HAVE|HAS|MY|YOUR|OUR|THEIR|THIS|THAT)$",
+    r"DO|DOES|DID|NOT|WANT|GOING|HAVE|HAS|MY|YOUR|OUR|THEIR|THIS|THAT|I|ME|HE|SHE|WE|THEY|LIKE)$",
     re.I,
 )
 
@@ -155,9 +159,11 @@ def build_prompt_text(summary_doc: dict, candidates: list, meme_files: list) -> 
         "   - `COMEDIC_BANTER_OR_SARCASM`: storytelling or voice-chat punchline.\n"
         "   - `STORY_CUTSCENE_OR_TWIST_REACTION`: Lucia & Jason twist + explosive shock (MUST set `is_story_spoiler: true` and NEVER spoil in `hook_caption`!).\n"
         "5. COMPLETE METADATA IN ONE PASS (No downstream merge agent exists!):\n"
-        "   - `hook_caption`: 3-6 WORDS ALL CAPS (<=32 chars), zero dangling endings (never end on TO/THE/A/IN/ON), grounded in the 3x3 grid + speech!\n"
-        "   - `visual_value_note`: short 1-line transformative tip or 'Watch for...' callout.\n"
-        "   - `comment_bait_question`: simple engaging question for comments (e.g. 'Would you survive 6 stars here?').\n"
+        "   - `title`: Catchy 3-7 word YouTube Short title specifically describing THIS clip's action/joke (NEVER use generic titles like 'GTA6_Peak_Clip_1' or 'Gaming Clip').\n"
+        "   - `hook_caption`: 3-5 WORDS ALL CAPS (<=28 chars), COMPLETE thought with zero dangling endings (never end on TO/THE/A/IN/ON/I/LIKE), grounded in the 3x3 grid + speech!\n"
+        "   - `short_description`: 2-3 engaging sentences written specifically for THIS Short describing what happens visually in THIS scene and what the streamer/NPCs say (do NOT summarize unrelated parts of the stream!).\n"
+        "   - `visual_value_note`: short 1-line transformative tip or 'Watch for...' callout specific to this clip.\n"
+        "   - `comment_bait_question`: fun specific question for comments directly about THIS clip (never generic).\n"
         "   - `is_story_spoiler`: boolean; `is_nsfw_or_unsafe`: boolean (must be false for selected clips).\n"
         "   - `climax_quote`: exact short verbatim quote spoken at the payoff spike.\n"
         "   - `reaction_triggers`: 1-2 short verbatim quotes `[{\"quote\": \"...\", \"sfx\": \"<valid meme file>\"}]`.\n"
@@ -170,11 +176,12 @@ def build_prompt_text(summary_doc: dict, candidates: list, meme_files: list) -> 
         "    {\n"
         "      \"clip_number\": 1,\n"
         "      \"candidate_id\": \"cand_1\",\n"
-        "      \"title\": \"Short Clean Title\",\n"
+        "      \"title\": \"Insane 6 Star Vice City Escape\",\n"
         "      \"narrative_archetype\": \"OPEN_WORLD_CHAOS_OR_COP_CHASE\",\n"
         "      \"hook_caption\": \"SIX STAR POLICE CHASE CHAOS\",\n"
-        "      \"visual_value_note\": \"Watch the police cruiser launch off the bridge at 0:18.\",\n"
-        "      \"comment_bait_question\": \"Could you escape a 6-star chase here?\",\n"
+        "      \"short_description\": \"When a routine getaway goes sideways in Vice City, a 6-star police blockade sends cruisers flying off the bridge. Streamer loses it as everything explodes at the last second.\",\n"
+        "      \"visual_value_note\": \"Watch the police cruiser launch off the bridge right before the crash.\",\n"
+        "      \"comment_bait_question\": \"Could you actually survive that 6-star bridge blockade?\",\n"
         "      \"is_story_spoiler\": false,\n"
         "      \"is_nsfw_or_unsafe\": false,\n"
         "      \"climax_quote\": \"exact verbatim payoff words\",\n"
@@ -227,9 +234,11 @@ def _interleave_vision_parts(summary_doc: dict, candidates: list, meme_files: li
         "   - `COMEDIC_BANTER_OR_SARCASM`: storytelling or voice-chat punchline.\n"
         "   - `STORY_CUTSCENE_OR_TWIST_REACTION`: Lucia & Jason twist + explosive shock (MUST set `is_story_spoiler: true` and NEVER spoil in `hook_caption`!).\n"
         "5. COMPLETE METADATA IN ONE PASS (No downstream merge agent exists!):\n"
-        "   - `hook_caption`: 3-6 WORDS ALL CAPS (<=32 chars), zero dangling endings (never end on TO/THE/A/IN/ON), grounded in the 3x3 grid + speech!\n"
-        "   - `visual_value_note`: short 1-line transformative tip or 'Watch for...' callout.\n"
-        "   - `comment_bait_question`: simple engaging question for comments.\n"
+        "   - `title`: Catchy 3-7 word YouTube Short title specifically describing THIS clip (NEVER 'GTA6_Peak_Clip_1').\n"
+        "   - `hook_caption`: 3-5 WORDS ALL CAPS (<=28 chars), COMPLETE thought with zero dangling endings (never end on TO/THE/A/IN/ON/I/LIKE), grounded in the 3x3 grid + speech!\n"
+        "   - `short_description`: 2-3 engaging sentences written specifically for THIS Short describing what happens in THIS clip and why it's viral.\n"
+        "   - `visual_value_note`: short 1-line transformative tip or 'Watch for...' callout for this clip.\n"
+        "   - `comment_bait_question`: fun question directly referencing THIS clip.\n"
         "   - `is_story_spoiler`: boolean; `is_nsfw_or_unsafe`: boolean (must be false for selected clips).\n"
         "   - `climax_quote`, `reaction_triggers`, `memes`, `visual_evidence`, `cause_and_effect_setup`.\n"
     )
@@ -268,11 +277,12 @@ def _interleave_vision_parts(summary_doc: dict, candidates: list, meme_files: li
             "    {\n"
             "      \"clip_number\": 1,\n"
             "      \"candidate_id\": \"cand_1\",\n"
-            "      \"title\": \"Short Clean Title\",\n"
+            "      \"title\": \"Insane 6 Star Vice City Escape\",\n"
             "      \"narrative_archetype\": \"OPEN_WORLD_CHAOS_OR_COP_CHASE\",\n"
             "      \"hook_caption\": \"SIX STAR POLICE CHASE CHAOS\",\n"
-            "      \"visual_value_note\": \"Watch the police cruiser launch off the bridge.\",\n"
-            "      \"comment_bait_question\": \"Could you escape a 6-star chase here?\",\n"
+            "      \"short_description\": \"Things go completely off the rails when a routine getaway turns into a 6-star police blockade right on the Vice City bridge.\",\n"
+            "      \"visual_value_note\": \"Watch the police cruiser launch off the bridge right before the crash.\",\n"
+            "      \"comment_bait_question\": \"Could you escape that 6-star chase here?\",\n"
             "      \"is_story_spoiler\": false,\n"
             "      \"is_nsfw_or_unsafe\": false,\n"
             "      \"climax_quote\": \"exact verbatim payoff words\",\n"
@@ -346,7 +356,11 @@ def call_mistral_fallback(prompt_text: str, mistral_keys: list, model: str = "mi
         req = urllib.request.Request(
             "https://api.mistral.ai/v1/chat/completions",
             data=payload,
-            headers={"Content-Type": "application/json", "Authorization": f"Bearer {k}"},
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {k}",
+                "User-Agent": "Mozilla/5.0",
+            },
         )
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
@@ -447,6 +461,57 @@ def _strip_speaker_prefix(line: str) -> str:
     return s.lstrip("] ").strip()
 
 
+def _smart_clip_title(hook: str, raw_txt: str, climax_q: str, arch: str, idx: int) -> str:
+    """Build a descriptive, non-generic Short title from actual speech/action."""
+    cand_src = climax_q or raw_txt or hook
+    words = re.findall(r"[A-Za-z0-9']+", str(cand_src or ""))
+    keep = words[:7]
+    while len(keep) > 3 and DANGLING_HOOK_END_RE.match(keep[-1]):
+        keep.pop()
+    if len(keep) >= 3:
+        title_str = " ".join(w.capitalize() if not w.isupper() or len(w) > 3 else w for w in keep)
+        return title_str[:55].strip()
+    h_words = [w.capitalize() for w in re.findall(r"[A-Za-z0-9']+", hook or "")]
+    if len(h_words) >= 2:
+        return (" ".join(h_words) + " in GTA 6")[:55]
+    arch_label = {
+        "OPEN_WORLD_CHAOS_OR_COP_CHASE": "Vice City Police Chaos Moment",
+        "LEONIDA_NPC_ENCOUNTER_OR_ROAST": "Wild Leonida NPC Encounter",
+        "HOW_TO_TIP_OR_SECRET_DISCOVERY": "Hidden GTA 6 Detail Found",
+        "HUBRIS_WAGER_WASTED_KARMA": "Instant Karma Moment in GTA 6",
+        "COMEDIC_BANTER_OR_SARCASM": "Hilarious GTA 6 Streamer Reaction",
+        "STORY_CUTSCENE_OR_TWIST_REACTION": "Shocking GTA 6 Story Reaction",
+    }.get(arch, f"Crazy GTA 6 Live Moment {idx}")
+    return arch_label
+
+
+def _build_short_description(cl: dict, cand_raw_txt: str = "", climax_q: str = "", visual_note: str = "") -> str:
+    """Guarantee a concrete, Short-specific description grounded in this clip's events and dialogue."""
+    explicit = str(cl.get("short_description") or "").strip()
+    if explicit and len(explicit) >= 25 and not re.search(r"fallback offline mode|watch closely around", explicit, re.I):
+        return explicit
+    setup = str(cl.get("cause_and_effect_setup") or "").strip()
+    if setup and re.search(r"Empirical multimodal peak|Setup in window", setup, re.I):
+        setup = ""
+    vis_ev = str(cl.get("visual_evidence") or "").strip()
+    if vis_ev and re.search(r"fallback offline mode|3x3 storyboard peak", vis_ev, re.I):
+        vis_ev = ""
+    speech_snip = str(climax_q or cl.get("climax_quote") or cand_raw_txt or "").strip()
+    speech_snip = re.sub(r"\s+", " ", speech_snip)[:160].strip()
+    parts = []
+    if setup:
+        parts.append(setup)
+    if vis_ev and vis_ev != setup:
+        parts.append(vis_ev)
+    if visual_note and not re.search(r"Watch closely around \d", visual_note, re.I):
+        parts.append(visual_note)
+    if not parts and speech_snip:
+        parts.append(f'Wild live moment: "{speech_snip}"')
+    elif speech_snip and speech_snip.lower() not in " ".join(parts).lower() and len(" ".join(parts)) < 120:
+        parts.append(f'Highlight quote: "{speech_snip}"')
+    return " ".join(parts).strip() or "Unfiltered live GTA 6 reaction caught on stream."
+
+
 def deterministic_candidate_fallback(candidates: list, meme_files: list) -> dict:
     """Grounded deterministic single-scene fallback spanning the 6 GTA 6 Launch Archetypes."""
     sfx = "vine-boom-sound-effect_KT89XIq.mp3" if "vine-boom-sound-effect_KT89XIq.mp3" in meme_files else meme_files[0]
@@ -485,28 +550,33 @@ def deterministic_candidate_fallback(candidates: list, meme_files: list) -> dict
                 climax_q = stripped[:70]
                 break
         hook = _guard_and_format_hook(climax_q or raw_txt, raw_txt, f"PEAK MOMENT {idx}")
+        smart_title = _smart_clip_title(hook, raw_txt, climax_q, arch, idx)
         rel_peak = max(3.0, min(round((en - st) - 1.5, 1), round(tp - st, 1)))
         is_spoiler = (arch == "STORY_CUTSCENE_OR_TWIST_REACTION")
+        visual_note = f'Wait for the reaction at {rel_peak:.0f}s when "{climax_q}" hits.' if climax_q else "Wait for the live reaction spike mid-clip."
+        short_desc = _build_short_description({}, raw_txt, climax_q, visual_note)
+        bait_q = f'Did you see that coming at "{climax_q[:38]}"?' if climax_q else "How would you react if this happened live?"
         clips.append({
             "clip_number": idx,
             "candidate_id": c.get("candidate_id", f"cand_{idx}"),
-            "title": f"GTA6_Peak_Clip_{idx}",
+            "title": smart_title,
             "narrative_archetype": arch,
             "hook_caption": hook,
-            "visual_value_note": f"Watch closely around {rel_peak:.1f}s for the main reaction beat.",
-            "comment_bait_question": "What would you have done in this spot?",
+            "short_description": short_desc,
+            "visual_value_note": visual_note,
+            "comment_bait_question": bait_q,
             "is_story_spoiler": is_spoiler,
             "is_nsfw_or_unsafe": False,
             "climax_quote": climax_q,
             "reaction_triggers": [{"quote": climax_q[:30], "sfx": sfx}] if climax_q else [],
             "memes": [{"timestamp": rel_peak, "file": sfx, "volume": 0.30}],
-            "visual_evidence": f"3x3 storyboard peak at t={tp:.1f}s (fallback offline mode).",
+            "visual_evidence": f"Clip centered around stream reaction peak at t={tp:.1f}s.",
             "start_time": round(st, 2),
             "end_time": round(en, 2),
             "payoff_time": round(tp, 2),
             "segments": [{"start": round(st, 2), "end": round(en, 2), "role": "CONTINUOUS_ARC"}],
             "virality_score": max(7.5, min(9.8, round(7.2 + float(c.get("virality_score", 1.5)) * 0.35, 1))),
-            "cause_and_effect_setup": f"Empirical multimodal peak at t={tp:.1f}s (z_db={c.get('z_db', 0):.1f}, z_chat={c.get('z_chat_lagged', 0):.1f}).",
+            "cause_and_effect_setup": short_desc,
             "assembled_spoken_script": raw_txt,
         })
     return {"clips": clips}
@@ -583,13 +653,22 @@ def normalize_director_clips(parsed: dict, candidates: list, meme_files: list) -
         if len(cause_setup) < 15:
             cause_setup = f"Setup in window [{w0:.1f}s-{w1:.1f}s] builds into high-intensity payoff."
 
+        raw_title = str(cl.get("title") or "").strip()
+        if not raw_title or re.match(r"^(?:GTA6_Peak_Clip_\d+|GTA6_Clip_\d+|clip|output_clip)$", raw_title, re.I):
+            raw_title = _smart_clip_title(hook, (cand or {}).get("raw_text", ""), str(cl.get("climax_quote") or ""), arch_val, idx)
+        visual_note = str(cl.get("visual_value_note") or "").strip()
+        if not visual_note or "Watch for the peak moment mid-clip" in visual_note:
+            visual_note = str(cl.get("visual_evidence") or "").strip() or "Watch the live streamer reaction unfold here."
+        short_desc = _build_short_description(cl, (cand or {}).get("raw_text", ""), str(cl.get("climax_quote") or ""), visual_note)
+
         valid_clips.append({
             "clip_number": len(valid_clips) + 1,
             "candidate_id": cid,
-            "title": str(cl.get("title") or f"GTA6_Clip_{idx}").strip()[:60],
+            "title": raw_title[:60],
             "narrative_archetype": arch_val,
             "hook_caption": hook,
-            "visual_value_note": str(cl.get("visual_value_note") or "Watch for the peak moment mid-clip.").strip(),
+            "short_description": short_desc,
+            "visual_value_note": visual_note,
             "comment_bait_question": str(cl.get("comment_bait_question") or "Would you have survived this?").strip(),
             "is_story_spoiler": is_spoiler,
             "is_nsfw_or_unsafe": False,
@@ -647,11 +726,20 @@ def main():
                 raw_txt, meta = call_mistral_fallback(prompt_text, m_keys, model="mistral-large-latest")
         if raw_txt:
             cleaned = raw_txt.replace("```json", "").replace("```", "").strip()
-            m = re.search(r"\{[\s\S]*\}", cleaned)
+            parsed = None
             try:
-                parsed = json.loads(m.group(0) if m else cleaned)
+                parsed = json.loads(cleaned)
             except Exception:
-                parsed = None
+                # Try array or object extraction cleanly
+                m_obj = re.search(r"\{[\s\S]*\}", cleaned)
+                m_arr = re.search(r"\[[\s\S]*\]", cleaned)
+                cand_str = (m_arr.group(0) if (cleaned.startswith("[") and m_arr) else (m_obj.group(0) if m_obj else (m_arr.group(0) if m_arr else cleaned)))
+                try:
+                    parsed = json.loads(cand_str)
+                except Exception:
+                    parsed = None
+            if isinstance(parsed, list):
+                parsed = {"clips": parsed}
 
     has_llm_clips = bool(isinstance(parsed, dict) and isinstance(parsed.get("clips"), list) and len(parsed["clips"]) > 0)
     normalized = normalize_director_clips(parsed, candidates, meme_files) if has_llm_clips else deterministic_candidate_fallback(candidates, meme_files)

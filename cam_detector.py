@@ -30,7 +30,13 @@ DEFAULT_CONFIG_PATH = "/files/temp/cam_config.json"
 GEMINI_KEY_FILES = [
     "/files/temp/n8n_gemini_key.txt",
     "/files/gemini_key.txt",
-    "/files/temp/all_ai_creds.json"
+    "/files/temp/gemini_key.txt",
+    "/files/temp/all_ai_creds.json",
+]
+VISION_MODELS = [
+    "gemini-3.1-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-3.5-flash",
 ]
 TARGET_ASPECT = 720.0 / 380.0  # 1.8947 matching zero-gap Short top box (720x380)
 
@@ -39,106 +45,163 @@ def log(msg: str):
     print(f"[CamDetector] {msg}", file=sys.stderr)
 
 
-def get_gemini_api_key() -> str:
-    """Resolves Gemini API key from environment or local credentials."""
-    key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if key and len(key) > 20:
-        return key
+def collect_gemini_api_keys() -> list:
+    """Collects all unique Gemini API keys from env and credential files."""
+    keys = []
+    seen = set()
 
+    def _add(k: str):
+        k = str(k or "").strip()
+        if len(k) > 20 and k not in seen:
+            seen.add(k)
+            keys.append(k)
+
+    _add(os.environ.get("GEMINI_API_KEY", ""))
     for kpath in GEMINI_KEY_FILES:
         if os.path.exists(kpath):
             try:
-                with open(kpath, "r", encoding="utf-8") as f:
-                    content = f.read().strip()
+                content = open(kpath, "r", encoding="utf-8").read().strip()
                 if kpath.endswith(".json"):
                     creds = json.loads(content)
-                    for c in creds:
-                        if "gemini" in c.get("type", "").lower() or "palm" in c.get("type", "").lower():
-                            k = c.get("apiKey", "").strip()
-                            if k:
-                                return k
-                elif content and len(content) > 20:
-                    return content
+                    if isinstance(creds, list):
+                        for c in creds:
+                            ctype = str(c.get("type", "")).lower()
+                            if "gemini" in ctype or "palm" in ctype or "google" in ctype:
+                                _add(c.get("apiKey", ""))
+                else:
+                    _add(content)
             except Exception as e:
                 log(f"Warning: Failed reading {kpath}: {e}")
+    return keys
 
-    return ""
+
+def get_gemini_api_key() -> str:
+    """Resolves primary Gemini API key (backwards-compatible wrapper)."""
+    keys = collect_gemini_api_keys()
+    return keys[0] if keys else ""
 
 
-def detect_streamer_gemini_vision(img_path: str, api_key: str) -> dict:
-    """Calls Gemini 2.5 Flash Vision to identify streamer presence and exact boundaries."""
-    if not os.path.isfile(img_path) or not api_key:
+def _parse_vision_json(raw_text: str) -> dict | None:
+    clean = str(raw_text or "").strip()
+    if clean.startswith("```"):
+        clean = clean.split("\n", 1)[-1]
+    if clean.endswith("```"):
+        clean = clean.rsplit("\n", 1)[0]
+    clean = clean.replace("```json", "").replace("```", "").strip()
+    parsed = json.loads(clean)
+    if isinstance(parsed, list):
+        positives = [p for p in parsed if isinstance(p, dict) and p.get("has_streamer")]
+        parsed = positives[0] if positives else (parsed[0] if parsed and isinstance(parsed[0], dict) else {})
+    if not isinstance(parsed, dict):
+        return None
+    has_s = bool(parsed.get("has_streamer", False))
+    wb = parsed.get("webcam_box") or [0, 0, 0, 0]
+    fb = parsed.get("face_box") or [0, 0, 0, 0]
+    if has_s and len(wb) == 4:
+        bh = float(wb[2]) - float(wb[0])
+        bw = float(wb[3]) - float(wb[1])
+        # Sanity bounds: reject tiny UI badges or full-screen boxes (>65% screen area)
+        if bh < 50 or bw < 50 or (bh * bw) > 650000:
+            has_s = False
+    return {
+        "has_streamer": has_s,
+        "type": str(parsed.get("type", "none")) if has_s else "none",
+        "webcam_box": wb if has_s else [0, 0, 0, 0],
+        "face_box": fb if has_s else [0, 0, 0, 0],
+        "confidence": 0.98 if has_s else 0.0,
+    }
+
+
+def detect_streamer_gemini_vision(img_or_paths, api_key: str = "", api_keys: list | None = None) -> dict | None:
+    """Calls Gemini Vision across key/model rotation using 1-3 active frames to locate persistent webcam boundaries."""
+    keys = list(api_keys or [])
+    if api_key and api_key not in keys:
+        keys.insert(0, api_key)
+    if not keys:
+        keys = collect_gemini_api_keys()
+    if not keys:
         return None
 
-    try:
-        with open(img_path, "rb") as f:
-            b64_data = base64.b64encode(f.read()).decode("utf-8")
+    img_paths = [img_or_paths] if isinstance(img_or_paths, str) else list(img_or_paths or [])
+    img_parts = []
+    for p in img_paths[:2]:
+        if not p or not os.path.isfile(p):
+            continue
+        im = cv2.imread(p)
+        if im is None:
+            continue
+        im_s = cv2.resize(im, (640, 360), interpolation=cv2.INTER_AREA)
+        ok_enc, buf = cv2.imencode(".jpg", im_s, [int(cv2.IMWRITE_JPEG_QUALITY), 78])
+        if ok_enc:
+            img_parts.append({"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(buf.tobytes()).decode("utf-8")}})
+    if not img_parts:
+        return None
 
-        prompt = (
-            "Analyze this gaming livestream frame to detect the streamer's camera layout for a vertical YouTube Short crop.\n"
-            "Identify:\n"
-            "1. Is there a LIVE streamer webcam or live VTuber avatar? (CRITICAL: In-game gameplay characters, passing banner signs, or logos = FALSE).\n"
-            "2. Camera type: 'box' (streamer is in a distinct rectangular webcam box with their bedroom/room/studio background or vertical phone stream box) "
-            "OR 'green_screen' (streamer has transparent cutout background directly over the game).\n"
-            "3. Exact outer boundaries of the webcam:\n"
-            "   - If 'box': Find the EXACT [ymin, xmin, ymax, xmax] coordinates (0 to 1000 scale) of the ENTIRE physical webcam box rectangle. "
-            "     CRITICAL: Do NOT include any game screen, website menus, or stream UI outside the webcam border!\n"
-            "   - If 'green_screen': Find the [ymin, xmin, ymax, xmax] coordinates (0 to 1000 scale) enclosing the streamer from top of head/hair down to their bottom edge, and shoulders.\n"
-            "4. Exact streamer face/head box in normalized [ymin, xmin, ymax, xmax] (0 to 1000 scale).\n\n"
-            "Return strictly JSON:\n"
-            "{\n"
-            '  "has_streamer": true,\n'
-            '  "type": "box" | "green_screen",\n'
-            '  "webcam_box": [ymin, xmin, ymax, xmax],\n'
-            '  "face_box": [ymin, xmin, ymax, xmax]\n'
-            "}\n"
-            "If NO live streamer exists, return: {\"has_streamer\": false, \"type\": \"none\", \"webcam_box\": [0,0,0,0], \"face_box\": [0,0,0,0]}"
-        )
+    prompt = (
+        "Analyze these livestream frames to detect the streamer's PERSISTENT LIVE webcam or live VTuber avatar.\n"
+        "CRITICAL RULES:\n"
+        "1. In-game characters, NPCs, transient subscriber/donation alert popups, or commercial breaks = NOT streamer cam.\n"
+        "2. If a commercial/ad break appears in one frame, ignore it and use the gameplay frame(s).\n"
+        "3. Return ONE SINGLE JSON OBJECT representing the consistent webcam position across gameplay frames:\n"
+        "   - type='box': streamer is in a distinct rectangular webcam box (top-left, top-right, bottom-left, bottom-right, etc.).\n"
+        "     `webcam_box` [ymin, xmin, ymax, xmax] (0..1000) MUST tightly match the outer border of that box (ZERO game bleed).\n"
+        "   - type='green_screen': transparent cutout directly over gameplay (no box background).\n"
+        "     `webcam_box` encloses streamer head + shoulders (0..1000).\n"
+        "   - `face_box`: streamer head/face [ymin, xmin, ymax, xmax] (0..1000).\n\n"
+        "OUTPUT STRICT SINGLE JSON OBJECT (NEVER A JSON ARRAY):\n"
+        '{"has_streamer": true, "type": "box", "webcam_box": [ymin, xmin, ymax, xmax], "face_box": [ymin, xmin, ymax, xmax]}\n'
+        'If NO persistent live streamer cam exists, return: {"has_streamer": false, "type": "none", "webcam_box": [0,0,0,0], "face_box": [0,0,0,0]}'
+    )
+    parts = [{"text": prompt}] + img_parts
 
-        payload = {
-            "contents": [{
-                "parts": [
-                    {"text": prompt},
-                    {"inline_data": {"mime_type": "image/jpeg", "data": b64_data}}
-                ]
-            }],
-            "generationConfig": {
+    last_err = None
+    for model in VISION_MODELS:
+        for key in keys:
+            gen_cfg = {
                 "responseMimeType": "application/json",
-                "temperature": 0.1,
-                "maxOutputTokens": 1024
+                "temperature": 0.0,
+                "maxOutputTokens": 1536,
             }
-        }
+            if "2.5" in model:
+                gen_cfg["thinkingConfig"] = {"thinkingBudget": 0}
+            payload = {"contents": [{"parts": parts}], "generationConfig": gen_cfg}
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
+            req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers={"Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    res_json = json.loads(resp.read().decode("utf-8"))
+                candidates = res_json.get("candidates", [])
+                if candidates:
+                    all_text = "".join(p.get("text", "") for p in candidates[0].get("content", {}).get("parts", []) if p.get("text"))
+                    if all_text.strip():
+                        res = _parse_vision_json(all_text)
+                        if res is not None:
+                            log(f"Gemini Vision ({model}): has_streamer={res['has_streamer']}, type={res['type']}, box={res['webcam_box']}")
+                            return res
+            except urllib.error.HTTPError as he:
+                err_body = he.read().decode("utf-8", errors="ignore")[:160]
+                last_err = f"{model} HTTP {he.code}"
+                if he.code == 400 and "thinkingBudget" in err_body:
+                    gen_cfg.pop("thinkingConfig", None)
+                    try:
+                        req2 = urllib.request.Request(url, data=json.dumps({"contents": [{"parts": parts}], "generationConfig": gen_cfg}).encode("utf-8"), headers={"Content-Type": "application/json"})
+                        with urllib.request.urlopen(req2, timeout=14) as resp2:
+                            res_json2 = json.loads(resp2.read().decode("utf-8"))
+                        all_text2 = "".join(p.get("text", "") for p in res_json2.get("candidates", [{}])[0].get("content", {}).get("parts", []) if p.get("text"))
+                        if all_text2.strip():
+                            res2 = _parse_vision_json(all_text2)
+                            if res2 is not None:
+                                log(f"Gemini Vision ({model}): has_streamer={res2['has_streamer']}, type={res2['type']}, box={res2['webcam_box']}")
+                                return res2
+                    except Exception:
+                        pass
+                continue
+            except Exception as e:
+                last_err = f"{model}: {e}"
+                continue
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-        data_bytes = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(url, data=data_bytes, headers={"Content-Type": "application/json"})
-
-        with urllib.request.urlopen(req, timeout=12) as resp:
-            res_json = json.loads(resp.read().decode("utf-8"))
-            candidates = res_json.get("candidates", [])
-            if candidates:
-                all_text = ""
-                for p in candidates[0].get("content", {}).get("parts", []):
-                    if "text" in p and p["text"]:
-                        all_text += p["text"]
-                clean_text = all_text.strip()
-                if clean_text.startswith("```"):
-                    clean_text = clean_text.split("\n", 1)[-1]
-                if clean_text.endswith("```"):
-                    clean_text = clean_text.rsplit("\n", 1)[0]
-                clean_text = clean_text.replace("```json", "").replace("```", "").strip()
-                parsed = json.loads(clean_text)
-                log(f"Gemini Vision Output: has_streamer={parsed.get('has_streamer')}, type={parsed.get('type')}, box={parsed.get('webcam_box')}")
-                return {
-                    "has_streamer": bool(parsed.get("has_streamer", False)),
-                    "type": str(parsed.get("type", "none")),
-                    "webcam_box": parsed.get("webcam_box", [0, 0, 0, 0]),
-                    "face_box": parsed.get("face_box", [0, 0, 0, 0]),
-                    "confidence": 0.98 if parsed.get("has_streamer") else 0.0
-                }
-    except Exception as e:
-        log(f"Gemini Vision API call failed: {e}")
-
+    if last_err:
+        log(f"Gemini Vision API call failed: {last_err}")
     return None
 
 
@@ -264,9 +327,9 @@ def cluster_faces_across_frames(detections_per_frame, real_w=1920, real_h=1080):
 
 def find_physical_box_borders(img_or_imgs, face_or_cluster, real_w=1920, real_h=1080):
     """
-    Detects straight continuous border lines (dx <= 2 or dy <= 2) enclosing the face.
-    Handles both single-image calls (legacy) and multi-image cluster calls.
-    Ensures lines do not cut inside the streamer's face or body.
+    Detects straight persistent border lines enclosing the streamer webcam box across frames.
+    Works for ANY corner/edge (top-left, top-right, bottom-left like xQc, bottom-right, mid-side)
+    while rejecting green-screen cutouts near unrelated full-screen UI lines.
     """
     if isinstance(img_or_imgs, list):
         images = img_or_imgs
@@ -279,7 +342,7 @@ def find_physical_box_borders(img_or_imgs, face_or_cluster, real_w=1920, real_h=
             "w": face_or_cluster["w"],
             "h": face_or_cluster["h"],
             "frames": {0},
-            "is_docked": (face_or_cluster["cy"] >= real_h * 0.48)
+            "is_docked": (face_or_cluster["cy"] >= real_h * 0.48),
         }
 
     scale_x = real_w / 960.0
@@ -287,90 +350,162 @@ def find_physical_box_borders(img_or_imgs, face_or_cluster, real_w=1920, real_h=
 
     s_fx = int((cluster["cx"] - cluster["w"] // 2) / scale_x)
     s_fy = int((cluster["cy"] - cluster["h"] // 2) / scale_y)
-    s_fw = int(cluster["w"] / scale_x)
-    s_fh = int(cluster["h"] / scale_y)
+    s_fw = max(12, int(cluster["w"] / scale_x))
+    s_fh = max(12, int(cluster["h"] / scale_y))
 
-    anchored_left = (s_fx < 960 * 0.20)
-    anchored_right = ((s_fx + s_fw) > 960 * 0.80)
-    anchored_top = (s_fy < 540 * 0.22)
+    anchored_left = (s_fx < 960 * 0.16)
+    anchored_right = ((s_fx + s_fw) > 960 * 0.84)
+    anchored_top = (s_fy < 540 * 0.16)
     anchored_bottom = ((s_fy + s_fh) > 540 * 0.80)
 
-    # Pure bottom-docked streamers are green-screen cutouts; don't search for table/room boxes
-    if cluster.get("is_docked") and not (anchored_left and anchored_top):
+    frame_indices = sorted(f for f in cluster.get("frames", {0}) if f < len(images) and images[f] is not None)
+    if not frame_indices:
+        frame_indices = [i for i, im in enumerate(images) if im is not None]
+    if not frame_indices:
         return False, None
 
-    detected_boxes = []
+    left_cands, right_cands, top_cands, bot_cands = [], [], [], []
+    per_frame_lines = {}
 
-    for f_idx in cluster.get("frames", {0}):
-        if f_idx >= len(images):
-            continue
-        img = images[f_idx]
-        if img is None:
-            continue
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        small_gray = cv2.resize(gray, (960, 540), interpolation=cv2.INTER_AREA)
-        edges = cv2.Canny(small_gray, 40, 120)
-        lines = cv2.HoughLinesP(edges, 1, np.pi/180, threshold=35, minLineLength=50, maxLineGap=12)
-        if lines is None:
-            continue
+    for f_idx in frame_indices:
+        small_gray = cv2.cvtColor(cv2.resize(images[f_idx], (960, 540), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(small_gray, 35, 115)
+        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=35, minLineLength=45, maxLineGap=10)
+        vlines, hlines = [], []
+        if lines is not None:
+            for l in lines:
+                pts = l[0] if getattr(l, "ndim", 1) > 1 else l
+                lx1, ly1, lx2, ly2 = int(pts[0]), int(pts[1]), int(pts[2]), int(pts[3])
+                if abs(lx2 - lx1) <= 2 and abs(ly2 - ly1) >= 45:
+                    vlines.append((int(round((lx1 + lx2) / 2.0)), min(ly1, ly2), max(ly1, ly2)))
+                elif abs(ly2 - ly1) <= 2 and abs(lx2 - lx1) >= 45:
+                    hlines.append((int(round((ly1 + ly2) / 2.0)), min(lx1, lx2), max(lx1, lx2)))
+        per_frame_lines[f_idx] = (vlines, hlines)
 
-        vert_lines = []
-        horiz_lines = []
-        for line in lines:
-            lx1, ly1, lx2, ly2 = line[0]
-            dx = abs(lx2 - lx1)
-            dy = abs(ly2 - ly1)
-            if dx <= 2 and dy >= 50:
-                vert_lines.append((min(lx1, lx2), min(ly1, ly2), max(ly1, ly2), dy))
-            elif dy <= 2 and dx >= 50:
-                horiz_lines.append((min(ly1, ly2), min(lx1, lx2), max(lx1, lx2), dx))
+        for x, y1, y2 in vlines:
+            if (s_fx + s_fw) <= x <= min(960, s_fx + int(s_fw * 3.8)):
+                if max(y1, s_fy - s_fh) <= min(y2, s_fy + s_fh * 2):
+                    right_cands.append((f_idx, x, y1, y2))
+            if max(0, s_fx - int(s_fw * 3.8)) <= x <= s_fx:
+                if max(y1, s_fy - s_fh) <= min(y2, s_fy + s_fh * 2):
+                    left_cands.append((f_idx, x, y1, y2))
 
-        bx1 = 0 if anchored_left else None
-        by1 = 0 if anchored_top else None
-        bx2 = 960 if anchored_right else None
-        by2 = 540 if anchored_bottom else None
+        for y, x1, x2 in hlines:
+            if max(0, s_fy - int(s_fh * 1.15)) <= y <= s_fy:
+                if max(x1, s_fx - s_fw) <= min(x2, s_fx + s_fw * 2):
+                    top_cands.append((f_idx, y, x1, x2))
+            if (s_fy + s_fh) <= y <= min(540, s_fy + int(s_fh * 3.2)):
+                if max(x1, s_fx - s_fw) <= min(x2, s_fx + s_fw * 2):
+                    bot_cands.append((f_idx, y, x1, x2))
 
-        # Search right border (MUST be strictly to the right of face)
-        if anchored_left and bx2 is None:
-            cands = [x for x, y1, y2, l in vert_lines if (s_fx + s_fw) <= x <= min(960, s_fx + int(s_fw * 3.5)) and max(y1, s_fy) <= min(y2, s_fy + s_fh + 120)]
-            if cands:
-                bx2 = min(cands)
+    def _persistent_edges(cands, n_frames):
+        groups = []
+        for f_i, coord, span_a, span_b in cands:
+            placed = False
+            for g in groups:
+                if abs(coord - g["med"]) <= 4:
+                    g["items"].append((f_i, coord, span_a, span_b))
+                    g["frames"].add(f_i)
+                    g["med"] = float(np.median([it[1] for it in g["items"]]))
+                    placed = True
+                    break
+            if not placed:
+                groups.append({"items": [(f_i, coord, span_a, span_b)], "frames": {f_i}, "med": float(coord)})
+        req = 2 if n_frames >= 2 else 1
+        return [g for g in groups if len(g["frames"]) >= req]
 
-        # Search bottom border (MUST be strictly below face/chin)
-        if anchored_top and by2 is None:
-            cands = [y for y, x1, x2, l in horiz_lines if (s_fy + s_fh) <= y <= min(540, s_fy + int(s_fh * 3.5)) and max(x1, 0) <= min(x2, bx2 if bx2 else 960)]
-            if cands:
-                by2 = min(cands)
+    n_f = len(frame_indices)
+    p_left = _persistent_edges(left_cands, n_f)
+    p_right = _persistent_edges(right_cands, n_f)
+    p_top = _persistent_edges(top_cands, n_f)
+    p_bot = _persistent_edges(bot_cands, n_f)
 
-        # Search left border
-        if anchored_right and bx1 is None:
-            cands = [x for x, y1, y2, l in vert_lines if max(0, s_fx - int(s_fw * 2.5)) <= x <= s_fx]
-            if cands:
-                bx1 = max(cands)
+    # Pick right/left edges strongest + closest outside face
+    def _pick_edge(groups, fallback, prefer_outer_min=False, prefer_outer_max=False):
+        if not groups:
+            return fallback, None
+        if prefer_outer_max:
+            groups.sort(key=lambda g: (-len(g["frames"]), -g["med"]))
+        elif prefer_outer_min:
+            groups.sort(key=lambda g: (-len(g["frames"]), g["med"]))
+        else:
+            groups.sort(key=lambda g: (-len(g["frames"]), -sum(it[3] - it[2] for it in g["items"])))
+        return int(round(groups[0]["med"])), groups[0]
 
-        # Search top border
-        if anchored_bottom and by1 is None:
-            cands = [y for y, x1, x2, l in horiz_lines if max(0, s_fy - int(s_fh * 2.5)) <= y <= s_fy]
-            if cands:
-                by1 = max(cands)
+    bx1 = 0 if anchored_left else None
+    bx2 = 960 if anchored_right else None
+    bx1_grp, bx2_grp = None, None
+    if bx1 is None:
+        bx1, bx1_grp = _pick_edge(p_left, None)
+    else:
+        # Check if persistent inner left inset exists
+        c_l, c_lg = _pick_edge(p_left, None)
+        if c_l is not None and 8 < c_l < s_fx and anchored_right:
+            bx1, bx1_grp = c_l, c_lg
+    if bx2 is None:
+        bx2, bx2_grp = _pick_edge(p_right, None)
+    elif p_right and anchored_left:
+        pass
 
-        if bx1 is not None and bx2 is not None and by1 is not None and by2 is not None:
-            norm_box = (
-                int(bx1 * scale_x),
-                int(by1 * scale_y),
-                int(bx2 * scale_x),
-                int(by2 * scale_y)
-            )
-            detected_boxes.append(norm_box)
+    by1 = 0 if anchored_top else None
+    by2 = 540 if anchored_bottom else None
+    by1_grp, by2_grp = None, None
 
-    if detected_boxes:
-        med_bx1 = int(np.median([b[0] for b in detected_boxes]))
-        med_by1 = int(np.median([b[1] for b in detected_boxes]))
-        med_bx2 = int(np.median([b[2] for b in detected_boxes]))
-        med_by2 = int(np.median([b[3] for b in detected_boxes]))
-        return True, (med_bx1, med_by1, med_bx2, med_by2)
+    # For bottom boundary of top box (like MeganPlays): prefer horizontal lines aligning cleanly to bx2 (not ending mid-chest)
+    if by2 is None:
+        if p_bot and bx2 is not None:
+            # Prefer horizontal edge below chin+offset (s_fy + s_fh * 1.15) that ends cleanly near bx2 (not spanning full screen)
+            scored_bot = []
+            for g in p_bot:
+                y_med = g["med"]
+                max_x2 = max(it[3] for it in g["items"])
+                min_x1 = min(it[2] for it in g["items"])
+                box_w = max(50, bx2 - (bx1 or 0))
+                ends_near_bx2 = abs(max_x2 - bx2) <= 25 or (bx1 is not None and max_x2 <= bx2 + 30)
+                not_screenwide = (max_x2 - min_x1) <= box_w * 1.8
+                below_torso = y_med >= s_fy + s_fh * 1.25
+                sc = len(g["frames"]) * 10 + (15 if ends_near_bx2 else 0) + (10 if not_screenwide else -20) + (8 if below_torso else 0)
+                scored_bot.append((sc, g))
+            scored_bot.sort(key=lambda t: (-t[0], -t[1]["med"]))
+            by2_grp = scored_bot[0][1]
+            by2 = int(round(by2_grp["med"]))
+        else:
+            by2, by2_grp = _pick_edge(p_bot, None, prefer_outer_max=True)
 
-    return False, None
+    if by1 is None:
+        by1, by1_grp = _pick_edge(p_top, None, prefer_outer_min=True)
+
+    if bx1 is None or bx2 is None or by1 is None or by2 is None:
+        return False, None
+    if bx2 - bx1 < 60 or by2 - by1 < 60:
+        return False, None
+
+    # Anti-green-screen sanity check:
+    # A genuine physical box tightly frames the face/shoulders and never stretches across the full screen height
+    box_w = bx2 - bx1
+    box_h = by2 - by1
+    if box_h > max(270, int(s_fh * 3.1)):
+        return False, None
+    if anchored_bottom and by2 >= 520:
+        # Bottom-docked green-screen guard: require BOTH an interior top border and interior side border
+        # whose extents actually align closely with the box rather than spanning across the entire screen
+        if not by1_grp or not (bx2_grp or bx1_grp):
+            return False, None
+        top_spans = [(it[3] - it[2]) for it in by1_grp["items"]]
+        if min(top_spans) > box_w * 1.45:
+            return False, None
+        side_grp = bx2_grp if anchored_left else bx1_grp
+        side_spans = [(it[3] - it[2]) for it in side_grp["items"]]
+        # A green-screen streamer next to a webpage sidebar has side lines taller than the localized box or no tight top corner
+        if max(side_spans) < box_h * 0.45 or max(side_spans) > box_h * 1.45:
+            return False, None
+
+    return True, (
+        int(bx1 * scale_x),
+        int(by1 * scale_y),
+        int(bx2 * scale_x),
+        int(by2 * scale_y),
+    )
 
 
 def sanitize_crop(cx: int, cy: int, fw: int, fh: int, camera_type: str, box_coords: tuple = None, real_w=1920, real_h=1080) -> dict:
@@ -577,12 +712,23 @@ def build_piecewise_timeline(frames, loaded_imgs, dets_per_frame, primary_crop, 
     return timeline
 
 
-def is_static_png_overlay(images: list, face_box: dict, real_w: int = 1920, real_h: int = 1080) -> bool:
+def is_static_png_overlay(
+    images: list,
+    face_box: dict,
+    real_w: int = 1920,
+    real_h: int = 1080,
+    active_indices: set | list | None = None,
+) -> bool:
     """
-    Compares pixel variance inside the candidate face bounding box across ref_1..ref_5.
-    Returns True if the candidate face is a static PNG/cartoon sticker (near-zero motion inside head/face).
+    Compares pixel variance inside the candidate face bounding box across face-containing reference frames.
+    Returns True ONLY if the candidate face is a genuine static PNG/cartoon sticker (near-zero motion across frames).
     """
-    valid_imgs = [im for im in (images or []) if im is not None]
+    src_imgs = images or []
+    if active_indices:
+        chosen = [src_imgs[i] for i in sorted(active_indices) if 0 <= i < len(src_imgs) and src_imgs[i] is not None]
+        valid_imgs = chosen if len(chosen) >= 2 else [im for im in src_imgs if im is not None]
+    else:
+        valid_imgs = [im for im in src_imgs if im is not None]
     if len(valid_imgs) < 2 or not face_box:
         return False
 
@@ -595,11 +741,11 @@ def is_static_png_overlay(images: list, face_box: dict, real_w: int = 1920, real
     for im in valid_imgs:
         ih, iw = im.shape[:2]
         sx, sy = iw / float(real_w), ih / float(real_h)
-        # Inner 60% of candidate face box avoids surrounding gameplay/background bleed
-        x1 = max(0, int((cx - fw * 0.30) * sx))
-        y1 = max(0, int((cy - fh * 0.30) * sy))
-        x2 = min(iw, int((cx + fw * 0.30) * sx))
-        y2 = min(ih, int((cy + fh * 0.30) * sy))
+        # Inner 68% of candidate face box captures head/mouth/eyes while avoiding outer game bleed
+        x1 = max(0, int((cx - fw * 0.34) * sx))
+        y1 = max(0, int((cy - fh * 0.34) * sy))
+        x2 = min(iw, int((cx + fw * 0.34) * sx))
+        y2 = min(ih, int((cy + fh * 0.34) * sy))
         if x2 - x1 < 8 or y2 - y1 < 8:
             continue
         gray = cv2.cvtColor(im[y1:y2, x1:x2], cv2.COLOR_BGR2GRAY).astype(np.float32)
@@ -614,17 +760,39 @@ def is_static_png_overlay(images: list, face_box: dict, real_w: int = 1920, real
         for r in rois
     ]
 
-    pair_meds = [float(np.median(np.abs(rois[i] - rois[i + 1]))) for i in range(len(rois) - 1)]
-    unchanged_ratios = [float(np.mean(np.abs(rois[i] - rois[i + 1]) < 3.0)) for i in range(len(rois) - 1)]
+    pair_meds, pair_p90s, pair_means, pair_unch = [], [], [], []
+    for i in range(len(rois)):
+        for j in range(i + 1, len(rois)):
+            diff = np.abs(rois[i] - rois[j])
+            pair_meds.append(float(np.median(diff)))
+            pair_p90s.append(float(np.percentile(diff, 90)))
+            pair_means.append(float(np.mean(diff)))
+            pair_unch.append(float(np.mean(diff < 3.0)))
+
     mean_med_diff = float(np.mean(pair_meds))
-    mean_unchanged = float(np.mean(unchanged_ratios))
+    max_p90 = float(np.max(pair_p90s))
+    mean_diff = float(np.mean(pair_means))
+    min_unchanged = float(np.min(pair_unch))
     temporal_std = float(np.mean(np.std(np.stack(rois, axis=0), axis=0)))
 
-    log(f"Face ROI motion check: med_diff={mean_med_diff:.2f}, temporal_std={temporal_std:.2f}, unchanged_ratio={mean_unchanged:.2f}")
-    if mean_med_diff < 12.0 or temporal_std < 22.0 or mean_unchanged > 0.20:
+    log(
+        f"Face ROI motion check (n={len(rois)}): med={mean_med_diff:.2f}, max_p90={max_p90:.2f}, "
+        f"mean={mean_diff:.2f}, temporal_std={temporal_std:.2f}, min_unchanged={min_unchanged:.2f}"
+    )
+    is_static = (temporal_std < 5.0 and max_p90 < 14.0) or (mean_diff < 3.5 and min_unchanged > 0.72)
+    if is_static:
         log("REJECTED static PNG/cartoon overlay (near-zero pixel variance across reference frames).")
         return True
     return False
+
+
+def _is_low_detail_ad_frame(img) -> bool:
+    """Detects uniform gradient commercial break / blank screens."""
+    if img is None:
+        return True
+    small = cv2.cvtColor(cv2.resize(img, (320, 180), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY)
+    lap_var = float(cv2.Laplacian(small, cv2.CV_32F).var())
+    return lap_var < 18.0
 
 
 def save_and_output(result: dict, out_config: str):
@@ -641,12 +809,11 @@ def save_and_output(result: dict, out_config: str):
 def run_pipeline(input_arg: str = "/files/temp/ref_*.jpg", out_config: str = DEFAULT_CONFIG_PATH, video_arg: str = "") -> dict:
     """
     Main Pipeline:
-    1. Gathers reference frames (or samples 5 distributed frames across video).
-    2. Runs Gemini 2.5 Flash Vision Ground-Truth Detection (if available).
-    3. Runs OpenCV YuNet Multi-Frame Spatial Clustering & Consensus.
-    4. Runs Geometric Border Snapping for physical webcam boxes.
-    5. Computes bulletproof framing & centering.
-    6. Outputs clean JSON and saves to disk.
+    1. Gathers distributed reference frames (or samples 7 distributed frames across video when needed).
+    2. Runs fast local OpenCV YuNet DNN multi-frame spatial clustering first to pinpoint streamer frames & reject ads.
+    3. Cross-checks with Gemini Vision (rotated keys + models) using face-active / non-blank frames.
+    4. Snaps physical box borders accurately in any corner/edge and verifies real live motion.
+    5. Outputs clean JSON and saves to disk.
     """
     fallback_res = {
         "ai_found": False,
@@ -661,15 +828,15 @@ def run_pipeline(input_arg: str = "/files/temp/ref_*.jpg", out_config: str = DEF
     else:
         frames = sorted(glob.glob(input_arg))
 
-    if (not frames or len(frames) <= 1) and video_arg and os.path.isfile(video_arg):
-        log(f"Sampling distributed reference frames from {video_arg}...")
+    if (not frames or len(frames) <= 2) and video_arg and os.path.isfile(video_arg):
+        log(f"Sampling 7 distributed reference frames from {video_arg}...")
         cap = cv2.VideoCapture(video_arg)
         if cap.isOpened():
             total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             if total > 0:
                 frames = []
-                for i, r in enumerate([0.15, 0.32, 0.50, 0.68, 0.85]):
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, int(total * r))
+                for i, r in enumerate([0.06, 0.19, 0.33, 0.48, 0.63, 0.77, 0.90]):
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, min(total - 1, max(0, int(total * r))))
                     ret, frame = cap.read()
                     if ret and frame is not None:
                         out_p = f"/files/temp/auto_ref_{i+1}.jpg"
@@ -683,70 +850,98 @@ def run_pipeline(input_arg: str = "/files/temp/ref_*.jpg", out_config: str = DEF
         return fallback_res
 
     log(f"Loaded {len(frames)} reference frame(s): {[os.path.basename(f) for f in frames]}")
-    loaded_imgs = [im for im in (cv2.imread(f) for f in frames) if im is not None]
+    loaded_pairs = [(f, cv2.imread(f)) for f in frames]
+    loaded_pairs = [(f, im) for f, im in loaded_pairs if im is not None]
+    frames = [f for f, _ in loaded_pairs]
+    loaded_imgs = [im for _, im in loaded_pairs]
+    if not loaded_imgs:
+        log("Failed reading any reference image. Returning fallback.")
+        save_and_output(fallback_res, out_config)
+        return fallback_res
 
-    # 2. Primary Cloud Engine: Gemini 2.5 Flash Vision Ground-Truth Detection
-    api_key = get_gemini_api_key()
-    if api_key:
-        primary_frame = frames[len(frames) // 2]
-        vision_layout = detect_streamer_gemini_vision(primary_frame, api_key)
+    # 2. Fast Local YuNet Clustering First (gives active face frame indices & offline resilience)
+    best_cluster = None
+    if os.path.exists(YUNET_MODEL):
+        detector = cv2.FaceDetectorYN.create(YUNET_MODEL, "", (960, 540), score_threshold=0.45)
+        dets_per_frame = [detect_faces_yunet(img, detector) for img in loaded_imgs]
+        best_cluster = cluster_faces_across_frames(dets_per_frame)
 
-        if vision_layout is not None:
-            if not vision_layout.get("has_streamer"):
+    if best_cluster is not None:
+        log(
+            f"Local YuNet cluster: cx={best_cluster['cx']}, cy={best_cluster['cy']}, "
+            f"w={best_cluster['w']}, h={best_cluster['h']} (Persistence: {best_cluster['persistence']}/{len(loaded_imgs)})"
+        )
+        if is_static_png_overlay(loaded_imgs, best_cluster, active_indices=best_cluster.get("frames")):
+            log("Local YuNet cluster rejected: Static PNG overlay detected across reference frames.")
+            best_cluster = None
+
+    # 3. Gemini Vision Cross-Check / VTuber Detection using active non-ad frames
+    api_keys = collect_gemini_api_keys()
+    vision_layout = None
+    if api_keys:
+        if best_cluster and best_cluster.get("frames"):
+            f_idxs = sorted(i for i in best_cluster["frames"] if 0 <= i < len(frames))
+            if len(f_idxs) > 3:
+                f_idxs = [f_idxs[0], f_idxs[len(f_idxs) // 2], f_idxs[-1]]
+            vision_frames = [frames[i] for i in f_idxs]
+        else:
+            active_idxs = [i for i, im in enumerate(loaded_imgs) if not _is_low_detail_ad_frame(im)]
+            if not active_idxs:
+                active_idxs = list(range(len(frames)))
+            if len(active_idxs) > 3:
+                active_idxs = [active_idxs[0], active_idxs[len(active_idxs) // 2], active_idxs[-1]]
+            vision_frames = [frames[i] for i in active_idxs]
+
+        vision_layout = detect_streamer_gemini_vision(vision_frames, api_keys=api_keys)
+
+    if vision_layout is not None:
+        if vision_layout.get("has_streamer"):
+            fb = vision_layout.get("face_box") or [0, 0, 0, 0]
+            wb = vision_layout.get("webcam_box") or [0, 0, 0, 0]
+            # Validate Gemini agrees with persistent >=3/5 cluster when one exists
+            v_cy = ((wb[0] + wb[2]) / 2.0) * 1080.0 / 1000.0 if len(wb) == 4 else 0
+            v_cx = ((wb[1] + wb[3]) / 2.0) * 1920.0 / 1000.0 if len(wb) == 4 else 0
+            cluster_conflict = (
+                best_cluster is not None
+                and best_cluster["persistence"] >= 3
+                and math.hypot(v_cx - best_cluster["cx"], v_cy - best_cluster["cy"]) > 420.0
+            )
+            if not cluster_conflict:
+                box_src = fb if (len(fb) == 4 and (fb[2] - fb[0]) > 5 and (fb[3] - fb[1]) > 5) else wb
+                v_static = False
+                if len(box_src) == 4 and (box_src[2] - box_src[0]) > 5 and (box_src[3] - box_src[1]) > 5:
+                    vy1, vx1, vy2, vx2 = [float(v) for v in box_src]
+                    v_face = {
+                        "cx": ((vx1 + vx2) / 2.0) * 1920.0 / 1000.0,
+                        "cy": ((vy1 + vy2) / 2.0) * 1080.0 / 1000.0,
+                        "w": max(16.0, (vx2 - vx1) * 1920.0 / 1000.0),
+                        "h": max(16.0, (vy2 - vy1) * 1080.0 / 1000.0),
+                    }
+                    active_set = best_cluster.get("frames") if (best_cluster and math.hypot(v_face["cx"] - best_cluster["cx"], v_face["cy"] - best_cluster["cy"]) < 260) else None
+                    v_static = is_static_png_overlay(loaded_imgs, v_face, active_indices=active_set)
+                if not v_static:
+                    clean_crop = compute_bulletproof_crop_from_vision(vision_layout)
+                    log(f"VERIFIED WEBCAM (Vision): {clean_crop['camera_type']} at x={clean_crop['cam_x']}, y={clean_crop['cam_y']}, {clean_crop['cam_w']}x{clean_crop['cam_h']}")
+                    save_and_output(clean_crop, out_config)
+                    return clean_crop
+                log("Gemini Vision candidate rejected: Static PNG overlay.")
+            else:
+                log("Gemini Vision box differed from strong local cluster; using local cluster + persistent borders.")
+        else:
+            # Gemini explicitly said NO live streamer. Allow strong persistent live corner/docked cluster (>=3/5)
+            # only if single noisy frame; veto transient/weak <=2 detections.
+            if best_cluster is None or best_cluster["persistence"] < 3:
                 log("Gemini Vision confirmed NO streamer facecam (pure gameplay).")
                 save_and_output(fallback_res, out_config)
                 return fallback_res
 
-            fb = vision_layout.get("face_box") or [0, 0, 0, 0]
-            wb = vision_layout.get("webcam_box") or [0, 0, 0, 0]
-            box_src = fb if (len(fb) == 4 and (fb[2] - fb[0]) > 5 and (fb[3] - fb[1]) > 5) else wb
-            if len(box_src) == 4 and (box_src[2] - box_src[0]) > 5 and (box_src[3] - box_src[1]) > 5:
-                vy1, vx1, vy2, vx2 = [float(v) for v in box_src]
-                v_face = {
-                    "cx": ((vx1 + vx2) / 2.0) * 1920.0 / 1000.0,
-                    "cy": ((vy1 + vy2) / 2.0) * 1080.0 / 1000.0,
-                    "w": max(16.0, (vx2 - vx1) * 1920.0 / 1000.0),
-                    "h": max(16.0, (vy2 - vy1) * 1080.0 / 1000.0),
-                }
-                if is_static_png_overlay(loaded_imgs, v_face):
-                    log("Gemini Vision candidate rejected: Static PNG overlay detected across reference frames.")
-                    save_and_output(fallback_res, out_config)
-                    return fallback_res
-
-            clean_crop = compute_bulletproof_crop_from_vision(vision_layout)
-            log(f"VERIFIED WEBCAM (Vision): {clean_crop['camera_type']} at x={clean_crop['cam_x']}, y={clean_crop['cam_y']}, {clean_crop['cam_w']}x{clean_crop['cam_h']}")
-            save_and_output(clean_crop, out_config)
-            return clean_crop
-
-    # 3. Autonomous Local Engine: OpenCV YuNet DNN + Multi-Frame Spatial Clustering
-    log("Running autonomous local OpenCV YuNet + Spatial Clustering + Geometric Border Engine...")
-    if not os.path.exists(YUNET_MODEL):
-        log(f"Error: YuNet model not found at {YUNET_MODEL}. Returning fallback.")
-        save_and_output(fallback_res, out_config)
-        return fallback_res
-
-    detector = cv2.FaceDetectorYN.create(YUNET_MODEL, "", (960, 540), score_threshold=0.45)
-    dets_per_frame = []
-    for img in loaded_imgs:
-        dets = detect_faces_yunet(img, detector)
-        dets_per_frame.append(dets)
-
-    best_cluster = cluster_faces_across_frames(dets_per_frame)
+    # 4. Fallback / Autonomous Local Engine: Persistent Box Borders + Bulletproof Framing
     if best_cluster is None:
         log("No persistent streamer facecam detected across frames (pure gameplay).")
         save_and_output(fallback_res, out_config)
         return fallback_res
 
-    log(f"Streamer cluster found: cx={best_cluster['cx']}, cy={best_cluster['cy']}, w={best_cluster['w']}, h={best_cluster['h']} (Persistence: {best_cluster['persistence']}/{len(loaded_imgs)})")
-
-    if is_static_png_overlay(loaded_imgs, best_cluster):
-        log("Local YuNet cluster rejected: Static PNG overlay detected across reference frames.")
-        save_and_output(fallback_res, out_config)
-        return fallback_res
-
-    # Check for physical straight box borders
     has_box, box_coords = find_physical_box_borders(loaded_imgs, best_cluster)
-
     clean_crop = compute_bulletproof_framing(best_cluster, has_box, box_coords)
     log(f"VERIFIED WEBCAM (Local Engine): {clean_crop['camera_type']} at x={clean_crop['cam_x']}, y={clean_crop['cam_y']}, {clean_crop['cam_w']}x{clean_crop['cam_h']}")
     save_and_output(clean_crop, out_config)

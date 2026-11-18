@@ -80,7 +80,7 @@ POLL_INTERVAL_SEC = 60
 MAX_WAIT_SEC = 0
 MAX_VOD_DUR_SEC = 36000
 MIN_VALID_BYTES = 5 * 1024 * 1024
-MIN_VALID_DUR_SEC = 60.0
+MIN_VALID_DUR_SEC = 600.0
 MIN_LIVE_CHUNK_DUR_SEC = 60.0
 MIN_SLICE_DUR_SEC = 30.0
 PROBE_WORKERS = 8
@@ -148,6 +148,26 @@ def save_json(path: str, data) -> None:
 def is_pid_alive(pid: int) -> bool:
     if pid <= 0:
         return False
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            STILL_ACTIVE = 259
+            kernel32 = ctypes.windll.kernel32
+            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+            if not handle:
+                return False
+            try:
+                exit_code = wintypes.DWORD()
+                if kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                    return exit_code.value == STILL_ACTIVE
+                return False
+            finally:
+                kernel32.CloseHandle(handle)
+        except Exception:
+            return False
     try:
         os.kill(pid, 0)
         return True
@@ -582,8 +602,8 @@ def evaluate_candidates(probed_streams: list[dict], state: dict, now_epoch: floa
     evaluated.sort(
         key=lambda c: (
             1 if c["ready"] else 0,
-            c["score"],
             1 if c.get("is_live") else 0,
+            c["score"],
             1 if c.get("is_vip") else 0,
             c["viewers"],
         ),
@@ -621,9 +641,13 @@ def select_best_candidate(
 
 def validate_chunk_file(
     mp4_path: str,
-    min_bytes: int = MIN_VALID_BYTES,
-    min_dur: float = MIN_VALID_DUR_SEC,
+    min_bytes: int | None = None,
+    min_dur: float | None = None,
 ) -> tuple[bool, float, int]:
+    if min_bytes is None:
+        min_bytes = MIN_VALID_BYTES
+    if min_dur is None:
+        min_dur = MIN_VALID_DUR_SEC
     if not mp4_path or not os.path.exists(mp4_path):
         return False, 0.0, 0
     size = os.path.getsize(mp4_path)
@@ -936,8 +960,8 @@ def slice_and_copy_sidecars(
     src_mp4: str,
     out_base: str,
     start_sec: float,
-    chunk_sec: float = CHUNK_SEC,
-    min_slice_sec: float = MIN_SLICE_DUR_SEC,
+    chunk_sec: float | None = None,
+    min_slice_sec: float | None = None,
     stream_start_epoch: float = 0.0,
 ) -> tuple[bool, float, float, float]:
     """
@@ -945,6 +969,10 @@ def slice_and_copy_sidecars(
     with fast stream-copy, copy .info.json, and slice/time-offset .live_chat.json.
     Returns (ok, actual_dur, end_sec, slice_dur).
     """
+    if chunk_sec is None:
+        chunk_sec = CHUNK_SEC
+    if min_slice_sec is None:
+        min_slice_sec = MIN_SLICE_DUR_SEC
     actual_dur = probe_duration(src_mp4)
     if actual_dur < min_slice_sec:
         return False, actual_dur, float(start_sec), 0.0
@@ -1233,7 +1261,7 @@ def run_scraper(
             )
             if sliced_ok:
                 is_final_tail = (end_sec >= vod_dur - 5) and last_end_sec > 0
-                min_bytes = 1024 * 1024 if is_final_tail else MIN_VALID_BYTES
+                min_bytes = min(1024 * 1024, MIN_VALID_BYTES) if is_final_tail else MIN_VALID_BYTES
                 min_dur = min(MIN_VALID_DUR_SEC, max(MIN_SLICE_DUR_SEC, slice_dur * 0.7)) if is_final_tail else MIN_VALID_DUR_SEC
                 ok, dur, size = validate_chunk_file(out_mp4, min_bytes=min_bytes, min_dur=min_dur)
                 if ok:

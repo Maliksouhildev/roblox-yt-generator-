@@ -7,8 +7,12 @@ import sys
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 
+import cv2  # noqa: E402
+import numpy as np  # noqa: E402
+import cam_detector  # noqa: E402
 import gta6_peak_storyboard_builder as peak_builder  # noqa: E402
 import gta6_vision_director as vision_director  # noqa: E402
 import edl_auditor  # noqa: E402
@@ -27,7 +31,9 @@ class TestGta6WorkflowStructure(unittest.TestCase):
         self.assertEqual(self.wf["id"], "Gta6VisionShortsV1")
         self.assertEqual(self.wf["name"], "GTA 6 Viral Shorts Engine (Peak + 3x3 Vision Edition)")
         self.assertIs(self.wf["active"], True)
-        self.assertTrue(self.nodes_by_name["Schedule Trigger"].get("disabled", False))
+        self.assertFalse(self.nodes_by_name["Schedule Trigger"].get("disabled", False))
+        sched_interval = self.nodes_by_name["Schedule Trigger"]["parameters"]["rule"]["interval"][0]
+        self.assertEqual(sched_interval.get("expression"), "0 */2 * * *")
         self.assertFalse(self.nodes_by_name["Webhook"].get("disabled", False))
         self.assertEqual(self.orig_wf["id"], "D2hITsyjP5dVsqBZ")
         self.assertEqual(self.orig_wf["name"], "YouTube Short Automation (Bypassed Version)")
@@ -156,7 +162,17 @@ class TestGta6WorkflowStructure(unittest.TestCase):
         self.assertIn("GTA6_PROMPT_ECHO_RE", swt_js)
         self.assertTrue(peak_builder._is_whisper_prompt_hallucination("Grand Theft Auto VI, Vice City, Leonida, Lucia"))
 
-        # Stream-retry loop on 0 shorts created
+        # Strict webcam gate & staged render wiring
+        self.assertEqual(self.conns["Parse Cam Config"]["main"][0][0]["node"], "IF: Has Webcam?")
+        self.assertEqual(self.conns["IF: Has Webcam?"]["main"][0][0]["node"], "Config")
+        self.assertEqual(self.conns["IF: Has Webcam?"]["main"][1][0]["node"], "Delete Source VOD")
+        self.assertEqual(self.conns["Fallback Download"]["main"][0][0]["node"], "Wait Before Next Stream")
+        self.assertEqual(self.conns["Wait Before Next Stream"]["main"][0][0]["node"], "Find Stream")
+        self.assertIn("ABORT_NO_WEBCAM", csb_js)
+        self.assertIn(".render.mp4", csb_js)
+        self.assertIn("stream_shorts_created.flag", ws_cmd)
+        self.assertIn("has_webcam", ws_cmd)
+        self.assertIn("short_description", ws_cmd)
         self.assertEqual(self.conns["Delete Source VOD"]["main"][0][0]["node"], "Check Stream Shorts Created")
         self.assertEqual(self.conns["Check Stream Shorts Created"]["main"][0][0]["node"], "IF: Retry Next Stream?")
         self.assertEqual(self.conns["IF: Retry Next Stream?"]["main"][0][0]["node"], "Find Stream")
@@ -242,11 +258,12 @@ try {
   });
   const reqProxy = (m) => (m === 'fs' ? fsProxy : require(m));
   const sidecarNodes = {
-    'Loop Clips': { json: { title: 'Test_Clip', hook_caption: 'INSANE CHASE', virality_score: 9.2, stream_file: mockStem + '.processing.mp4', start_time: 10, end_time: 40 } },
+    'Loop Clips': { json: { title: 'Test_Clip', hook_caption: 'INSANE CHASE', short_description: 'Streamer dodges 5 police cruisers cleanly across the bridge.', virality_score: 9.2, stream_file: mockStem + '.processing.mp4', start_time: 10, end_time: 40 } },
     'Resolve Creator Handle': { json: { streamer_handle: 'Streamer', creator_credit: '🎥 @Streamer' } },
     'Edit Fields': { json: { stream_file: mockStem + '.processing.mp4' } },
     'GTA 6 Load Cached Telemetry': { json: {} },
     'Config': { json: { streamer_name: 'malik' } },
+    'Parse Cam Config': { json: { ai_found: true, camera_type: 'box', cam_x: 0, cam_y: 540, cam_w: 368, cam_h: 294 } },
   };
   const wsCmd = evalExpr(byName['Write Sidecar JSON'].parameters.command, {}, sidecarNodes, reqProxy);
   // Extract JSON payload written to SIDECAR_EOF
@@ -255,6 +272,22 @@ try {
   const meta = JSON.parse(mJson[1]);
   assert.strictEqual(meta.streamer_handle, 'DarkViperAU');
   assert.strictEqual(meta.creator_credit, '🎥 @DarkViperAU');
+  assert.strictEqual(meta.has_webcam, true);
+  assert.ok(meta.youtube_description.includes('Streamer dodges 5 police cruisers'), 'Short-specific description preserved');
+
+  // Verify Write Sidecar JSON works WITHOUT require() (real n8n executeCommand expression runtime)
+  const noReq = () => { throw new ReferenceError('require is not defined'); };
+  const sidecarNodesNoReq = Object.assign({}, sidecarNodes, {
+    'Loop Clips': { json: Object.assign({}, sidecarNodes['Loop Clips'].json, { stream_file: 'xqc_321206426716_chunk1.processing.mp4' }) },
+    'Edit Fields': { json: { stream_file: 'xqc_321206426716_chunk1.processing.mp4' } },
+    'Resolve Creator Handle': { json: { streamer_handle: 'xqc', creator_credit: '🎥 @xqc' } },
+  });
+  const wsCmdNoReq = evalExpr(byName['Write Sidecar JSON'].parameters.command, {}, sidecarNodesNoReq, noReq);
+  assert.ok(typeof wsCmdNoReq === 'string' && wsCmdNoReq.includes('SIDECAR_EOF'), 'must succeed when require() throws inside n8n expression');
+  const mJsonNoReq = wsCmdNoReq.match(/SIDECAR_EOF'\s*>\s*"[^"]+"\n([\s\S]*?)\nSIDECAR_EOF/);
+  const metaNoReq = JSON.parse(mJsonNoReq[1]);
+  assert.strictEqual(metaNoReq.streamer_handle, 'xqc');
+  assert.strictEqual(metaNoReq.has_webcam, true);
   console.log('ALL_GTA6_WIRING_SANDBOX_CHECKS_PASSED');
 } finally {
   fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -382,6 +415,37 @@ class TestGta6PeakAndVisionLogic(unittest.TestCase):
         self.assertIn("DANGLING_HOOK_END", rep["flags"])
         self.assertIn("DANGLING_ELLIPSIS_OPENER", rep["flags"])
         self.assertIn("FLAT_NO_MULTIMODAL_SIGNAL", rep["flags"])
+
+    def test_cam_detector_bottom_left_box_and_motion_filter(self):
+        # 1) Bottom-left box (xQc layout): persistent white border enclosing face at (0,540)-(368,834)
+        frames = []
+        for idx in range(3):
+            img = np.zeros((1080, 1920, 3), dtype=np.uint8)
+            img[:, :] = (30, 35, 45)
+            # Draw webcam box in bottom-left
+            cv2.rectangle(img, (0, 540), (368, 834), (240, 240, 240), 3)
+            # Realistic head/face movement and lighting variation inside the webcam ROI
+            shift = idx * 18
+            cv2.circle(img, (215 + idx * 10, 675 + idx * 4), 42, (165 + shift, 140 + shift, 130 + shift), -1)
+            cv2.rectangle(img, (185 + idx * 6, 650), (255 + idx * 6, 710), (70 + shift, 90 + shift, 210), -1)
+            frames.append(img)
+
+        cluster = {"cx": 220, "cy": 675, "w": 110, "h": 110, "frames": {0, 1, 2}, "is_docked": True}
+        has_box, box_coords = cam_detector.find_physical_box_borders(frames, cluster, 1920, 1080)
+        self.assertTrue(has_box)
+        self.assertIsNotNone(box_coords)
+        bx1, by1, bx2, by2 = box_coords
+        self.assertLessEqual(bx1, 10)
+        self.assertLess(abs(by1 - 540), 15)
+        self.assertLess(abs(bx2 - 368), 15)
+        self.assertLess(abs(by2 - 834), 15)
+        # Active live webcam motion must NOT be flagged as a static PNG
+        self.assertFalse(cam_detector.is_static_png_overlay(frames, cluster, 1920, 1080, active_indices={0, 1, 2}))
+
+        # 2) Identical pixels across all frames -> rejected as static PNG overlay
+        static_img = frames[0].copy()
+        static_frames = [static_img.copy(), static_img.copy(), static_img.copy()]
+        self.assertTrue(cam_detector.is_static_png_overlay(static_frames, cluster, 1920, 1080, active_indices={0, 1, 2}))
 
 
 if __name__ == "__main__":

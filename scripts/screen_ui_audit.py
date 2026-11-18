@@ -29,7 +29,7 @@ GEMINI_KEY_FILES = [
 AUDIT_PROMPT = (
     "You are auditing 4 frames (indices 0, 1, 2, 3) extracted from a gaming Short (Roblox / GTA 6). "
     "Flag has_ui_obstruction=true if ANY frame shows: "
-    "(1) a web browser (Chrome/Edge), Twitch/YouTube chat dashboard, Discord, or pause/ESC/settings menus blocking gameplay; "
+    "(1) a web browser (Chrome/Edge), Twitch/YouTube chat dashboard, Discord, pause/ESC/settings menus, or Twitch/YouTube commercial break blocking gameplay; "
     "(2) M-rated NSFW scenes (nudity, strip clubs, sexually explicit content, or graphic TOS-violating gore); or "
     "(3) static non-gameplay screens across frames. "
     "WHITELIST (do NOT flag): normal GTA 6 bottom-left minimap radar, cinematic cutscene top/bottom black letterbox bars, "
@@ -70,10 +70,17 @@ def local_nsfw_and_static_heuristic(frames: list) -> dict:
     return {"is_nsfw_heuristic": is_nsfw, "is_static": is_static}
 
 
-def get_gemini_api_key() -> str:
-    env_k = os.environ.get("GEMINI_API_KEY", "").strip()
-    if len(env_k) > 20:
-        return env_k
+def collect_gemini_api_keys() -> list:
+    keys = []
+    seen = set()
+
+    def _add(k: str):
+        k = str(k or "").strip()
+        if len(k) > 20 and k not in seen:
+            seen.add(k)
+            keys.append(k)
+
+    _add(os.environ.get("GEMINI_API_KEY", ""))
     for kpath in GEMINI_KEY_FILES:
         if os.path.exists(kpath):
             try:
@@ -82,15 +89,18 @@ def get_gemini_api_key() -> str:
                     creds = json.loads(content)
                     for c in creds:
                         ctype = str(c.get("type", "")).lower()
-                        if "gemini" in ctype or "palm" in ctype:
-                            k = str(c.get("apiKey", "")).strip()
-                            if len(k) > 20:
-                                return k
-                elif len(content) > 20:
-                    return content
+                        if "gemini" in ctype or "palm" in ctype or "google" in ctype:
+                            _add(c.get("apiKey", ""))
+                else:
+                    _add(content)
             except Exception:
                 pass
-    return ""
+    return keys
+
+
+def get_gemini_api_key() -> str:
+    keys = collect_gemini_api_keys()
+    return keys[0] if keys else ""
 
 
 def probe_duration(video_path: str) -> float:
@@ -149,7 +159,10 @@ def parse_audit_response(raw_text: str) -> dict:
 
 
 def call_gemini_vision(frames: list, api_key: str, models=None) -> dict:
-    if not frames or not api_key:
+    keys = collect_gemini_api_keys()
+    if api_key and api_key not in keys:
+        keys.insert(0, api_key)
+    if not frames or not keys:
         return {"has_ui_obstruction": False, "bad_frames": [], "skipped": "no_frames_or_key"}
 
     parts = [{"text": AUDIT_PROMPT}]
@@ -157,35 +170,33 @@ def call_gemini_vision(frames: list, api_key: str, models=None) -> dict:
         b64 = base64.b64encode(open(fpath, "rb").read()).decode("utf-8")
         parts.append({"inline_data": {"mime_type": "image/jpeg", "data": b64}})
 
-    payload = json.dumps({
-        "contents": [{"parts": parts}],
-        "generationConfig": {
-            "temperature": 0.0,
-            "responseMimeType": "application/json",
-            "thinkingConfig": {"thinkingBudget": 0},
-        },
-    }).encode("utf-8")
-
-    model_list = models or ["gemini-2.5-flash", "gemini-3.5-flash", "gemini-2.5-flash-lite"]
+    model_list = models or ["gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-3.5-flash", "gemini-3.8-flash"]
     last_err = None
     for model in model_list:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-        req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-        try:
-            with urllib.request.urlopen(req, timeout=25) as resp:
-                resp_data = json.loads(resp.read().decode("utf-8"))
-            txt = resp_data["candidates"][0]["content"]["parts"][0]["text"]
-            parsed = parse_audit_response(txt)
-            parsed["model"] = model
-            return parsed
-        except urllib.error.HTTPError as he:
-            last_err = f"HTTP {he.code}"
-            if he.code in (429, 500, 502, 503, 504):
+        for k in keys:
+            gen_cfg = {
+                "temperature": 0.0,
+                "responseMimeType": "application/json",
+                "maxOutputTokens": 512,
+            }
+            if "2.5" in model:
+                gen_cfg["thinkingConfig"] = {"thinkingBudget": 0}
+            payload = json.dumps({"contents": [{"parts": parts}], "generationConfig": gen_cfg}).encode("utf-8")
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={k}"
+            req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=20) as resp:
+                    resp_data = json.loads(resp.read().decode("utf-8"))
+                txt = resp_data["candidates"][0]["content"]["parts"][0]["text"]
+                parsed = parse_audit_response(txt)
+                parsed["model"] = model
+                return parsed
+            except urllib.error.HTTPError as he:
+                last_err = f"HTTP {he.code}"
                 continue
-            break
-        except Exception as ex:
-            last_err = str(ex)
-            continue
+            except Exception as ex:
+                last_err = str(ex)
+                continue
 
     return {"has_ui_obstruction": False, "bad_frames": [], "error": last_err or "vision_unavailable"}
 
