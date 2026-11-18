@@ -129,6 +129,9 @@ class TestGta6WorkflowStructure(unittest.TestCase):
         self.assertIn("youtube_shorts", ws_cmd)
         self.assertIn("comment_bait_question", ws_cmd)
         self.assertIn("SPOILER", ws_cmd)
+        swt_js = self.nodes_by_name["Save Whisper Transcript"]["parameters"]["jsCode"]
+        self.assertIn("GTA6_PROMPT_ECHO_RE", swt_js)
+        self.assertTrue(peak_builder._is_whisper_prompt_hallucination("Grand Theft Auto VI, Vice City, Leonida, Lucia"))
 
 
 class TestGta6PeakAndVisionLogic(unittest.TestCase):

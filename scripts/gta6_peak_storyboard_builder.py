@@ -52,6 +52,20 @@ HOUSEKEEPING_RE = re.compile(
     r"we'?re going to say bye|ending the stream|see you next time|don'?t forget to subscribe)",
     re.I,
 )
+GTA6_PROMPT_HALLUCINATION_TOKENS = (
+    "grand theft auto vi", "vice city", "vice beach", "rockstar games",
+    "npc chaos", "gta rp", "roblox gaming", "lucky blocks", "divine mutation",
+    "strawberry elephant", "taco combinacion", "streamer reacting",
+)
+
+
+def _is_whisper_prompt_hallucination(text: str) -> bool:
+    low = str(text or "").lower().strip()
+    if not low or low in {"music", "music.", "[music]", "you", "you."}:
+        return True
+    if "grand theft auto vi, vice city, leonida" in low:
+        return True
+    return sum(1 for p in GTA6_PROMPT_HALLUCINATION_TOKENS if p in low) >= 2
 
 FONT_CANDIDATES = [
     "/files/fonts/font.ttf",
@@ -334,17 +348,23 @@ def build_sentences_from_whisper(transcript_doc: dict, index_doc: dict) -> list:
         if curr_st is None:
             curr_st = st
         elif st - curr_en >= 1.8 or len(curr_words) >= 18:
-            sents.append({"start": round(curr_st, 2), "end": round(curr_en, 2), "text": " ".join(curr_words), "word_count": len(curr_words), "is_viewer_voice": False, "tags": []})
+            txt = " ".join(curr_words)
+            if not _is_whisper_prompt_hallucination(txt):
+                sents.append({"start": round(curr_st, 2), "end": round(curr_en, 2), "text": txt, "word_count": len(curr_words), "is_viewer_voice": False, "tags": []})
             curr_words = []
             curr_st = st
         curr_words.append(tok)
         curr_en = en
         if re.search(r"[.!?]$", tok) and len(curr_words) >= 4:
-            sents.append({"start": round(curr_st, 2), "end": round(curr_en, 2), "text": " ".join(curr_words), "word_count": len(curr_words), "is_viewer_voice": False, "tags": []})
+            txt = " ".join(curr_words)
+            if not _is_whisper_prompt_hallucination(txt):
+                sents.append({"start": round(curr_st, 2), "end": round(curr_en, 2), "text": txt, "word_count": len(curr_words), "is_viewer_voice": False, "tags": []})
             curr_words = []
             curr_st = None
     if curr_words and curr_st is not None:
-        sents.append({"start": round(curr_st, 2), "end": round(curr_en, 2), "text": " ".join(curr_words), "word_count": len(curr_words), "is_viewer_voice": False, "tags": []})
+        txt = " ".join(curr_words)
+        if not _is_whisper_prompt_hallucination(txt):
+            sents.append({"start": round(curr_st, 2), "end": round(curr_en, 2), "text": txt, "word_count": len(curr_words), "is_viewer_voice": False, "tags": []})
     return sents
 
 
