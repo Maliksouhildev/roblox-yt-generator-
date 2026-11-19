@@ -197,13 +197,16 @@ def build_prompt_text(summary_doc: dict, candidates: list, meme_files: list, min
         "   - `HUBRIS_WAGER_WASTED_KARMA`: cocky boast/bet -> instant fail, WASTED, or BUSTED.\n"
         "   - `COMEDIC_BANTER_OR_SARCASM`: storytelling or voice-chat punchline.\n"
         "   - `STORY_CUTSCENE_OR_TWIST_REACTION`: Lucia & Jason twist + explosive shock (MUST set `is_story_spoiler: true` and NEVER spoil in `hook_caption`!).\n"
-        "5. COMPLETE METADATA IN ONE PASS (No downstream merge agent exists!):\n"
-        "   - `title`: Catchy 3-7 word YouTube Short title specifically describing THIS clip's action/joke. NEVER use fake clickbait words\n"
-        "     like 'Glitch', 'Hack', 'Exploit', 'Mod', 'Secret Code', 'Infinite Money', or 'Banned' unless actually spoken in transcript!\n"
-        "   - `hook_caption`: Punchy 3-5 WORDS ALL CAPS headline (<=28 chars) summarizing the visual stakes/event, NEVER slicing a raw clause mid-sentence or ending on a transitive verb (LIKE/WANT/SEE/KNOW/GOT/TO/THE/IN)!\n"
-        "   - `short_description`: 2-3 engaging sentences written specifically for THIS Short describing what happens visually in THIS scene and what the streamer/NPCs say (do NOT summarize unrelated parts of the stream!).\n"
-        "   - `visual_value_note`: short 1-line transformative tip or 'Watch for...' callout specific to this clip.\n"
-        "   - `comment_bait_question`: fun specific question for comments directly about THIS clip (never generic).\n"
+        "5. COMPLETE METADATA IN ONE PASS — 19-YEAR-OLD TWITCH/YOUTUBE CLIP EDITOR TONE:\n"
+        "   - Voice: Casual, deadpan, witty — NEVER corporate or AI-sounding. Light natural slang ONLY when it fits (bro, nah, lowkey, cooked, folded, zero chill, wild, humbled, diabolical, sold, tweaking; max 1 per line).\n"
+        "   - STRICT ANTI-CRINGE BANLIST (NEVER use): skibidi, rizz, sigma, gyatt, ohio, fanum tax, cap, no cap, bussin, slay, fam, lit, yeet, epic gaming moment, must watch.\n"
+        "   - `title`: Natural high-CTR 3-7 word title specifically describing THIS clip (no fake 'Glitch'/'Hack'/'Exploit' unless spoken, no '😱💀 #Shorts' spam).\n"
+        "   - `yt_title`: Natural YouTube Shorts title <=68 chars weaving in streamer name + GTA 6 + funny hook.\n"
+        "   - `hook_caption`: 4-7 punchy words in natural Sentence case (<=38 chars, NOT ALL CAPS; keep GTA 6, NPC, IShowSpeed, CaseOh, xQc proper), NEVER slicing mid-sentence or ending on a dangling word!\n"
+        "   - `desc_line`: Short funny 1-sentence casual reaction line for the YouTube description.\n"
+        "   - `short_description`: 1-2 factual sentences about THIS clip.\n"
+        "   - `visual_value_note`: short 1-line callout specific to this clip.\n"
+        "   - `comment_hook` / `comment_bait_question`: natural low-effort comment trigger (e.g. 'scale of 1-10 how cooked was he here').\n"
         "   - `is_story_spoiler`: boolean; `is_nsfw_or_unsafe`: boolean (must be false for selected clips).\n"
         "   - `climax_quote`: exact short verbatim quote spoken at the payoff spike.\n"
         "   - `reaction_triggers`: 1-2 short verbatim quotes `[{\"quote\": \"...\", \"sfx\": \"<valid meme file>\"}]`.\n"
@@ -216,12 +219,15 @@ def build_prompt_text(summary_doc: dict, candidates: list, meme_files: list, min
         "    {\n"
         "      \"clip_number\": 1,\n"
         "      \"candidate_id\": \"cand_1\",\n"
-        "      \"title\": \"Insane 6 Star Vice City Escape\",\n"
+        "      \"title\": \"Vice City 6 Star Police Chaos\",\n"
+        "      \"yt_title\": \"IShowSpeed got humbled by GTA 6 cops in 2 seconds\",\n"
         "      \"narrative_archetype\": \"OPEN_WORLD_CHAOS_OR_COP_CHASE\",\n"
-        "      \"hook_caption\": \"SIX STAR POLICE CHASE CHAOS\",\n"
-        "      \"short_description\": \"When a routine getaway goes sideways in Vice City, a 6-star police blockade sends cruisers flying off the bridge. Streamer loses it as everything explodes at the last second.\",\n"
+        "      \"hook_caption\": \"GTA 6 cops have zero chill\",\n"
+        "      \"desc_line\": \"Bro talked crazy for two seconds and immediately got boxed in by six cruisers.\",\n"
+        "      \"short_description\": \"When a routine getaway goes sideways in Vice City, a 6-star police blockade sends cruisers flying off the bridge.\",\n"
         "      \"visual_value_note\": \"Watch the police cruiser launch off the bridge right before the crash.\",\n"
-        "      \"comment_bait_question\": \"Could you actually survive that 6-star bridge blockade?\",\n"
+        "      \"comment_hook\": \"scale of 1-10 how cooked was he here\",\n"
+        "      \"comment_bait_question\": \"scale of 1-10 how cooked was he here\",\n"
         "      \"is_story_spoiler\": false,\n"
         "      \"is_nsfw_or_unsafe\": false,\n"
         "      \"climax_quote\": \"exact verbatim payoff words\",\n"
@@ -274,14 +280,17 @@ def _interleave_vision_parts(summary_doc: dict, candidates: list, meme_files: li
         "   - `HUBRIS_WAGER_WASTED_KARMA`: cocky boast/bet -> instant fail, WASTED, or BUSTED.\n"
         "   - `COMEDIC_BANTER_OR_SARCASM`: storytelling or voice-chat punchline.\n"
         "   - `STORY_CUTSCENE_OR_TWIST_REACTION`: Lucia & Jason twist + explosive shock (MUST set `is_story_spoiler: true` and NEVER spoil in `hook_caption`!).\n"
-        "5. COMPLETE METADATA IN ONE PASS (ZERO HALLUCINATION & BRAND-SAFE):\n"
+        "5. COMPLETE METADATA IN ONE PASS — 19-YEAR-OLD CLIP EDITOR TONE (ZERO HALLUCINATION & BRAND-SAFE):\n"
+        "   - Casual, deadpan, witty tone; light natural slang only when it fits (bro, nah, lowkey, cooked, folded, zero chill, wild, humbled; max 1 per line). NEVER use skibidi/rizz/sigma/gyatt/ohio/fanum tax/no cap/bussin/slay/fam/lit/yeet/epic gaming moment/must watch.\n"
         "   - NEVER invent glitches, bets, acid labs, or fake NPC hostility! Every title, hook, and description MUST strictly reflect literal, verified actions from the transcript and 3x3 frames.\n"
         "   - BRAND-SAFE: NEVER include YouTube-throttled drug/explicit terms (`COKE`, `COCAINE`, `SUICIDE`, etc.) in titles or hooks.\n"
-        "   - `title`: Catchy 3-7 word YouTube Short title specifically describing THIS clip (NEVER 'GTA6_Peak_Clip_1').\n"
-        "   - `hook_caption`: Punchy 3-5 WORDS ALL CAPS headline (<=28 chars), COMPLETE thought with zero transitive verb or dangling endings (never end on LIKE/WANT/KNOW/SEE/GOT/TO/THE/IN)!\n"
-        "   - `short_description`: 2-3 engaging factual sentences written specifically for THIS Short.\n"
-        "   - `visual_value_note`: short 1-line transformative tip or 'Watch for...' callout for this clip.\n"
-        "   - `comment_bait_question`: fun question directly referencing THIS clip.\n"
+        "   - `title`: Natural 3-7 word title specifically describing THIS clip (NEVER 'GTA6_Peak_Clip_1').\n"
+        "   - `yt_title`: Natural YouTube Shorts title <=68 chars weaving in streamer name + GTA 6 + funny hook.\n"
+        "   - `hook_caption`: 4-7 punchy words in natural Sentence case (<=38 chars, NOT ALL CAPS; keep GTA 6, NPC, streamer names proper), COMPLETE thought with zero dangling endings!\n"
+        "   - `desc_line`: Short funny 1-sentence casual reaction line for the description.\n"
+        "   - `short_description`: 1-2 factual sentences written specifically for THIS Short.\n"
+        "   - `visual_value_note`: short 1-line callout for this clip.\n"
+        "   - `comment_hook` / `comment_bait_question`: natural low-effort comment trigger directly referencing THIS clip.\n"
         "   - `is_story_spoiler`: boolean; `is_nsfw_or_unsafe`: boolean (must be false for selected clips).\n"
         "   - `climax_quote`, `reaction_triggers`, `memes` (use `[]` when dialogue is clear/calm; only add SFX on real punchlines), `visual_evidence`, `cause_and_effect_setup`.\n"
     )
@@ -320,12 +329,15 @@ def _interleave_vision_parts(summary_doc: dict, candidates: list, meme_files: li
             "    {\n"
             "      \"clip_number\": 1,\n"
             "      \"candidate_id\": \"cand_1\",\n"
-            "      \"title\": \"Insane 6 Star Vice City Escape\",\n"
+            "      \"title\": \"Vice City 6 Star Police Chaos\",\n"
+            "      \"yt_title\": \"IShowSpeed got humbled by GTA 6 cops in 2 seconds\",\n"
             "      \"narrative_archetype\": \"OPEN_WORLD_CHAOS_OR_COP_CHASE\",\n"
-            "      \"hook_caption\": \"SIX STAR POLICE CHASE CHAOS\",\n"
-            "      \"short_description\": \"Things go completely off the rails when a routine getaway turns into a 6-star police blockade right on the Vice City bridge.\",\n"
+            "      \"hook_caption\": \"GTA 6 cops have zero chill\",\n"
+            "      \"desc_line\": \"Bro talked crazy for two seconds and immediately got boxed in on the bridge.\",\n"
+            "      \"short_description\": \"Things go sideways when a routine getaway turns into a 6-star police blockade right on the Vice City bridge.\",\n"
             "      \"visual_value_note\": \"Watch the police cruiser launch off the bridge right before the crash.\",\n"
-            "      \"comment_bait_question\": \"Could you escape that 6-star chase here?\",\n"
+            "      \"comment_hook\": \"scale of 1-10 how cooked was he here\",\n"
+            "      \"comment_bait_question\": \"scale of 1-10 how cooked was he here\",\n"
             "      \"is_story_spoiler\": false,\n"
             "      \"is_nsfw_or_unsafe\": false,\n"
             "      \"climax_quote\": \"exact verbatim payoff words\",\n"
@@ -481,38 +493,67 @@ def _strip_unspoken_clickbait(text: str, transcript_text: str) -> str:
     return re.sub(r"\s+", " ", cleaned).strip()
 
 
+_HOOK_SPECIAL_CASE = {
+    "gta": "GTA", "gta6": "GTA 6", "vi": "VI", "npc": "NPC", "npcs": "NPCs",
+    "ishowspeed": "IShowSpeed", "caseoh": "CaseOh", "xqc": "xQc", "xqcow": "xQc",
+    "kai": "Kai", "cenat": "Cenat", "jynxzi": "Jynxzi", "vice": "Vice", "city": "City",
+    "leonida": "Leonida", "lucia": "Lucia", "jason": "Jason", "rockstar": "Rockstar",
+    "florida": "Florida", "fbi": "FBI", "swat": "SWAT", "vip": "VIP", "ai": "AI", "fps": "FPS",
+}
+_CRINGE_BUZZWORDS_RE = re.compile(
+    r"\b(skibidi|rizz|sigma|gyatt|ohio|fanum\s+tax|no\s+cap|bussin|slay|fam|yeet|epic\s+gaming\s+moment|must\s+watch)\b",
+    re.I,
+)
+
+
+def _to_sentence_case_hook(words: list) -> str:
+    out = []
+    for idx, w in enumerate(words):
+        low = w.lower()
+        if low in _HOOK_SPECIAL_CASE:
+            out.append(_HOOK_SPECIAL_CASE[low])
+        elif idx == 0:
+            out.append(low[0].upper() + low[1:] if len(low) > 1 else low.upper())
+        else:
+            out.append(low)
+    return " ".join(out)
+
+
 def _guard_and_format_hook(raw_hook: str, raw_text: str, title: str) -> str:
-    """Part 1.3: Punchy 3-5 word headline (<=28 chars), zero dangling transitive verbs/auxiliaries, zero ungrounded clickbait."""
+    """Punchy 4-7 word Sentence-case headline (<=38 chars), zero dangling endings, zero cringe/ungrounded clickbait."""
     de_baited = _strip_unspoken_clickbait(str(raw_hook or ""), raw_text)
-    clean = re.sub(r"[^A-Za-z0-9'\s!?-]", " ", de_baited).upper()
+    de_cringed = _CRINGE_BUZZWORDS_RE.sub("", de_baited)
+    clean = re.sub(r"[^A-Za-z0-9'\s!?-]", " ", de_cringed)
     clean = re.sub(r"[-]+", " ", clean)
     clean = re.sub(r"\s+", " ", clean).strip()
     ctx = f"{title} {raw_text}".lower()
     if "coolest" in ctx:
-        clean = re.sub(r"\bCOLDEST\b", "COOLEST", clean)
-    clean = re.sub(r"\bRAGE\s+BADER\b", "RAGE BAITER", clean)
+        clean = re.sub(r"\bCOLDEST\b", "coolest", clean, flags=re.I)
+    clean = re.sub(r"\bRAGE\s+BADER\b", "rage baiter", clean, flags=re.I)
 
     words = clean.split()
-    while words and words[0] in {"AND", "SO", "BUT", "BECAUSE", "THEN", "OR", "WELL"} and len(words) > 3:
+    while words and words[0].upper() in {"AND", "SO", "BUT", "BECAUSE", "THEN", "OR", "WELL"} and len(words) > 3:
         words.pop(0)
-    if re.match(r"^(PEAK MOMENT|CLIP)\b", " ".join(words)):
+    if re.match(r"^(PEAK MOMENT|CLIP)\b", " ".join(words), re.I):
         words = []
-    if len(words) > 5:
-        words = words[:5]
-    while words and len(" ".join(words)) > 28 and len(words) > 3:
+    if len(words) > 7:
+        words = words[:7]
+    while words and len(" ".join(words)) > 38 and len(words) > 3:
         words.pop()
-    while words and DANGLING_HOOK_END_RE.match(words[-1]) and len(words) > 3:
+    while words and DANGLING_HOOK_END_RE.match(words[-1].upper()) and len(words) > 3:
         words.pop()
-    while words and len(" ".join(words)) > 28 and len(words) > 1:
+    while words and len(" ".join(words)) > 38 and len(words) > 1:
         words.pop()
     if (
         not words
         or len(words) < 3
-        or len(words) > 5
-        or len(" ".join(words)) > 28
-        or DANGLING_HOOK_END_RE.match(words[-1])
+        or len(words) > 7
+        or len(" ".join(words)) > 38
+        or DANGLING_HOOK_END_RE.match(words[-1].upper())
     ):
-        return _safe_hook_from_text(raw_text, _strip_unspoken_clickbait(title, raw_text))
+        fb = _safe_hook_from_text(raw_text, _strip_unspoken_clickbait(title, raw_text))
+        return _to_sentence_case_hook(fb.split())
+    return _to_sentence_case_hook(words)
     return " ".join(words)
 
 
@@ -1090,15 +1131,26 @@ def normalize_director_clips(
         vis_ev = str(cl.get("visual_evidence") or cl.get("visual_event_description") or f"3x3 grid storyboard at t={payoff_t:.1f}s.").strip()
         tot_clip_dur = round(sum(cs["end"] - cs["start"] for cs in clean_segs), 2)
 
+        _natural_fallbacks = [
+            "nah how did that even happen",
+            "Rockstar really put too much detail in this game",
+            "clip of the day or nah",
+        ]
+        _raw_comment = str(cl.get("comment_hook") or cl.get("comment_bait_question") or "").strip()
+        if not _raw_comment or re.match(r"^(would you have survived this|what would you have done here)\??$", _raw_comment, re.I):
+            _raw_comment = _natural_fallbacks[len(valid_clips) % len(_natural_fallbacks)]
         valid_clips.append({
             "clip_number": len(valid_clips) + 1,
             "candidate_id": cid,
             "title": raw_title[:60],
+            "yt_title": str(cl.get("yt_title") or "").strip()[:68],
             "narrative_archetype": arch_val,
             "hook_caption": hook,
+            "desc_line": str(cl.get("desc_line") or "").strip(),
             "short_description": short_desc,
             "visual_value_note": visual_note,
-            "comment_bait_question": str(cl.get("comment_bait_question") or "Would you have survived this?").strip(),
+            "comment_hook": _raw_comment,
+            "comment_bait_question": _raw_comment,
             "is_story_spoiler": is_spoiler,
             "is_nsfw_or_unsafe": False,
             "climax_quote": str(cl.get("climax_quote") or "").strip(),

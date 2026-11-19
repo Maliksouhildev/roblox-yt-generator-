@@ -1381,7 +1381,7 @@ return [{ pairedItem: { item: 0 }, json: { command: ffmpegCmd, clip_title: clipT
     })
     _7bExtractClipAudio = {
         command:
-            'ffmpeg -loglevel error -y -i "/files/temp/concatenated_clip.mp4" -vn -acodec libmp3lame -q:a 5 "/files/temp/temp_audio.mp3" && python3 /files/scream_detector.py "/files/temp/temp_audio.mp3" "/files/temp/screams.json"',
+            'ffmpeg -loglevel error -y -i "/files/temp/concatenated_clip.mp4" -vn -acodec libmp3lame -q:a 5 "/files/temp/temp_audio.mp3" && ffmpeg -loglevel error -y -i "/files/temp/concatenated_clip.mp4" -vn -ar 16000 -ac 1 -f wav "/files/temp/temp_audio.wav" && python3 -c "import wave,struct,math,json; w=wave.open(\'/files/temp/temp_audio.wav\',\'rb\'); sr=w.getframerate(); step=int(sr*0.02); n=w.getnframes(); raw=w.readframes(n); samples=struct.unpack(\'<\'+str(len(raw)//2)+\'h\', raw); rms=[round(20*math.log10(max(1e-5, math.sqrt(sum(s*s for s in samples[i:i+step])/max(1,len(samples[i:i+step])))/32768.0)),2) for i in range(0,len(samples),step)]; s_rms=sorted(rms); p25=s_rms[len(s_rms)//4] if s_rms else -55.0; thresh=round(max(-38.0, min(-18.0, p25+8.0)),2); open(\'/files/temp/speech_rms.json\',\'w\').write(json.dumps({\'frame_ms\':20,\'threshold_db\':thresh,\'rms_db\':rms}))" && python3 /files/scream_detector.py "/files/temp/temp_audio.mp3" "/files/temp/screams.json"',
     };
 
     @node({
@@ -1392,7 +1392,7 @@ return [{ pairedItem: { item: 0 }, json: { command: ffmpegCmd, clip_title: clipT
         position: [-84400, 26240],
     })
     _7cReadAudio = {
-        filePath: '/files/temp/temp_audio.mp3',
+        filePath: '/files/temp/temp_audio.wav',
     };
 
     @node({
@@ -1496,20 +1496,46 @@ function getLoopNodeJson(nodeName, fallbackJson) {
 
 // ── Strict Caption & Placeholder Sanitizer ───────────────────────────────
 const BANNED_CAPTION_RE = /^(I CALLED TIME OUT|HE ACTUALLY FELL FOR IT|THAT DOES NOT COUNT|MY WORST BLUNDER|MUST WATCH MOMENT|VIRAL MOMENT|NO WORDS|NO AUDIO FOUND|NO TRANSCRIPT|UNDEFINED|NULL|ERROR)$/i;
+const HOOK_SPECIAL_CASE = {
+  gta: 'GTA', gta6: 'GTA 6', vi: 'VI', npc: 'NPC', npcs: 'NPCs', fps: 'FPS',
+  ai: 'AI', fbi: 'FBI', swat: 'SWAT', vip: 'VIP', pov: 'POV', eula: 'EULA', hud: 'HUD', sfx: 'SFX', tv: 'TV',
+  xqc: 'xQc', xqcow: 'xQc', ishowspeed: 'IShowSpeed', caseoh: 'CaseOh',
+  kai: 'Kai', cenat: 'Cenat', jynxzi: 'Jynxzi', vice: 'Vice', city: 'City',
+  leonida: 'Leonida', lucia: 'Lucia', jason: 'Jason', rockstar: 'Rockstar', florida: 'Florida',
+  i: 'I', "i'm": "I'm", "i've": "I've", "i'll": "I'll", "i'd": "I'd"
+};
+function toHookSentenceCase(textStr) {
+  const tokens = String(textStr || '').split(/\\s+/).filter(Boolean);
+  return tokens.map((tok, idx) => {
+    const m = tok.match(/^([^A-Za-z0-9']*)([A-Za-z0-9']+)([^A-Za-z0-9']*)$/);
+    if (!m) return tok;
+    const [, pre, core, post] = m;
+    const low = core.toLowerCase();
+    if (HOOK_SPECIAL_CASE[low]) {
+      return pre + HOOK_SPECIAL_CASE[low] + post;
+    }
+    let outCore = low;
+    if (idx === 0) {
+      outCore = outCore.charAt(0).toUpperCase() + outCore.slice(1);
+    }
+    return pre + outCore + post;
+  });
+}
+const CRINGE_BUZZWORDS_RE = /\\b(skibidi|rizz|sigma|gyatt|ohio|fanum\\s+tax|no\\s+cap|bussin|slay|fam|yeet|epic\\s+gaming\\s+moment|must\\s+watch)\\b/gi;
 function sanitizeCaption(str, defaultFallback) {
-  const safeFallback = (defaultFallback && !BANNED_CAPTION_RE.test(String(defaultFallback).trim()) && !/\\b(NO WORDS|NO AUDIO FOUND|NO TRANSCRIPT)\\b/i.test(String(defaultFallback)) && !/<[^>]+>/.test(String(defaultFallback))) ? defaultFallback : "GAMING MOMENT";
+  const safeFallback = (defaultFallback && !BANNED_CAPTION_RE.test(String(defaultFallback).trim()) && !/\\b(NO WORDS|NO AUDIO FOUND|NO TRANSCRIPT)\\b/i.test(String(defaultFallback)) && !/<[^>]+>/.test(String(defaultFallback))) ? defaultFallback : "Wild GTA 6 moment";
   if (!str || typeof str !== 'string') return safeFallback;
   let clean = str.trim();
   if (/[\\$({]|<[^>]+>|item\\.json|loop\\s*clips|\\{\\{|\\}\\}|\\b(undefined|null|error|no words|no audio found|no transcript)\\b/i.test(clean)) {
     return safeFallback;
   }
-  clean = clean.replace(/[{}\\x27\\x22\`$()<>]/g, '').replace(/_/g, ' ').replace(/[\\u{1F300}-\\u{1FAFF}\\u{2600}-\\u{27BF}\\uFE0F]/gu, '').trim().toUpperCase();
+  clean = clean.replace(/[{}\\x27\\x22\`$()<>]/g, '').replace(/_/g, ' ').replace(/[\\u{1F300}-\\u{1FAFF}\\u{2600}-\\u{27BF}\\uFE0F]/gu, '').replace(CRINGE_BUZZWORDS_RE, '').replace(/\\s+/g, ' ').trim();
   if (clean.length < 3 || BANNED_CAPTION_RE.test(clean) || /LOOP CLIPS|ITEM JSON|NO WORDS|NO AUDIO/i.test(clean)) {
     return safeFallback;
   }
   clean = clean.replace(/\\b(COKE|COCAINE|HEROIN|METH(?:AMPHETAMINE)?|FENTANYL|SUICIDE|KILL\\s+YOURSELF)\\b/gi, '').replace(/\\s+/g, ' ').trim();
   if (clean.length < 3) return safeFallback;
-  return clean.substring(0, 42);
+  return toHookSentenceCase(clean).join(' ').substring(0, 42);
 }
 
 const subInput = getLoopNodeJson('7d. Get Subtitles (SRT)', $input.first().json || {});
@@ -1680,38 +1706,12 @@ if (!Array.isArray(memes)) {
 
 // ── Floating Mixed-Case Hook Formatter (<=40 chars, 1-line <=28c @42px, 2-line >28c @34px, yellow keyword accent) ────
 const HOOK_DANGLING_TAIL_RE = /\\s+\\b(TO|THE|A|AN|OF|IN|ON|AT|FOR|WITH|AND|OR|BUT|IF|IS|ARE|THIS|THAT|MY|YOUR|I)$/i;
-const HOOK_SPECIAL_CASE = {
-  gta: 'GTA', gta6: 'GTA 6', vi: 'VI', npc: 'NPC', npcs: 'NPCs', fps: 'FPS',
-  ai: 'AI', fbi: 'FBI', swat: 'SWAT', vip: 'VIP', pov: 'POV', eula: 'EULA', hud: 'HUD', sfx: 'SFX', tv: 'TV',
-  xqc: 'xQc', xqcow: 'xQc', ishowspeed: 'IShowSpeed', caseoh: 'CaseOh',
-  kai: 'Kai', cenat: 'Cenat', jynxzi: 'Jynxzi', vice: 'Vice', city: 'City',
-  leonida: 'Leonida', lucia: 'Lucia', jason: 'Jason', rockstar: 'Rockstar', florida: 'Florida',
-  i: 'I', "i'm": "I'm", "i've": "I've", "i'll": "I'll", "i'd": "I'd"
-};
 const HOOK_SKIP_HIGHLIGHT = new Set([
   'THE','IS','ARE','WAS','WERE','BE','BEEN','BEING','AM','A','AN','IN','ON','AT','TO','OF','FOR','WITH',
   'BY','FROM','THIS','THAT','THESE','THOSE','IT','ITS','HE','SHE','WE','THEY','YOU','I','MY','YOUR','OUR',
   'HIS','HER','THEIR','AND','OR','BUT','SO','IF','AS','UP','OUT','OFF','OVER','INTO','GTA','GTA6','6','VI',
   'WHEN','WHAT','WHY','HOW','HERE','THERE'
 ]);
-
-function toHookSentenceCase(textStr) {
-  const tokens = String(textStr || '').split(/\\s+/).filter(Boolean);
-  return tokens.map((tok, idx) => {
-    const m = tok.match(/^([^A-Za-z0-9']*)([A-Za-z0-9']+)([^A-Za-z0-9']*)$/);
-    if (!m) return tok;
-    const [, pre, core, post] = m;
-    const low = core.toLowerCase();
-    if (HOOK_SPECIAL_CASE[low]) {
-      return pre + HOOK_SPECIAL_CASE[low] + post;
-    }
-    let outCore = low;
-    if (idx === 0) {
-      outCore = outCore.charAt(0).toUpperCase() + outCore.slice(1);
-    }
-    return pre + outCore + post;
-  });
-}
 
 function formatHookBannerCaption(str) {
   let clean = String(str || '')
@@ -1939,6 +1939,60 @@ let assContent = [
 
 // ── Semantic Phrase Grouping Subtitles with High-Impact Word Highlighting & Emojis ───
 if (wordData.length > 0) {
+  let speechRms = null;
+  try {
+    const rmsRaw = require('fs').readFileSync('/files/temp/speech_rms.json', 'utf8');
+    const parsedRms = JSON.parse(rmsRaw);
+    if (parsedRms && Array.isArray(parsedRms.rms_db) && parsedRms.rms_db.length > 0) {
+      speechRms = parsedRms;
+    }
+  } catch (eRms) {}
+
+  // 1. Strict Monotonic Sanitization + Leading-Silence Forward Clamp + RMS Speech-Onset Gate
+  const sanitizedWords = [];
+  for (let i = 0; i < wordData.length; i++) {
+    const rawW = wordData[i];
+    const wordTxt = String((rawW && rawW.word) || "").trim();
+    if (!wordTxt) continue;
+    let wStart = Math.max(0, parseFloat(rawW.start) || 0);
+    let wEnd = parseFloat(rawW.end);
+    if (isNaN(wEnd) || wEnd < wStart + 0.05) wEnd = wStart + 0.05;
+
+    const maxPlausibleDur = Math.min(0.68, Math.max(0.24, wordTxt.length * 0.08));
+    if ((wEnd - wStart) > maxPlausibleDur) {
+      wStart = Number((wEnd - maxPlausibleDur).toFixed(3));
+    }
+
+    const prevEnd = sanitizedWords.length > 0 ? sanitizedWords[sanitizedWords.length - 1].end : -1;
+    const isPhraseStart = sanitizedWords.length === 0 || (wStart - prevEnd) > 0.25;
+    if (isPhraseStart && speechRms) {
+      const frameSec = (Number(speechRms.frame_ms) || 20) / 1000;
+      const startFrame = Math.max(0, Math.floor(wStart / frameSec));
+      const maxFrame = Math.min(speechRms.rms_db.length - 1, Math.floor(Math.max(wStart, wEnd - 0.08) / frameSec));
+      const threshDb = Number(speechRms.threshold_db) || -36.0;
+      for (let fIdx = startFrame; fIdx <= maxFrame; fIdx++) {
+        if (speechRms.rms_db[fIdx] >= threshDb) {
+          wStart = Number(Math.min(wEnd - 0.08, Math.max(wStart, fIdx * frameSec)).toFixed(3));
+          break;
+        }
+      }
+    }
+
+    if (sanitizedWords.length > 0) {
+      const prev = sanitizedWords[sanitizedWords.length - 1];
+      if (wStart < prev.end) {
+        if (wStart > prev.start + 0.05) {
+          prev.end = Number(wStart.toFixed(3));
+        } else {
+          wStart = prev.end;
+          if (wEnd < wStart + 0.05) wEnd = wStart + 0.05;
+        }
+      }
+    }
+    sanitizedWords.push({ ...rawW, word: wordTxt, start: Number(wStart.toFixed(3)), end: Number(wEnd.toFixed(3)) });
+  }
+  wordData = sanitizedWords;
+
   const SENTENCE_END_RE = /[.!?]$/;
   const groups = [];
   let current = [];
@@ -1955,17 +2009,18 @@ if (wordData.length > 0) {
     const gapToNext = nextW ? (nextW.start - w.end) : 9999;
 
     const hasMinWords = current.length >= 2;
-    const isHardBreak = gapToNext > 0.60;
+    const isHardBreak = gapToNext > 0.28;
     const isSentenceEnd = SENTENCE_END_RE.test(word);
 
     const shouldBreak =
-      current.length >= 4 ||
-      currentChars >= 22 ||
-      (hasMinWords && (isHardBreak || isSentenceEnd)) ||
+      isHardBreak ||
+      current.length >= 3 ||
+      currentChars >= 16 ||
+      (hasMinWords && isSentenceEnd) ||
       (i === wordData.length - 1);
 
     if (shouldBreak && current.length > 0) {
-      if (current.length === 1 && i < wordData.length - 1 && gapToNext <= 0.60) {
+      if (!isHardBreak && current.length === 1 && i < wordData.length - 1) {
         continue;
       }
       groups.push([...current]);
@@ -1975,7 +2030,8 @@ if (wordData.length > 0) {
   if (current.length > 0) {
     if (groups.length > 0 && current.length === 1) {
       const prev = groups[groups.length - 1];
-      if (prev.length < 4) {
+      const gapPrev = current[0].start - prev[prev.length - 1].end;
+      if (prev.length < 3 && gapPrev <= 0.28) {
         prev.push(current[0]);
       } else {
         groups.push(current);
@@ -1985,11 +2041,15 @@ if (wordData.length > 0) {
     }
   }
 
-  // Active word-level highlighting with high-impact color highlights & contextual emojis
-  for (const group of groups) {
+  // Active progressive word-level highlighting (words appear ONLY when spoken)
+  for (let gi = 0; gi < groups.length; gi++) {
+    const group = groups[gi];
+    const nextGroup = gi < groups.length - 1 ? groups[gi + 1] : null;
     const cStart = group[0].start;
-    const cEnd = group[group.length - 1].end;
-    const displayEnd = cEnd;
+    let displayEnd = group[group.length - 1].end;
+    if (nextGroup) {
+      displayEnd = Math.min(displayEnd, Math.max(cStart + 0.08, nextGroup[0].start - 0.02));
+    }
 
     // Detect high-impact keyword & select contextual emoji
     let groupEmoji = "";
@@ -2009,9 +2069,17 @@ if (wordData.length > 0) {
 
     for (let j = 0; j < group.length; j++) {
       const wStart = Math.max(cStart, group[j].start);
-      const wEnd = j < group.length - 1 ? group[j + 1].start : displayEnd;
+      const rawNext = j < group.length - 1 ? group[j + 1].start : displayEnd;
+      let wEnd = Math.min(rawNext, Math.max(wStart + 0.08, group[j].end + 0.14));
+      if (nextGroup) {
+        wEnd = Math.min(wEnd, Math.max(wStart + 0.05, nextGroup[0].start - 0.02));
+      }
+      if (j < group.length - 1) {
+        wEnd = Math.min(wEnd, Math.max(wStart + 0.05, group[j + 1].start - 0.01));
+      }
+      if (wEnd <= wStart + 0.02) wEnd = wStart + 0.05;
 
-      const lineText = group.map((w, idx) => {
+      const lineText = group.slice(0, j + 1).map((w, idx) => {
         const rawW = String(w.word || "").trim();
         const cleanUpper = rawW.toUpperCase().replace(/[^A-Z]/g, '');
         const txt = rawW.toUpperCase();
@@ -3077,7 +3145,7 @@ try {
 
 const targetClips = 5;
 
-const jsonSchema = '{"clips":[{"clip_number":1,"narrative_archetype":"CONTINUOUS_GAMEPLAY_CLUTCH_OR_FAIL","estimated_vod_segment":"X-Y minutes","title":"3-4 Word Curiosity Teaser 💀","hook_caption":"3-5 WORDS IN ALL CAPS","virality_score":9.2,"theme":"Core viral theme","structure_type":"Blueprint Archetype","start_time":420.5,"end_time":452.0,"payoff_time":448.0,"segments":[{"start":420.5,"end":452.0,"role":"CONTINUOUS_ARC"}],"assembled_spoken_script":"Full verbatim spoken lines in exact EDL playback order...","signal_justification":{"chat_burst":"Z=3.4 sigma / top laugh quote","db_spike":"+11.2dB scream at X:XX","face_emotion":"FACE:SHOCK_OR_SCREAM","viewer_voice_present":false},"cause_and_effect_setup":"Clear explanation of why setup & payoff belong together"}]}';
+const jsonSchema = '{"clips":[{"clip_number":1,"narrative_archetype":"CONTINUOUS_GAMEPLAY_CLUTCH_OR_FAIL","estimated_vod_segment":"X-Y minutes","title":"3-4 Word Curiosity Teaser 💀","hook_caption":"4-7 word Sentence-case hook","virality_score":9.2,"theme":"Core viral theme","structure_type":"Blueprint Archetype","start_time":420.5,"end_time":452.0,"payoff_time":448.0,"segments":[{"start":420.5,"end":452.0,"role":"CONTINUOUS_ARC"}],"assembled_spoken_script":"Full verbatim spoken lines in exact EDL playback order...","signal_justification":{"chat_burst":"Z=3.4 sigma / top laugh quote","db_spike":"+11.2dB scream at X:XX","face_emotion":"FACE:SHOCK_OR_SCREAM","viewer_voice_present":false},"cause_and_effect_setup":"Clear explanation of why setup & payoff belong together"}]}';
 
 const prompt =
   'SYSTEM: You are the #1 Elite YouTube Shorts Creative Director & Narrative Architect. You are editing ultra-high-retention YouTube Shorts (22s-45s, sweet spot 24s-45s) from a livestream using 5 synchronized multimodal telemetry signals.\n\n' +
@@ -3131,7 +3199,7 @@ const prompt =
 
   '=== RULE 5: TITLES & FACTUAL HOOK CAPTIONS ===\n' +
   '1. TITLE: Curiosity Gap 3-4 words + emoji (💀, 😭, 😱, 🤯), <=25 chars.\n' +
-  '2. HOOK_CAPTION: 3-5 WORDS IN ALL CAPS, 100% factual to the exact game/words spoken in this clip (NEVER invent unrelated games!).\n\n' +
+  '2. HOOK_CAPTION: 4-7 punchy words in natural Sentence case (NOT ALL CAPS; keep GTA 6, NPC, streamer names proper), casual deadpan 19-year-old clip editor voice (no cringe buzzwords like skibidi/rizz/sigma/bussin/no cap), 100% factual to this clip.\n\n' +
 
   '=== OUTPUT FORMAT ===\n' +
   'Return strictly valid JSON object {"clips": [...]} only. No markdown formatting, no explanations.\n' +
@@ -3774,25 +3842,25 @@ const _finalClips = allClips.map((clip, index) => {
 
   const DANGLING_END_RE = /\\b(TO|A|AN|THE|OF|IN|ON|AT|FOR|WITH|FROM|BY|AND|OR|BUT|IF|IS|ARE|WAS|WERE|DO|DOES|DID|NOT|WANT|GOING|HAVE|HAS|MY|YOUR|OUR|THEIR|THIS|THAT)$/i;
   const fixHookText = (rawH, titleTxt, spTxt, causeTxt) => {
-    let h = String(rawH || "").replace(/[\\u2018\\u2019]/g, "'").replace(/[^A-Za-z0-9'\\s!?-]/g, " ").replace(/\\s+/g, " ").trim().toUpperCase();
+    let h = String(rawH || "").replace(/[\\u2018\\u2019]/g, "'").replace(/[^A-Za-z0-9'\\s!?-]/g, " ").replace(/\\b(skibidi|rizz|sigma|gyatt|ohio|fanum\\s+tax|no\\s+cap|bussin|slay|fam|yeet|epic\\s+gaming\\s+moment|must\\s+watch)\\b/gi, "").replace(/\\s+/g, " ").trim();
     const semCtx = (String(titleTxt || "") + " " + String(causeTxt || "")).toLowerCase();
-    if (/\\bcoolest\\b/i.test(semCtx)) h = h.replace(/\\bCOLDEST\\b/g, "COOLEST");
-    h = h.replace(/\\bRAGE\\s+BADER\\b/g, "RAGE BAITER");
+    if (/\\bcoolest\\b/i.test(semCtx)) h = h.replace(/\\bCOLDEST\\b/gi, "coolest");
+    h = h.replace(/\\bRAGE\\s+BADER\\b/gi, "rage baiter");
     let hw = h.split(/\\s+/).filter(Boolean);
-    if (hw.length > 6) hw = hw.slice(0, 6);
+    if (hw.length > 7) hw = hw.slice(0, 7);
     // Complete dangling tail using immediate next head noun from spoken script if present
-    if (hw.length >= 2 && hw.length < 6 && DANGLING_END_RE.test(hw[hw.length - 1]) && spTxt) {
+    if (hw.length >= 2 && hw.length < 7 && DANGLING_END_RE.test(hw[hw.length - 1]) && spTxt) {
       const tailRe = new RegExp(hw.slice(-2).join("\\\\s+") + "\\\\s+([A-Za-z0-9']+)", "i");
       const tm = String(spTxt).match(tailRe);
-      if (tm && tm[1] && !DANGLING_END_RE.test(tm[1])) hw.push(tm[1].toUpperCase());
+      if (tm && tm[1] && !DANGLING_END_RE.test(tm[1])) hw.push(tm[1]);
     }
     while (hw.length > 3 && DANGLING_END_RE.test(hw[hw.length - 1])) hw.pop();
-    while (hw.length > 3 && hw.join(" ").length > 32) hw.pop();
+    while (hw.length > 3 && hw.join(" ").length > 38) hw.pop();
     if (hw.length >= 3 && !DANGLING_END_RE.test(hw[hw.length - 1])) return hw.join(" ");
-    let tw = String(titleTxt || "").replace(/[^A-Za-z0-9\\s']/g, " ").trim().toUpperCase().split(/\\s+/).filter(Boolean);
-    if (tw.length > 6) tw = tw.slice(0, 6);
-    while (tw.length > 3 && (DANGLING_END_RE.test(tw[tw.length - 1]) || tw.join(" ").length > 32)) tw.pop();
-    return tw.length >= 3 ? tw.join(" ") : (hw.join(" ") || "GAMING MOMENT");
+    let tw = String(titleTxt || "").replace(/[^A-Za-z0-9\\s']/g, " ").trim().split(/\\s+/).filter(Boolean);
+    if (tw.length > 7) tw = tw.slice(0, 7);
+    while (tw.length > 3 && (DANGLING_END_RE.test(tw[tw.length - 1]) || tw.join(" ").length > 38)) tw.pop();
+    return tw.length >= 3 ? tw.join(" ") : (hw.join(" ") || "Wild GTA 6 moment");
   };
   let hookCaption = fixHookText(clip.hook_caption || clip.title, clip.title, getWindowTranscript(validSegs), clip.cause_and_effect_setup);
   if (!hookCaption || hookCaption.length < 3 || BANNED_CAPTION_RE.test(hookCaption) || /<[^>]+>/.test(hookCaption)) {
@@ -4004,7 +4072,11 @@ const creatorCredit = rawCredit
 const isSpoiler = Boolean(loopItem.is_story_spoiler || loopItem.narrative_archetype === 'STORY_CUTSCENE_OR_TWIST_REACTION');
 const spoilerPrefix = isSpoiler ? '\\u26A0\\uFE0F SPOILER \\u2014 ' : '';
 const valueNote = String(loopItem.visual_value_note || '').trim();
-const baitQ = String(loopItem.comment_bait_question || 'What would you have done here?').trim();
+const NATURAL_COMMENT_FALLBACKS = ['nah how did that even happen', 'Rockstar really put too much detail in this game', 'clip of the day or nah'];
+const rawBait = String(loopItem.comment_hook || loopItem.comment_bait_question || '').trim();
+const baitQ = (rawBait && !/^(what would you have done here\\??|how would you react if this happened live\\??|would you have survived this\\??)$/i.test(rawBait))
+  ? rawBait
+  : NATURAL_COMMENT_FALLBACKS[Math.abs(String(title || '').length) % NATURAL_COMMENT_FALLBACKS.length];
 const rawVs = loopItem.virality_score ?? loopItem.viral_score;
 const viralityScore = (rawVs !== undefined && rawVs !== null && rawVs !== '' && Number.isFinite(Number(rawVs))) ? Number(rawVs) : 8.5;
 const createdAtEpoch = Date.now();
@@ -4051,14 +4123,15 @@ if (ytHook.length > maxHookLen) {
 }
 const youtubeTitle = ytHook + ytSuffix;
 const cleanDesc = (s) => String(s || '').replace(/[<>]/g, '').trim();
+const customDescLine = cleanDesc(loopItem.desc_line || loopItem.short_description || '');
 const descNote = valueNote || (loopItem.theme ? String(loopItem.theme).trim() : '');
-const ytHookLine = spoilerPrefix + cleanDesc(caption) + (descNote ? (' \\u2014 ' + cleanDesc(descNote)) : '');
+const ytHookLine = spoilerPrefix + (customDescLine || (cleanDesc(caption) + (descNote ? (' \\u2014 ' + cleanDesc(descNote)) : '')));
+const shortYtTags = isGta ? '#GTA6 #GrandTheftAutoVI #ViceCity #Shorts' : ytTags;
 const youtubeDescription = [
   ytHookLine,
   cleanDesc(baitQ),
   cleanDesc(creatorCredit),
-  globalSummary ? cleanDesc(globalSummary) : '',
-  ytTags
+  shortYtTags
 ].filter(Boolean).join('\\n\\n');
 const meta = {
   viral_caption: caption,

@@ -500,6 +500,7 @@ class TestGta6PeakAndVisionLogic(unittest.TestCase):
     def test_6_shorts_failure_mode_patches(self):
         """Verify all 4 mandatory patch groups across workflow.json, gta6_vision_shorts_workflow.json, and Python scripts."""
         import subprocess
+        import subprocess
         import tempfile
         import cv2
         import numpy as np
@@ -629,6 +630,7 @@ class TestGta6PeakAndVisionLogic(unittest.TestCase):
     def test_divider_badge_hook_caption_runtime(self):
         """Verify Option B divider-badge seam banner (y=380 split-cam, y=145 vertical/no-cam, 2-line wrap, Remotion mutual exclusion, subY=900)."""
         import subprocess
+        import subprocess
         import tempfile
 
         for wf_rel in ("workflows/gta6_vision_shorts_workflow.json", "workflows/workflow.json"):
@@ -700,6 +702,86 @@ class TestGta6PeakAndVisionLogic(unittest.TestCase):
             d3_cap = [ln for ln in c3["ass"].splitlines() if ln.startswith("Dialogue: 2,")][0]
             self.assertIn(r"{\q2\pos(360,145)}", d3_cap)
             self.assertIn("GTA", d3_cap)
+
+    def test_progressive_subtitles_silence_clamp_and_natural_sidecar(self):
+        """Verify progressive word reveal, leading-silence forward clamp, anti-cringe Sentence case, and 4-block youtubeDescription."""
+        import subprocess
+        import tempfile
+        for wf_rel in ["workflows/gta6_vision_shorts_workflow.json", "workflows/workflow.json"]:
+            repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+            with open(os.path.join(repo_root, wf_rel), encoding="utf-8") as f:
+                wf_obj = json.load(f)
+            nodes_map = {n["name"]: n for n in wf_obj["nodes"]}
+            cs_code = nodes_map["Create Subtitle Binary"]["parameters"]["jsCode"]
+
+            # 1) Progressive reveal + leading-silence forward clamp
+            harness = (
+                "const $input = { first: () => ({ json: { words: ["
+                "  { word: 'Wait', start: 0.0, end: 2.0 },"
+                "  { word: 'what', start: 2.05, end: 2.35 },"
+                "  { word: 'bro', start: 2.40, end: 2.70 }"
+                "] } }) };\n"
+                "const $ = (name) => ({\n"
+                "  item: { json: name === 'Loop Clips' ? { title: 'Test', hook_caption: 'GTA 6 cops have skibidi zero chill', start_time: 0, end_time: 48, segments: [{start:0,end:48}] } : {} },\n"
+                "  last: () => ({ json: name === 'Parse Cam Config' ? { ai_found: true, cam_w: 400, cam_h: 250, cam_x: 0, cam_y: 0 } : {} })\n"
+                "});\n"
+                "const out = (function() {\n"
+                + cs_code
+                + "\n})();\nconsole.log(JSON.stringify({ ass: Buffer.from(out[0].binary.data.data, 'base64').toString('utf8') }));\n"
+            )
+            with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as tf:
+                tf.write(harness)
+                tp = tf.name
+            try:
+                res = subprocess.run(["node", tp], capture_output=True, text=True, timeout=15)
+                self.assertEqual(res.returncode, 0, f"{wf_rel} progressive harness failed: {res.stderr}")
+                ass_out = json.loads(res.stdout.strip().splitlines()[-1])["ass"]
+                sub_lines = [ln for ln in ass_out.splitlines() if ln.startswith("Dialogue: 1,")]
+                self.assertEqual(len(sub_lines), 3, f"Expected 3 progressive lines, got: {sub_lines}")
+                # First word 'Wait' had 2.0s Whisper stretch -> clamped forward toward 2.0s (start >= 1.68s, NOT 0:00:00.00!)
+                self.assertNotIn("0:00:00.00", sub_lines[0], "Early Whisper silence stretch must be clamped forward")
+                # Progressive reveal: line 0 has only WAIT, line 1 has WAIT + WHAT, line 2 has WAIT + WHAT + BRO
+                self.assertIn("WAIT", sub_lines[0])
+                self.assertNotIn("WHAT", sub_lines[0])
+                self.assertIn("WHAT", sub_lines[1])
+                self.assertNotIn("BRO", sub_lines[1])
+                self.assertIn("BRO", sub_lines[2])
+                # Anti-cringe Sentence case on ViralCaption
+                cap_line = [ln for ln in ass_out.splitlines() if ln.startswith("Dialogue: 2,")][0]
+                self.assertIn("GTA 6", cap_line)
+                self.assertNotIn("skibidi", cap_line.lower())
+            finally:
+                if os.path.exists(tp):
+                    os.remove(tp)
+
+            # 2) Write Sidecar JSON 4-block description (no globalSummary dump) + custom yt_title/desc_line/comment_hook
+            sidecar_expr = nodes_map["Write Sidecar JSON"]["parameters"]["command"].strip()
+            self.assertTrue(sidecar_expr.startswith("={{") and sidecar_expr.endswith("}}"))
+            js_body = sidecar_expr[3:-2].strip()
+            sidecar_harness = (
+                "const $ = (name) => ({\n"
+                "  item: { json: name === 'Loop Clips' ? { title: 'Police Chase', hook_caption: 'GTA 6 cops have zero chill', start_time: 10, end_time: 48, segments: [{start:10,end:48}] } : (name === 'Normalize Merge Output' ? { merge_result: { yt_title: 'xQc folded the second GTA 6 cops pulled up', desc_line: 'Bro talked crazy for two seconds and got boxed in.', comment_hook: 'scale of 1-10 how cooked was he here' } } : {}) },\n"
+                "  last: () => ({ json: name === '1. Global Summary AI' ? { output: JSON.stringify({ game: 'GTA 6', global_summary: 'LONG_GLOBAL_SUMMARY_SHOULD_NOT_APPEAR' }) } : {} })\n"
+                "});\n"
+                f"const cmd = {js_body};\n"
+                "const m = cmd.match(/SIDECAR_EOF['\"]?\\s*>\\s*\"[^\"]+\"\\n([\\s\\S]*?)\\nSIDECAR_EOF/);\n"
+                "console.log(m[1]);\n"
+            )
+            with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as tf:
+                tf.write(sidecar_harness)
+                tp2 = tf.name
+            try:
+                res2 = subprocess.run(["node", tp2], capture_output=True, text=True, timeout=15)
+                self.assertEqual(res2.returncode, 0, f"{wf_rel} sidecar harness failed: {res2.stderr}")
+                meta = json.loads(res2.stdout)
+                self.assertEqual(meta["youtube_title"], "xQc folded the second GTA 6 cops pulled up")
+                self.assertNotIn("LONG_GLOBAL_SUMMARY_SHOULD_NOT_APPEAR", meta["youtube_description"])
+                self.assertIn("Bro talked crazy for two seconds and got boxed in.", meta["youtube_description"])
+                self.assertIn("scale of 1-10 how cooked was he here", meta["youtube_description"])
+                self.assertEqual(len(meta["youtube_description"].split("\n\n")), 4)
+            finally:
+                if os.path.exists(tp2):
+                    os.remove(tp2)
 
 
 if __name__ == "__main__":

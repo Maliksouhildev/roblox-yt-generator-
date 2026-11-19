@@ -429,7 +429,7 @@ class TestPipelineComprehensive(unittest.TestCase):
             self.assertEqual(res.returncode, 0, f"sanitizeCaption harness failed: {res.stderr}")
             out = json.loads(res.stdout.strip())
             self.assertEqual(out[:6], ["ESCAPING THE DOLLHOUSE"] * 6)
-            self.assertEqual(out[6], "HE ACTUALLY SCREAMED!")
+            self.assertEqual(out[6], "He actually screamed!")
         finally:
             if os.path.exists(tpath):
                 os.remove(tpath)
