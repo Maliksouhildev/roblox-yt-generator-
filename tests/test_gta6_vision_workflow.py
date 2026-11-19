@@ -149,8 +149,8 @@ class TestGta6WorkflowStructure(unittest.TestCase):
             self.assertIn("Vice City", prompt_val)
 
         csb_js = self.nodes_by_name["Create Subtitle Binary"]["parameters"]["jsCode"]
-        self.assertIn("const subY = 860;", csb_js)
-        self.assertIn("const captionY = 75;", csb_js)
+        self.assertIn("const subY = 900;", csb_js)
+        self.assertIn("const captionY = isSplitCam ? 380 : 145;", csb_js)
         self.assertIn("WASTED", csb_js)
         self.assertIn("$`", csb_js)
 
@@ -526,8 +526,10 @@ class TestGta6PeakAndVisionLogic(unittest.TestCase):
 
             csb_js = by_n["Create Subtitle Binary"]["parameters"]["jsCode"]
             self.assertNotIn("|GTA|", csb_js)
-            self.assertIn("const subY = 860;", csb_js)
-            self.assertIn("const captionY = 75;", csb_js)
+            self.assertIn("const subY = 900;", csb_js)
+            self.assertIn("const captionY = isSplitCam ? 380 : 145;", csb_js)
+            self.assertIn("if (!useAssHookCaption)", csb_js)
+            self.assertIn("black@0.88", csb_js)
             self.assertNotIn("Auto-inject vine-boom", csb_js)
             self.assertIn("fscx100", csb_js)
             self.assertIn("fscy100", csb_js)
@@ -623,6 +625,66 @@ class TestGta6PeakAndVisionLogic(unittest.TestCase):
         )
         self.assertEqual(norm_empty["clips"][0]["memes"], [])
         self.assertNotIn("COKE", norm_empty["clips"][0]["hook_caption"])
+
+    def test_divider_badge_hook_caption_runtime(self):
+        """Verify Option B divider-badge seam banner (y=380 split-cam, y=145 vertical/no-cam, 2-line wrap, Remotion mutual exclusion, subY=900)."""
+        import subprocess
+        import tempfile
+
+        for wf_rel in ("workflows/gta6_vision_shorts_workflow.json", "workflows/workflow.json"):
+            with open(os.path.join(ROOT, wf_rel), "r", encoding="utf-8") as f:
+                wf = json.load(f)
+            csb_js = next(n for n in wf["nodes"] if n["name"] == "Create Subtitle Binary")["parameters"]["jsCode"]
+
+            def _run_case(hook_txt, has_cam=True, dims="1920x1080"):
+                harness = (
+                    "let remotionCalled = false;\n"
+                    f"const $input = {{ first: () => ({{ json: {{ merge_result: {{ story_hook: {json.dumps(hook_txt)}, climax_quote: 'no way', reaction_triggers: [], memes: [] }} }} }}) }};\n"
+                    "const nodeMap = {\n"
+                    "  '7d. Get Subtitles (SRT)': { words: [{ word: 'No', start: 1.0, end: 1.2 }, { word: 'way!', start: 1.25, end: 1.5 }] },\n"
+                    f"  'Parse Cam Config': {{ ai_found: {'true' if has_cam else 'false'}, cam_w: 360, cam_h: 240, cam_x: 0, cam_y: 540, avatar_row_detected: false }},\n"
+                    f"  'Get Meme List': {{ stdout: 'vine-boom-sound-effect_KT89XIq.mp3\\n---DIMENSIONS---\\n{dims}' }},\n"
+                    f"  'Loop Clips': {{ title: 'Vice City Chase', hook_caption: {json.dumps(hook_txt)}, start_time: 10, end_time: 48, payoff_time: 44, segments: [{{ start: 10, end: 48 }}], assembled_spoken_script: 'No way this Vice City chase just happened in GTA 6!' }}\n"
+                    "};\n"
+                    "const $ = (nm) => ({ item: { json: nodeMap[nm] || {} }, last: () => ({ json: nodeMap[nm] || {} }), first: () => ({ json: nodeMap[nm] || {} }) });\n"
+                    "const origReq = require;\n"
+                    "require = (m) => m === 'child_process' ? { execSync: (cmd) => { if (String(cmd).includes('remotion-server')) remotionCalled = true; return '38.0'; } } : (m === 'fs' ? { existsSync: () => false, writeFileSync: () => {}, mkdirSync: () => {} } : origReq(m));\n"
+                    "const out = (function(){\n" + csb_js + "\n})();\n"
+                    "const ass = Buffer.from(out[0].binary.data.data, 'base64').toString('utf8');\n"
+                    "console.log(JSON.stringify({ cmd: out[0].json.command, ass, remotionCalled }));\n"
+                )
+                with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as tf:
+                    tf.write(harness)
+                    tp = tf.name
+                try:
+                    res = subprocess.run(["node", tp], capture_output=True, text=True, timeout=15)
+                    self.assertEqual(res.returncode, 0, f"{wf_rel} failed: {res.stderr}")
+                    return json.loads(res.stdout.strip().splitlines()[-1])
+                finally:
+                    if os.path.exists(tp):
+                        os.remove(tp)
+
+            # 1) Single-line split-cam hook (<=24 chars)
+            c1 = _run_case("VICE CITY CHASE", has_cam=True, dims="1920x1080")
+            self.assertFalse(c1["remotionCalled"], "Remotion must be bypassed when ASS ViralCaption is active")
+            self.assertIn("Style: ViralCaption,Lilita One,36,&H00D7FF&,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,2,5,40,40,0,1", c1["ass"])
+            self.assertIn(r"{\pos(360,380)}VICE CITY CHASE", c1["ass"])
+            self.assertIn(r"{\pos(360,900)}", c1["ass"])
+            self.assertIn("drawbox=x=0:y=352:w=720:h=56:color=black@0.88:t=fill", c1["cmd"])
+            self.assertIn("drawbox=x=0:y=352:w=720:h=2:color=white:t=fill", c1["cmd"])
+            self.assertIn("drawbox=x=0:y=406:w=720:h=2:color=white:t=fill", c1["cmd"])
+
+            # 2) Two-line split-cam hook (>24 chars, <=36 chars)
+            c2 = _run_case("INSANE SIX STAR VICE CITY CHASE", has_cam=True, dims="1920x1080")
+            self.assertIn("Style: ViralCaption,Lilita One,32,", c2["ass"])
+            self.assertIn(r"\N", [ln for ln in c2["ass"].splitlines() if ln.startswith("Dialogue: 2,")][0])
+            self.assertIn("drawbox=x=0:y=338:w=720:h=84:color=black@0.88:t=fill", c2["cmd"])
+            self.assertIn("drawbox=x=0:y=420:w=720:h=2:color=white:t=fill", c2["cmd"])
+
+            # 3) Vertical / no-cam mode -> captionY = 145
+            c3 = _run_case("VICE CITY CHASE", has_cam=False, dims="720x1280")
+            self.assertIn(r"{\pos(360,145)}VICE CITY CHASE", c3["ass"])
+            self.assertNotIn("drawbox=x=0:y=352", c3["cmd"])
 
 
 if __name__ == "__main__":

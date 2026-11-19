@@ -241,10 +241,10 @@ class TestPipelineComprehensive(unittest.TestCase):
         self.assertEqual(params.get("batchSize"), 1, "Loop Clips batchSize must be 1, preventing single-clip loop exit")
 
     def test_three_zone_vertical_layout_collision_prevention(self):
-        """Review Point 3: Top banner at y=75, untouched game action, subtitles at y=860 above GTA 6 cutscene subs."""
+        """Divider-badge layout: y=0..380 cam, y=380 seam-centered hook banner (y=145 no-cam), y=900 dynamic subs."""
         cs_code = self.nodes["Create Subtitle Binary"]["parameters"]["jsCode"]
-        self.assertIn("const subY = 860;", cs_code, "Subtitles must be at y=860 above GTA 6 cutscene subs & YT UI")
-        self.assertIn("const captionY = 75;", cs_code, "Top banner must remain at y=75")
+        self.assertIn("const subY = 900;", cs_code, "Subtitles must be at y=900 below seam banner & above YT UI")
+        self.assertIn("const captionY = isSplitCam ? 380 : 145;", cs_code, "Hook banner must sit on y=380 seam (split-cam) or y=145 (no-cam)")
 
     def test_subtitle_styling_color_highlight_and_no_single_word_lines(self):
         """Review Point 4: Rock-solid font metrics (no \fscx line jitter) and min 2 words per line."""

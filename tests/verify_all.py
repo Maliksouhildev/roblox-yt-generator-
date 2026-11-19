@@ -70,8 +70,8 @@ checks = [
     ("Create Subtitle Binary", "equalizer=f=3500", "CreateSubtitle voice chat de-harshing EQ"),
     ("Loop Clips", 'options', "LoopClips splitInBatches configured"),
     ("Create Subtitle Binary", "sanitizeCaption", "CreateSubtitle sanitizeCaption anti-placeholder leak"),
-    ("Create Subtitle Binary", "subY = 860", "CreateSubtitle 3-zone lower-third subtitle y=860"),
-    ("Create Subtitle Binary", "captionY = 75", "CreateSubtitle 3-zone top hook caption y=75"),
+    ("Create Subtitle Binary", "subY = 900", "CreateSubtitle lower-third subtitle y=900"),
+    ("Create Subtitle Binary", "captionY = isSplitCam ? 380 : 145", "CreateSubtitle divider-seam hook caption y=380 (split-cam) / y=145 (fullscreen)"),
 
     # 8. Hook & Zero-Second Retention checks
     ("1. Prepare Scout Prompt", "ZERO-SECOND RETENTION & STRICT ANTI-MID-THOUGHT PREAMBLE", "Scout zero-second retention & anti-mid-thought preamble rule"),

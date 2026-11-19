@@ -1822,8 +1822,9 @@ const camZoomEnable = climaxEnable;
 // Zone 1: Persistent Top Hook Banner at y=75 (safe top zone, away from gameplay)
 // Zone 2: Untouched Gameplay Action Zone (y=380 to y=820, zero text collisions)
 // Zone 3: Dynamic Spoken Subtitles at y=920 (safe lower third, above YouTube/TikTok UI)
-const subY = 860;
-const captionY = 75;
+const isSplitCam = hasCam && !isVertical;
+const subY = 900;
+const captionY = isSplitCam ? 380 : 145;
 
 let assContent = [
   '[Script Info]',
