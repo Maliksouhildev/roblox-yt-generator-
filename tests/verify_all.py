@@ -61,7 +61,7 @@ checks = [
     # 7. Create Subtitle Binary checks
     ("Create Subtitle Binary", "fs.existsSync('/files/temp/screams.json')", "CreateSubtitle screams.json disk loader"),
     ("Create Subtitle Binary", "trunc(ih*0.85*(720/900)/2)*2", "CreateSubtitle 720:820 aspect gameplay crop"),
-    ("Create Subtitle Binary", "trunc(ih*0.10/2)*2", "CreateSubtitle y=12% offset to bypass top follower goal/timer"),
+    ("Create Subtitle Binary", "gameYRatio", "CreateSubtitle dynamic gameYRatio vertical offset"),
     ("Create Subtitle Binary", "trunc(ih*0.86*(720/1280)/2)*2", "CreateSubtitle no-cam top HUD bypass crop"),
     ("Create Subtitle Binary", "trunc(ih*0.11/2)*2", "CreateSubtitle no-cam y=11% offset"),
     ("Create Subtitle Binary", "scale=trunc(720*1.45/2)*2", "CreateSubtitle 1.45x punch zoom"),
@@ -70,7 +70,7 @@ checks = [
     ("Create Subtitle Binary", "equalizer=f=3500", "CreateSubtitle voice chat de-harshing EQ"),
     ("Loop Clips", 'options', "LoopClips splitInBatches configured"),
     ("Create Subtitle Binary", "sanitizeCaption", "CreateSubtitle sanitizeCaption anti-placeholder leak"),
-    ("Create Subtitle Binary", "subY = 920", "CreateSubtitle 3-zone lower-third subtitle y=920"),
+    ("Create Subtitle Binary", "subY = 860", "CreateSubtitle 3-zone lower-third subtitle y=860"),
     ("Create Subtitle Binary", "captionY = 75", "CreateSubtitle 3-zone top hook caption y=75"),
 
     # 8. Hook & Zero-Second Retention checks
@@ -114,7 +114,7 @@ checks = [
     ("Create Subtitle Binary", "NO AUDIO FOUND", "CreateSubtitle BANNED_CAPTION_RE bans NO AUDIO FOUND / NO WORDS"),
     ("Write Sidecar JSON", "NO AUDIO FOUND", "WriteSidecarJSON BANNED regex bans NO AUDIO FOUND / NO WORDS"),
     ("Screen UI Vision Audit", "screen_ui_audit.py", "ScreenUIVisionAudit invokes 4-frame Gemini Vision audit"),
-    ("IF: Screen Clean?", "has_ui_obstruction !== true", "IfScreenClean skips obstructed browser/ESC menu clips"),
+    ("IF: Screen Clean?", "has_ui_obstruction === false", "IfScreenClean fails closed on obstructed/EULA/loading clips"),
     ("1. Prepare Scout Prompt", "keep counter", "Scout anti-intro rules & anti-raid filter"),
     ("3. Prepare Director Prompt", "thank you for the raid", "Director anti-intro rules & anti-raid filter"),
     ("5. Split Clips", "INTRO_RULES_RAID_RE", "SplitClips filters raid thank-yous & intro rules clips"),

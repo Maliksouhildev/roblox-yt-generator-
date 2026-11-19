@@ -1359,7 +1359,7 @@ return [{ pairedItem: { item: 0 }, json: { command: ffmpegCmd, clip_title: clipT
             },
             conditions: [
                 {
-                    leftValue: '={{ (function(){ try { const raw = String($json.stdout || "{}").trim(); const m = raw.match(/\\{[\\s\\S]*\\}/); const d = m ? JSON.parse(m[0]) : {}; return d.has_ui_obstruction !== true; } catch(e) { return true; } })() }}',
+                    leftValue: '={{ (function(){ try { const raw = String($json.stdout || "").trim(); if (!raw) return false; const m = raw.match(/\\{[\\s\\S]*\\}/); if (!m) return false; const d = JSON.parse(m[0]); return d.has_ui_obstruction === false && d.is_nsfw_or_unsafe !== true; } catch(e) { return false; } })() }}',
                     rightValue: true,
                     operator: {
                         type: 'boolean',
@@ -1822,7 +1822,7 @@ const camZoomEnable = climaxEnable;
 // Zone 1: Persistent Top Hook Banner at y=75 (safe top zone, away from gameplay)
 // Zone 2: Untouched Gameplay Action Zone (y=380 to y=820, zero text collisions)
 // Zone 3: Dynamic Spoken Subtitles at y=920 (safe lower third, above YouTube/TikTok UI)
-const subY = 920;
+const subY = 860;
 const captionY = 75;
 
 let assContent = [
@@ -1986,7 +1986,7 @@ if (isVertical) {
 
   // Gameplay cropped to 720:900 with 10% vertical offset (or avatar bar bypass)
   // Stacked with 1.12x hook zoom, 1.15x reaction zoom, and 1.45x climax punch zoom
-  const gamePart = "[v_game]crop='trunc(ih*0.85*(720/900)/2)*2':'trunc(ih*0.85/2)*2':(iw-ow)/2:'trunc(ih*0.10/2)*2'," +
+  const gamePart = "[v_game]crop='trunc(ih*0.85*(720/900)/2)*2':'trunc(ih*0.85/2)*2':(iw-ow)/2:'trunc(ih*" + gameYRatio + "/2)*2'," +
     "scale=720:900:force_original_aspect_ratio=increase,crop=720:900:(iw-ow)/2:(ih-oh)/2,split=4[g_base][g_hk_src][g_react_src][g_cl_src];" +
     "[g_hk_src]scale=trunc(720*1.12/2)*2:-1,crop=720:900:(iw-ow)/2:(ih-oh)/2[g_hk];" +
     "[g_react_src]scale=trunc(720*1.15/2)*2:-1,crop=720:900:(iw-ow)/2:(ih-oh)/2[g_react];" +

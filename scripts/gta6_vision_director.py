@@ -58,7 +58,12 @@ TRANSITIVE_OR_DANGLING_WORDS = (
 DANGLING_HOOK_END_RE = re.compile(rf"\b({TRANSITIVE_OR_DANGLING_WORDS})\s*[.!?]*$", re.I)
 
 CLICKBAIT_FORBIDDEN_IF_UNSPOKEN_RE = re.compile(
-    r"\b(GLITCH(?:ES)?|HACK(?:S|ED|ING)?|EXPLOIT(?:S|ED)?|MOD(?:S|DED)?|SECRET\s+CODE|INFINITE\s+MONEY|INFINITE|BANNED|CHEAT(?:S|ING)?)\b",
+    r"\b(GLITCH(?:ES)?|HACK(?:S|ED|ING)?|EXPLOIT(?:S|ED)?|MOD(?:S|DED)?|SECRET\s+CODE|INFINITE\s+MONEY|INFINITE|BANNED|CHEAT(?:S|ING)?|ACID\s+LAB)\b",
+    re.I,
+)
+
+BRAND_SAFE_BANNED_RE = re.compile(
+    r"\b(COKE|COCAINE|HEROIN|METH(?:AMPHETAMINE)?|FENTANYL|SUICIDE|KILL\s+YOURSELF)\b",
     re.I,
 )
 
@@ -251,11 +256,12 @@ def _interleave_vision_parts(summary_doc: dict, candidates: list, meme_files: li
         f"GLOBAL CONTEXT:\n- Game: {game}\n- Vibe: {vibe}\n- Summary: {gs}\n- Themes: {themes}\n\n"
         f"AVAILABLE SFX MEME FILES: {memes_str}\n\n"
         "STRICT SELECTION & EDITING RULES:\n"
-        "1. M-RATED / NSFW & MENU VISION SHIELD (CRITICAL FOR LAUNCH DAY):\n"
+        "1. M-RATED / NSFW, BOOT/EULA & MENU VISION SHIELD (CRITICAL FOR LAUNCH DAY):\n"
         "   Inspect EVERY 3x3 grid first! Immediately REJECT (or set `is_nsfw_or_unsafe: true`) any candidate showing:\n"
         "   - Nudity, strip clubs, sexually explicit M-rated scenes, or graphic TOS-violating gore.\n"
-        "   - Chrome/Edge browsers, Twitch/YouTube chat dashboards, Discord, pause/ESC/settings menus, or static non-gameplay screens.\n"
-        "   - Boring opening title cards or slow exposition cutscenes without massive streamer shock.\n"
+        "   - Game boot/splash screens, epilepsy/seizure health warnings, EULA/terms acceptance, brightness/audio calibration menus, blank/static loading screens, or Rockstar logo intros.\n"
+        "   - Chrome/Edge browsers, Twitch/YouTube chat dashboards, Discord, pause/ESC/settings/map menus, or static non-gameplay screens.\n"
+        "   - Aimless walking/driving or calm shop visits with zero comedic/chaotic payoff, or passive NPC cutscenes where the streamer is silent or barely reacting (require clear streamer vocal/facial/chat reaction spikes!).\n"
         f"2. SINGLE-SCENE CONTIGUITY & LONG-FORM TARGET (34s-55s): Pick the BEST {min_clips} to {max_clips} distinct candidates.\n"
         "   Each clip MUST stay strictly inside ONE candidate's [window_start, window_end]. NEVER stitch minutes apart!\n"
         "   Target 34.0s to 55.0s total duration (sweet spot 38s-50s) with >= 2 story beats (Setup/Escalation -> Payoff).\n"
@@ -268,14 +274,16 @@ def _interleave_vision_parts(summary_doc: dict, candidates: list, meme_files: li
         "   - `HUBRIS_WAGER_WASTED_KARMA`: cocky boast/bet -> instant fail, WASTED, or BUSTED.\n"
         "   - `COMEDIC_BANTER_OR_SARCASM`: storytelling or voice-chat punchline.\n"
         "   - `STORY_CUTSCENE_OR_TWIST_REACTION`: Lucia & Jason twist + explosive shock (MUST set `is_story_spoiler: true` and NEVER spoil in `hook_caption`!).\n"
-        "5. COMPLETE METADATA IN ONE PASS (No downstream merge agent exists!):\n"
-        "   - `title`: Catchy 3-7 word YouTube Short title specifically describing THIS clip (NEVER 'GTA6_Peak_Clip_1'; NEVER say 'Glitch'/'Hack'/'Exploit'/'Mod'/'Banned' unless spoken verbatim!).\n"
+        "5. COMPLETE METADATA IN ONE PASS (ZERO HALLUCINATION & BRAND-SAFE):\n"
+        "   - NEVER invent glitches, bets, acid labs, or fake NPC hostility! Every title, hook, and description MUST strictly reflect literal, verified actions from the transcript and 3x3 frames.\n"
+        "   - BRAND-SAFE: NEVER include YouTube-throttled drug/explicit terms (`COKE`, `COCAINE`, `SUICIDE`, etc.) in titles or hooks.\n"
+        "   - `title`: Catchy 3-7 word YouTube Short title specifically describing THIS clip (NEVER 'GTA6_Peak_Clip_1').\n"
         "   - `hook_caption`: Punchy 3-5 WORDS ALL CAPS headline (<=28 chars), COMPLETE thought with zero transitive verb or dangling endings (never end on LIKE/WANT/KNOW/SEE/GOT/TO/THE/IN)!\n"
-        "   - `short_description`: 2-3 engaging sentences written specifically for THIS Short describing what happens in THIS clip and why it's viral.\n"
+        "   - `short_description`: 2-3 engaging factual sentences written specifically for THIS Short.\n"
         "   - `visual_value_note`: short 1-line transformative tip or 'Watch for...' callout for this clip.\n"
         "   - `comment_bait_question`: fun question directly referencing THIS clip.\n"
         "   - `is_story_spoiler`: boolean; `is_nsfw_or_unsafe`: boolean (must be false for selected clips).\n"
-        "   - `climax_quote`, `reaction_triggers`, `memes`, `visual_evidence`, `cause_and_effect_setup`.\n"
+        "   - `climax_quote`, `reaction_triggers`, `memes` (use `[]` when dialogue is clear/calm; only add SFX on real punchlines), `visual_evidence`, `cause_and_effect_setup`.\n"
     )
     parts = [{"text": header_text}]
     attached = 0
@@ -461,7 +469,7 @@ def call_gemini_vision(parts_or_prompt, candidates: list, api_keys: list, models
 
 
 def _strip_unspoken_clickbait(text: str, transcript_text: str) -> str:
-    """Part 1.4: Remove GLITCH/HACK/EXPLOIT/MOD/BANNED/INFINITE unless spoken verbatim in transcript."""
+    """Part 1.4: Remove unspoken clickbait (GLITCH/HACK/EXPLOIT/MOD/BANNED/ACID LAB) and brand-unsafe drug/self-harm terms."""
     t_low = str(transcript_text or "").lower()
 
     def _rep(m):
@@ -469,6 +477,7 @@ def _strip_unspoken_clickbait(text: str, transcript_text: str) -> str:
         return m.group(0) if tok in t_low else ""
 
     cleaned = CLICKBAIT_FORBIDDEN_IF_UNSPOKEN_RE.sub(_rep, str(text or ""))
+    cleaned = BRAND_SAFE_BANNED_RE.sub("", cleaned)
     return re.sub(r"\s+", " ", cleaned).strip()
 
 
@@ -1039,7 +1048,8 @@ def normalize_director_clips(
             hook = _safe_hook_from_text(assembled, raw_title or f"CLIP {idx}")
 
         memes_out = []
-        for m in (cl.get("memes") or []):
+        raw_memes = cl.get("memes")
+        for m in (raw_memes if isinstance(raw_memes, list) else []):
             if not isinstance(m, dict):
                 continue
             mf = str(m.get("file") or m.get("sound") or m.get("name") or "")
@@ -1050,8 +1060,7 @@ def normalize_director_clips(
                 "file": mf,
                 "volume": float(m.get("volume") or 0.30),
             })
-        if not memes_out:
-            memes_out = [{"timestamp": _map_meme_timestamp(payoff_t, clean_segs, cand or {}, payoff_t), "file": default_sfx, "volume": 0.30}]
+        # Respect explicit `"memes": []` from the LLM — never force vine-boom on calm dialogue!
 
         used_arches = {vc["narrative_archetype"] for vc in valid_clips}
         if len(raw_clips) >= 3 and arch_val in used_arches and len(used_arches) < 3:

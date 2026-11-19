@@ -149,7 +149,8 @@ class TestGta6WorkflowStructure(unittest.TestCase):
             self.assertIn("Vice City", prompt_val)
 
         csb_js = self.nodes_by_name["Create Subtitle Binary"]["parameters"]["jsCode"]
-        self.assertIn("const subY = 1010;", csb_js)
+        self.assertIn("const subY = 860;", csb_js)
+        self.assertIn("const captionY = 75;", csb_js)
         self.assertIn("WASTED", csb_js)
         self.assertIn("$`", csb_js)
 
@@ -173,8 +174,11 @@ class TestGta6WorkflowStructure(unittest.TestCase):
         self.assertIn("stream_shorts_created.flag", ws_cmd)
         self.assertIn("has_webcam", ws_cmd)
         self.assertIn("short_description", ws_cmd)
-        self.assertEqual(self.conns["Delete Source VOD"]["main"][0][0]["node"], "Check Stream Shorts Created")
-        self.assertEqual(self.conns["Check Stream Shorts Created"]["main"][0][0]["node"], "IF: Retry Next Stream?")
+        self.assertEqual(self.conns["Loop Clips"]["main"][0][0]["node"], "Check Stream Shorts Created")
+        self.assertEqual(self.conns["Check Stream Shorts Created"]["main"][0][0]["node"], "IF: Should Delete VOD?")
+        self.assertEqual(self.conns["IF: Should Delete VOD?"]["main"][0][0]["node"], "Delete Source VOD")
+        self.assertEqual(self.conns["IF: Should Delete VOD?"]["main"][1][0]["node"], "IF: Retry Next Stream?")
+        self.assertEqual(self.conns["Delete Source VOD"]["main"][0][0]["node"], "IF: Retry Next Stream?")
         self.assertEqual(self.conns["IF: Retry Next Stream?"]["main"][0][0]["node"], "Find Stream")
         self.assertEqual(self.conns["Pick Random Streamer"]["main"][0][0]["node"], "If Download Allowed?")
         self.assertEqual(self.conns["If Download Allowed?"]["main"][0][0]["node"], "Fallback Download")
@@ -492,6 +496,133 @@ class TestGta6PeakAndVisionLogic(unittest.TestCase):
         self.assertIn("source_stream_id", ws["parameters"]["command"])
         self.assertIn("vod_start_time", ws["parameters"]["command"])
         self.assertIn("vod_end_time", ws["parameters"]["command"])
+
+    def test_6_shorts_failure_mode_patches(self):
+        """Verify all 4 mandatory patch groups across workflow.json, gta6_vision_shorts_workflow.json, and Python scripts."""
+        import subprocess
+        import tempfile
+        import cv2
+        import numpy as np
+        import screen_ui_audit as sua
+
+        for wf_rel in ("workflows/workflow.json", "workflows/gta6_vision_shorts_workflow.json"):
+            with open(os.path.join(ROOT, wf_rel), "r", encoding="utf-8") as f:
+                wf = json.load(f)
+            ids = [n["id"] for n in wf["nodes"]]
+            names = [n["name"] for n in wf["nodes"]]
+            by_n = {n["name"]: n for n in wf["nodes"]}
+            # Zero duplicate IDs & zero orphan nodes
+            self.assertEqual(len(ids), len(set(ids)), f"{wf_rel} has duplicate node IDs")
+            for orphan in ("Prepare Frames", "Read Reference", "Cam Vision Prep", "Cam Vision Call", "Vision Prep", "Groq Vision Analyzer", "If HfFace 429", "Wait HfFace Error", "Restore HfFace Input", "If Groq Vision 429", "Wait Groq Vision Error", "Wait Summary Fallback Error"):
+                self.assertNotIn(orphan, names, f"{wf_rel} still contains orphan node {orphan}")
+
+            # 1) Whisper GTA 6 prompt + GTA removed from FOREIGN_GAME_RE + Wait Inside Loop reduced
+            for wname in ("3. Groq Whisper", "3. Groq Whisper Fallback", "7d. Get Subtitles (SRT)"):
+                params = by_n[wname]["parameters"]["bodyParameters"]["parameters"]
+                p_val = next(p["value"] for p in params if p["name"] == "prompt")
+                self.assertIn("IShowSpeed", p_val)
+                self.assertNotIn("Lucky Blocks", p_val)
+            self.assertLessEqual(by_n["Wait Inside Loop"]["parameters"]["amount"], 10)
+
+            csb_js = by_n["Create Subtitle Binary"]["parameters"]["jsCode"]
+            self.assertNotIn("|GTA|", csb_js)
+            self.assertIn("const subY = 860;", csb_js)
+            self.assertIn("const captionY = 75;", csb_js)
+            self.assertNotIn("Auto-inject vine-boom", csb_js)
+            self.assertIn("fscx100", csb_js)
+            self.assertIn("fscy100", csb_js)
+            self.assertNotIn("c_bg_blur", csb_js)
+            self.assertNotIn("cam_bordered", csb_js)
+            self.assertIn("gameYRatio", csb_js)
+
+            # Fail-closed IF: Screen Clean? & If Summary Fallback 429 distinct branches
+            sc_expr = by_n["IF: Screen Clean?"]["parameters"]["conditions"]["conditions"][0]["leftValue"]
+            self.assertIn("has_ui_obstruction === false", sc_expr)
+            self.assertIn("return false;", sc_expr)
+            sf_conns = wf["connections"]["If Summary Fallback 429"]["main"]
+            self.assertNotEqual(sf_conns[0][0]["node"], sf_conns[1][0]["node"])
+
+            # Runtime Node.js test of Create Subtitle Binary: overlapping/frozen words, scale reset, no forced vine-boom, smart-fill cam
+            harness = (
+                "const $input = { first: () => ({ json: { merge_result: { story_hook: 'CRAZY GTA SWAMP CHASE', climax_quote: 'no way bro', reaction_triggers: [5.0], memes: [] } } }) };\n"
+                "const nodeMap = {\n"
+                "  '7d. Get Subtitles (SRT)': { words: [\n"
+                "    { word: 'Wait', start: 0.5, end: 0.9 },\n"
+                "    { word: 'bro', start: 0.7, end: 1.1 },\n"
+                "    { word: 'what', start: 4.5, end: 4.8 },\n"
+                "    { word: 'is', start: 4.82, end: 5.0 },\n"
+                "    { word: 'that?!', start: 5.02, end: 5.4 }\n"
+                "  ] },\n"
+                "  'Parse Cam Config': { ai_found: true, cam_w: 360, cam_h: 240, cam_x: 0, cam_y: 540, avatar_row_detected: true },\n"
+                "  'Get Meme List': { stdout: 'vine-boom-sound-effect_KT89XIq.mp3\\n---DIMENSIONS---\\n1920x1080' },\n"
+                "  'Loop Clips': { title: 'GTA6_Peak_Clip_1', hook_caption: 'WHY IS IT DROPPING COKE', start_time: 10, end_time: 48, payoff_time: 44, segments: [{ start: 10, end: 48 }], assembled_spoken_script: 'Wait bro what is that in GTA 6 swamp!' }\n"
+                "};\n"
+                "const $ = (nm) => ({ item: { json: nodeMap[nm] || {} }, last: () => ({ json: nodeMap[nm] || {} }), first: () => ({ json: nodeMap[nm] || {} }) });\n"
+                "const origReq = require;\n"
+                "require = (m) => m === 'child_process' ? { execSync: () => '38.0' } : (m === 'fs' ? { existsSync: () => false, writeFileSync: () => {}, mkdirSync: () => {} } : origReq(m));\n"
+                "const out = (function(){\n" + csb_js + "\n})();\n"
+                "const ass = Buffer.from(out[0].binary.data.data, 'base64').toString('utf8');\n"
+                "console.log(JSON.stringify({ cmd: out[0].json.command, hook: out[0].json.resolved_hook, stem: out[0].json.resolved_stem, ass }));\n"
+            )
+            with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as tf:
+                tf.write(harness)
+                tpath = tf.name
+            try:
+                res = subprocess.run(["node", tpath], capture_output=True, text=True, timeout=15)
+                self.assertEqual(res.returncode, 0, f"Node runtime failed for {wf_rel}: {res.stderr}")
+                out_obj = json.loads(res.stdout.strip().splitlines()[-1])
+                self.assertNotIn("vine-boom", out_obj["cmd"], "Must NOT force vine-boom when memes=[]")
+                self.assertIn("trunc(ih*0.20/2)*2", out_obj["cmd"], "gameYRatio=0.20 must be interpolated when avatar_row_detected=true")
+                self.assertNotIn("GTA6_Peak_Clip_1", out_obj["stem"], "Internal fallback filename must be rejected")
+                self.assertNotIn("COKE", out_obj["hook"], "Brand-unsafe keyword COKE must be scrubbed")
+                # Check ASS Dialogue: 1 lines are strictly non-overlapping, bounded across 3.4s pause, and reset scale
+                d1_lines = [ln for ln in out_obj["ass"].splitlines() if ln.startswith("Dialogue: 1,")]
+                self.assertGreaterEqual(len(d1_lines), 4)
+                prev_end = -1.0
+                for ln in d1_lines:
+                    parts = ln.split(",", 9)
+                    def _to_sec(tc):
+                        h, m, s = tc.split(":")
+                        return int(h) * 3600 + int(m) * 60 + float(s)
+                    s_t, e_t = _to_sec(parts[1]), _to_sec(parts[2])
+                    self.assertGreater(e_t, s_t)
+                    self.assertLessEqual(e_t - s_t, 1.5, f"Frozen subtitle detected across pause: {ln}")
+                    self.assertGreaterEqual(s_t + 0.005, prev_end, f"Overlapping ASS lines: {prev_end} vs {s_t}")
+                    self.assertIn(r"\fscx100\fscy100}", parts[9])
+                    prev_end = e_t
+            finally:
+                if os.path.exists(tpath):
+                    os.remove(tpath)
+
+        # Verify screen_ui_audit local OpenCV heuristic flags black loading screens AND EULA warning text walls
+        with tempfile.TemporaryDirectory() as td:
+            black_frames = []
+            for idx in range(4):
+                p = os.path.join(td, f"blk_{idx}.jpg")
+                cv2.imwrite(p, np.zeros((360, 640, 3), dtype=np.uint8))
+                black_frames.append((idx, p))
+            hb = sua.local_nsfw_and_static_heuristic(black_frames)
+            self.assertTrue(hb["is_black_or_solid_loading"])
+
+            eula_frames = []
+            for idx in range(4):
+                img = np.full((360, 640, 3), 12, dtype=np.uint8)
+                for row_y in range(85, 280, 20):
+                    cv2.putText(img, "EPILEPSY WARNING: READ BEFORE PLAYING GTA 6 EULA", (110, row_y), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (235, 235, 235), 1)
+                p = os.path.join(td, f"eula_{idx}.jpg")
+                cv2.imwrite(p, img)
+                eula_frames.append((idx, p))
+            he = sua.local_nsfw_and_static_heuristic(eula_frames)
+            self.assertTrue(he["is_eula_or_warning_text"])
+
+        # Verify brand-safe & memes=[] preservation in gta6_vision_director.py
+        norm_empty = vision_director.normalize_director_clips(
+            {"clips": [{"candidate_id": "cand_1", "title": "Boat Chase", "hook_caption": "WHY IS IT DROPPING COKE", "start_time": 100.0, "end_time": 140.0, "memes": []}]},
+            [{"candidate_id": "cand_1", "window_start": 95.0, "window_end": 150.0, "peak_time": 132.0, "raw_text": "Look at this wild boat chase through the swamp in Vice City!"}],
+            ["vine-boom-sound-effect_KT89XIq.mp3"],
+        )
+        self.assertEqual(norm_empty["clips"][0]["memes"], [])
+        self.assertNotIn("COKE", norm_empty["clips"][0]["hook_caption"])
 
 
 if __name__ == "__main__":

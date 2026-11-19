@@ -241,10 +241,10 @@ class TestPipelineComprehensive(unittest.TestCase):
         self.assertEqual(params.get("batchSize"), 1, "Loop Clips batchSize must be 1, preventing single-clip loop exit")
 
     def test_three_zone_vertical_layout_collision_prevention(self):
-        """Review Point 3: Top banner at y=75, untouched game action at y=380-820, subtitles at y=920."""
+        """Review Point 3: Top banner at y=75, untouched game action, subtitles at y=860 above GTA 6 cutscene subs."""
         cs_code = self.nodes["Create Subtitle Binary"]["parameters"]["jsCode"]
-        self.assertIn("const subY = 920;", cs_code, "Subtitles must be at lower third y=920, preventing collision with Roblox text at y=500")
-        self.assertIn("const captionY = 75;", cs_code, "Top banner must be at y=75, away from gameplay")
+        self.assertIn("const subY = 860;", cs_code, "Subtitles must be at y=860 above GTA 6 cutscene subs & YT UI")
+        self.assertIn("const captionY = 75;", cs_code, "Top banner must remain at y=75")
 
     def test_subtitle_styling_color_highlight_and_no_single_word_lines(self):
         """Review Point 4: Rock-solid font metrics (no \fscx line jitter) and min 2 words per line."""
@@ -435,7 +435,7 @@ class TestPipelineComprehensive(unittest.TestCase):
                 os.remove(tpath)
 
     def test_screen_ui_audit_parser_and_fail_open(self):
-        """Bug 2: screen_ui_audit.py parses Vision JSON obstruction verdicts and fails open on missing inputs."""
+        """Bug 2: screen_ui_audit.py parses Vision JSON obstruction verdicts and fails closed on missing/unreadable videos."""
         sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'scripts')))
         import screen_ui_audit as sua
 
@@ -447,8 +447,8 @@ class TestPipelineComprehensive(unittest.TestCase):
         self.assertFalse(neg["has_ui_obstruction"])
 
         missing = sua.audit_video("/nonexistent/path/concatenated_clip.mp4")
-        self.assertFalse(missing["has_ui_obstruction"])
-        self.assertEqual(missing.get("skipped"), "video_missing")
+        self.assertTrue(missing["has_ui_obstruction"])
+        self.assertEqual(missing.get("reason"), "video_missing")
 
     def test_extract_viral_segments_sentence_pause_snapping_runtime(self):
         """Bug 4: 6. Extract Viral Segments snaps mid-clause cuts to Whisper sentence/pause boundaries within ±1.2s."""
@@ -851,10 +851,13 @@ class TestPipelineComprehensive(unittest.TestCase):
         self.assertIn("top_k=20", tfi_src)
 
     def test_stream_retry_on_zero_shorts_and_loop_reset(self):
-        """Ensure 0-short runs (e.g. all clips rejected by Screen UI audit) clean up and retry a new stream."""
+        """Ensure Check Stream Shorts Created runs before Delete Source VOD, deleting only on shorts>0 or max retries."""
         conns = self.wf["connections"]
-        self.assertEqual(conns["Delete Source VOD"]["main"][0][0]["node"], "Check Stream Shorts Created")
-        self.assertEqual(conns["Check Stream Shorts Created"]["main"][0][0]["node"], "IF: Retry Next Stream?")
+        self.assertEqual(conns["Loop Clips"]["main"][0][0]["node"], "Check Stream Shorts Created")
+        self.assertEqual(conns["Check Stream Shorts Created"]["main"][0][0]["node"], "IF: Should Delete VOD?")
+        self.assertEqual(conns["IF: Should Delete VOD?"]["main"][0][0]["node"], "Delete Source VOD")
+        self.assertEqual(conns["IF: Should Delete VOD?"]["main"][1][0]["node"], "IF: Retry Next Stream?")
+        self.assertEqual(conns["Delete Source VOD"]["main"][0][0]["node"], "IF: Retry Next Stream?")
         self.assertEqual(conns["IF: Retry Next Stream?"]["main"][0][0]["node"], "Find Stream")
         self.assertEqual(conns["1. Extract Audio"]["main"][1][0]["node"], "Delete Source VOD")
         self.assertEqual(conns["Pick Random Streamer"]["main"][0][0]["node"], "If Download Allowed?")
