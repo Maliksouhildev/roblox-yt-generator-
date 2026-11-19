@@ -1503,10 +1503,12 @@ function sanitizeCaption(str, defaultFallback) {
   if (/[\\$({]|<[^>]+>|item\\.json|loop\\s*clips|\\{\\{|\\}\\}|\\b(undefined|null|error|no words|no audio found|no transcript)\\b/i.test(clean)) {
     return safeFallback;
   }
-  clean = clean.replace(/[{}\\x27\\x22\`$()<>]/g, '').replace(/_/g, ' ').trim().toUpperCase();
+  clean = clean.replace(/[{}\\x27\\x22\`$()<>]/g, '').replace(/_/g, ' ').replace(/[\\u{1F300}-\\u{1FAFF}\\u{2600}-\\u{27BF}\\uFE0F]/gu, '').trim().toUpperCase();
   if (clean.length < 3 || BANNED_CAPTION_RE.test(clean) || /LOOP CLIPS|ITEM JSON|NO WORDS|NO AUDIO/i.test(clean)) {
     return safeFallback;
   }
+  clean = clean.replace(/\\b(COKE|COCAINE|HEROIN|METH(?:AMPHETAMINE)?|FENTANYL|SUICIDE|KILL\\s+YOURSELF)\\b/gi, '').replace(/\\s+/g, ' ').trim();
+  if (clean.length < 3) return safeFallback;
   return clean.substring(0, 42);
 }
 
@@ -1676,39 +1678,95 @@ if (!Array.isArray(memes)) {
   memes = [];
 }
 
-// ── Smart Hook Caption Formatting (<=36 chars, 1-line <=20 chars, 2-line wrap >20 chars w/ dangling tail strip) ────
+// ── Floating Mixed-Case Hook Formatter (<=40 chars, 1-line <=28c @42px, 2-line >28c @34px, yellow keyword accent) ────
 const HOOK_DANGLING_TAIL_RE = /\\s+\\b(TO|THE|A|AN|OF|IN|ON|AT|FOR|WITH|AND|OR|BUT|IF|IS|ARE|THIS|THAT|MY|YOUR|I)$/i;
+const HOOK_SPECIAL_CASE = {
+  gta: 'GTA', gta6: 'GTA 6', vi: 'VI', npc: 'NPC', npcs: 'NPCs', fps: 'FPS',
+  ai: 'AI', fbi: 'FBI', swat: 'SWAT', vip: 'VIP', pov: 'POV', eula: 'EULA', hud: 'HUD', sfx: 'SFX', tv: 'TV',
+  xqc: 'xQc', xqcow: 'xQc', ishowspeed: 'IShowSpeed', caseoh: 'CaseOh',
+  kai: 'Kai', cenat: 'Cenat', jynxzi: 'Jynxzi', vice: 'Vice', city: 'City',
+  leonida: 'Leonida', lucia: 'Lucia', jason: 'Jason', rockstar: 'Rockstar', florida: 'Florida',
+  i: 'I', "i'm": "I'm", "i've": "I've", "i'll": "I'll", "i'd": "I'd"
+};
+const HOOK_SKIP_HIGHLIGHT = new Set([
+  'THE','IS','ARE','WAS','WERE','BE','BEEN','BEING','AM','A','AN','IN','ON','AT','TO','OF','FOR','WITH',
+  'BY','FROM','THIS','THAT','THESE','THOSE','IT','ITS','HE','SHE','WE','THEY','YOU','I','MY','YOUR','OUR',
+  'HIS','HER','THEIR','AND','OR','BUT','SO','IF','AS','UP','OUT','OFF','OVER','INTO','GTA','GTA6','6','VI',
+  'WHEN','WHAT','WHY','HOW','HERE','THERE'
+]);
+
+function toHookSentenceCase(textStr) {
+  const tokens = String(textStr || '').split(/\\s+/).filter(Boolean);
+  return tokens.map((tok, idx) => {
+    const m = tok.match(/^([^A-Za-z0-9']*)([A-Za-z0-9']+)([^A-Za-z0-9']*)$/);
+    if (!m) return tok;
+    const [, pre, core, post] = m;
+    const low = core.toLowerCase();
+    if (HOOK_SPECIAL_CASE[low]) {
+      return pre + HOOK_SPECIAL_CASE[low] + post;
+    }
+    let outCore = low;
+    if (idx === 0) {
+      outCore = outCore.charAt(0).toUpperCase() + outCore.slice(1);
+    }
+    return pre + outCore + post;
+  });
+}
+
 function formatHookBannerCaption(str) {
-  let clean = String(str || '').replace(/[{}\\x27\\x22\`]/g, '').replace(/\\s+/g, ' ').trim().toUpperCase();
-  if (!clean) return { text: '', isTwoLine: false, fontSize: 36 };
-  if (clean.length > 36) {
-    const cut = clean.slice(0, 36).replace(/\\s+\\S*$/, '').trim();
-    clean = cut.length >= 12 ? cut : clean.slice(0, 36).trim();
+  let clean = String(str || '')
+    .replace(/[\\u{1F300}-\\u{1FAFF}\\u{2600}-\\u{27BF}\\uFE0F]/gu, '')
+    .replace(/[{}\\x27\\x22\`]/g, '')
+    .replace(/\\s+/g, ' ')
+    .trim();
+  if (!clean) return { text: '', plainText: '', isTwoLine: false, fontSize: 42 };
+  if (clean.length > 40) {
+    const cut = clean.slice(0, 40).replace(/\\s+\\S*$/, '').trim();
+    clean = cut.length >= 12 ? cut : clean.slice(0, 40).trim();
   }
   while (HOOK_DANGLING_TAIL_RE.test(clean) && clean.split(' ').length > 2) {
     clean = clean.replace(HOOK_DANGLING_TAIL_RE, '').trim();
   }
-  if (clean.length <= 20) {
-    return { text: clean, isTwoLine: false, fontSize: 36 };
+
+  const casedTokens = toHookSentenceCase(clean);
+  const plainJoined = casedTokens.join(' ');
+  const isTwoLine = plainJoined.length > 28 && casedTokens.length > 1;
+  const fontSize = isTwoLine ? 34 : 42;
+
+  const scored = casedTokens.map((tok, idx) => {
+    const bare = tok.replace(/[^A-Za-z0-9']/g, '').toUpperCase();
+    if (!bare || HOOK_SKIP_HIGHLIGHT.has(bare) || /^\\d+$/.test(bare)) return { idx, score: -1 };
+    let sc = bare.length;
+    if (DANGER_WORDS.has(bare) || WIN_WORDS.has(bare) || SHOCK_WORDS.has(bare)) sc += 12;
+    if (bare.length >= 7) sc += 4;
+    if (/^(GO|GET|GOT|MAKE|MADE|DO|DOES|DID|HAVE|HAS|JUST|REALLY|VERY|MORE|ONLY)$/.test(bare)) sc -= 3;
+    return { idx, score: sc };
+  }).filter(x => x.score > 0).sort((a, b) => (b.score - a.score) || (a.idx - b.idx));
+
+  const maxHl = casedTokens.length >= 4 ? 2 : 1;
+  const hlIndices = new Set(scored.slice(0, maxHl).map(x => x.idx));
+  const styledTokens = casedTokens.map((tok, idx) =>
+    hlIndices.has(idx) ? ('{' + BS + 'c&H00E5FF&}' + tok + '{' + BS + 'c&HFFFFFF&}') : tok
+  );
+
+  if (!isTwoLine) {
+    return { text: styledTokens.join(' '), plainText: plainJoined, isTwoLine: false, fontSize: 42 };
   }
-  const words = clean.split(' ').filter(Boolean);
-  if (words.length <= 1) {
-    return { text: clean, isTwoLine: false, fontSize: 30 };
-  }
+
   let bestSplit = 1;
   let bestDiff = Infinity;
-  for (let k = 1; k < words.length; k++) {
-    const l1 = words.slice(0, k).join(' ');
-    const l2 = words.slice(k).join(' ');
-    const diff = Math.abs(l1.length - l2.length) + (Math.max(l1.length, l2.length) > 20 ? 15 : 0);
+  for (let k = 1; k < casedTokens.length; k++) {
+    const l1 = casedTokens.slice(0, k).join(' ');
+    const l2 = casedTokens.slice(k).join(' ');
+    const diff = Math.abs(l1.length - l2.length) + (Math.max(l1.length, l2.length) > 26 ? 15 : 0);
     if (diff < bestDiff) {
       bestDiff = diff;
       bestSplit = k;
     }
   }
-  const line1 = words.slice(0, bestSplit).join(' ');
-  const line2 = words.slice(bestSplit).join(' ');
-  return { text: line1 + BS + 'N' + line2, isTwoLine: true, fontSize: 30 };
+  const line1 = styledTokens.slice(0, bestSplit).join(' ');
+  const line2 = styledTokens.slice(bestSplit).join(' ');
+  return { text: line1 + BS + 'N' + line2, plainText: plainJoined, isTwoLine: true, fontSize: 34 };
 }
 
 const hookBanner = formatHookBannerCaption(rawCaption);
@@ -1854,13 +1912,13 @@ const hookEnd = Math.min(clipDur, 1.8);
 const hookEnable = 'between(t,0,' + hookEnd.toFixed(2) + ')';
 const camZoomEnable = climaxEnable;
 
-// ── Non-Overlapping Split-Screen Vertical Layout (720x1280) ──────────────
-// Zone 1 (y = 0..380):    Top Webcam Frame (720x380)
-// Seam   (y = 380):       Centered Divider-Badge Hook Separator (Option B strip + Alignment=5 Middle-Center ViralCaption)
-// Zone 2 (y = 380..1280): Bottom Gameplay Frame (720x900)
-// Zone 3 (y = 900):       Dynamic Spoken Subtitles
+// ── Seamless Floating Seam Vertical Layout (720x1280) ────────────────────
+// Zone 1 (y = 0..380):    Top Webcam Frame (720x380) flush to y=380 — zero bars/lines erasing pixels
+// Seam   (y = 380):       Floating Mix-Case White + Yellow Accent Hook (Alignment=5, BorderStyle=1, Outline=6, Shadow=2)
+// Zone 2 (y = 380..1280): Bottom Gameplay Frame (720x900) flush at y=380
+// Zone 3 (y = 1000):      Dynamic Spoken Subtitles (clean lower-third above YouTube Shorts bottom UI)
 const isSplitCam = hasCam && !isVertical;
-const subY = 900;
+const subY = 1000;
 const captionY = isSplitCam ? 380 : 145;
 const capFontSize = hookBanner.fontSize;
 
@@ -1872,8 +1930,8 @@ let assContent = [
   '',
   '[V4+ Styles]',
   'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
-  'Style: ViralSubs,Lilita One,' + FONT_SIZE + ',' + MAIN_COLOR + ',&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,2,20,20,380,1',
-  'Style: ViralCaption,Lilita One,' + capFontSize + ',&H00D7FF&,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,2,5,40,40,0,1',
+  'Style: ViralSubs,Lilita One,' + FONT_SIZE + ',' + MAIN_COLOR + ',&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,2,20,20,280,1',
+  'Style: ViralCaption,Lilita One,' + capFontSize + ',&HFFFFFF&,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,6,2,5,40,40,0,1',
   '',
   '[Events]',
   'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text'
@@ -2029,18 +2087,8 @@ if (isVertical) {
     "[g_after_hk][g_react]overlay=0:0:enable='" + reactionEnable + "'[g_after_react];" +
     "[g_after_react][g_cl]overlay=0:0:enable='" + climaxEnable + "'[g_final]";
 
-  // Option B Divider-Badge Separator straddling y=380:
-  // 1-line hook (<=20 chars, 36px): dark strip y=352..408 (h=56) w/ 2px white borders at y=352 & y=406
-  // 2-line hook (21..36 chars, 30px): dark strip y=334..426 (h=92) w/ 2px white borders at y=334 & y=424
-  const bannerH = hookBanner.isTwoLine ? 92 : 56;
-  const bannerY = Math.round(380 - bannerH / 2);
-  const bannerBottomEdgeY = bannerY + bannerH - 2;
-  const seamFilter = useAssHookCaption
-    ? "[base_raw]drawbox=x=0:y=" + bannerY + ":w=720:h=" + bannerH + ":color=black@0.88:t=fill," +
-      "drawbox=x=0:y=" + bannerY + ":w=720:h=2:color=white:t=fill," +
-      "drawbox=x=0:y=" + bannerBottomEdgeY + ":w=720:h=2:color=white:t=fill[base];"
-    : "[base_raw]drawbox=x=0:y=378:w=720:h=4:color=white:t=fill[base];";
-  const overlayPart = "[bg][c_final]overlay=0:0[bg2];[bg2][g_final]overlay=0:380[base_raw];" + seamFilter + overlayGraph;
+  // Direct flush stacking at y=380 (NO black bars, NO white divider lines — ViralCaption floats directly over the seam)
+  const overlayPart = "[bg][c_final]overlay=0:0[bg2];[bg2][g_final]overlay=0:380[base];" + overlayGraph;
   filter = bgPart + ";" + camPart + ";" + gamePart + ";" + overlayPart;
 } else {
   // FULL SCREEN GAMEPLAY NO-CAM: 720x1280 frame with top HUD/follower goal bypass, 1.15x reaction zoom & 1.45x punch zoom

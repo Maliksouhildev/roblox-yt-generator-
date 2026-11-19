@@ -70,7 +70,7 @@ checks = [
     ("Create Subtitle Binary", "equalizer=f=3500", "CreateSubtitle voice chat de-harshing EQ"),
     ("Loop Clips", 'options', "LoopClips splitInBatches configured"),
     ("Create Subtitle Binary", "sanitizeCaption", "CreateSubtitle sanitizeCaption anti-placeholder leak"),
-    ("Create Subtitle Binary", "subY = 900", "CreateSubtitle lower-third subtitle y=900"),
+    ("Create Subtitle Binary", "subY = 1000", "CreateSubtitle lower-third subtitle y=1000"),
     ("Create Subtitle Binary", "captionY = isSplitCam ? 380 : 145", "CreateSubtitle divider-seam hook caption y=380 (split-cam) / y=145 (fullscreen)"),
 
     # 8. Hook & Zero-Second Retention checks
