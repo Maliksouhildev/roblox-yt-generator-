@@ -664,26 +664,37 @@ class TestGta6PeakAndVisionLogic(unittest.TestCase):
                     if os.path.exists(tp):
                         os.remove(tp)
 
-            # 1) Single-line split-cam hook (<=24 chars)
-            c1 = _run_case("VICE CITY CHASE", has_cam=True, dims="1920x1080")
+            # 1) Single-line split-cam hook (<=20 chars) + BorderStyle=1 ViralSubs
+            c1 = _run_case("SIX STAR COPS IN GTA", has_cam=True, dims="1920x1080")
             self.assertFalse(c1["remotionCalled"], "Remotion must be bypassed when ASS ViralCaption is active")
+            self.assertIn("Style: ViralSubs,Lilita One,48,&HFFFFFF&,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,2,20,20,380,1", c1["ass"])
             self.assertIn("Style: ViralCaption,Lilita One,36,&H00D7FF&,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,2,5,40,40,0,1", c1["ass"])
-            self.assertIn(r"{\pos(360,380)}VICE CITY CHASE", c1["ass"])
+            self.assertIn(r"{\q2\pos(360,380)}SIX STAR COPS IN GTA", c1["ass"])
             self.assertIn(r"{\pos(360,900)}", c1["ass"])
             self.assertIn("drawbox=x=0:y=352:w=720:h=56:color=black@0.88:t=fill", c1["cmd"])
             self.assertIn("drawbox=x=0:y=352:w=720:h=2:color=white:t=fill", c1["cmd"])
             self.assertIn("drawbox=x=0:y=406:w=720:h=2:color=white:t=fill", c1["cmd"])
 
-            # 2) Two-line split-cam hook (>24 chars, <=36 chars)
-            c2 = _run_case("INSANE SIX STAR VICE CITY CHASE", has_cam=True, dims="1920x1080")
-            self.assertIn("Style: ViralCaption,Lilita One,32,", c2["ass"])
-            self.assertIn(r"\N", [ln for ln in c2["ass"].splitlines() if ln.startswith("Dialogue: 2,")][0])
-            self.assertIn("drawbox=x=0:y=338:w=720:h=84:color=black@0.88:t=fill", c2["cmd"])
-            self.assertIn("drawbox=x=0:y=420:w=720:h=2:color=white:t=fill", c2["cmd"])
+            # 2) Two-line split-cam hook (21..36 chars) -> fontSize=30, bannerH=92 (y=334..426)
+            c2 = _run_case("INSANE SIX STAR POLICE CHASE CHAOS!", has_cam=True, dims="1920x1080")
+            self.assertIn("Style: ViralCaption,Lilita One,30,", c2["ass"])
+            d2_line = [ln for ln in c2["ass"].splitlines() if ln.startswith("Dialogue: 2,")][0]
+            self.assertIn(r"{\q2\pos(360,380)}", d2_line)
+            self.assertIn(r"\N", d2_line)
+            self.assertIn("drawbox=x=0:y=334:w=720:h=92:color=black@0.88:t=fill", c2["cmd"])
+            self.assertIn("drawbox=x=0:y=334:w=720:h=2:color=white:t=fill", c2["cmd"])
+            self.assertIn("drawbox=x=0:y=424:w=720:h=2:color=white:t=fill", c2["cmd"])
 
-            # 3) Vertical / no-cam mode -> captionY = 145
-            c3 = _run_case("VICE CITY CHASE", has_cam=False, dims="720x1280")
-            self.assertIn(r"{\pos(360,145)}VICE CITY CHASE", c3["ass"])
+            # 3) Dangling word stripped after <=36 char truncation (trailing IN/THE/TO removed)
+            c_dang = _run_case("INSANE SIX STAR POLICE CRASHED IN THE SWAMP", has_cam=True, dims="1920x1080")
+            d_dang = [ln for ln in c_dang["ass"].splitlines() if ln.startswith("Dialogue: 2,")][0]
+            self.assertNotIn(r"\NTHE", d_dang)
+            self.assertFalse(d_dang.endswith(" IN"))
+            self.assertFalse(d_dang.endswith(" THE"))
+
+            # 4) Vertical / no-cam mode -> captionY = 145
+            c3 = _run_case("SIX STAR COPS IN GTA", has_cam=False, dims="720x1280")
+            self.assertIn(r"{\q2\pos(360,145)}SIX STAR COPS IN GTA", c3["ass"])
             self.assertNotIn("drawbox=x=0:y=352", c3["cmd"])
 
 

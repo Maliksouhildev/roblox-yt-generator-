@@ -1671,39 +1671,75 @@ if (climaxStart <= 0 || climaxStart >= clipDur) {
   }
 }
 
-// ── Tactical SFX: Auto-inject vine-boom at climax if memes empty ──────────
-if (!memes || memes.length === 0) {
-  memes = [{
-    timestamp: Math.round(climaxStart * 10) / 10,
-    file: "vine-boom-sound-effect_KT89XIq.mp3",
-    volume: 0.30
-  }];
+// Respect explicit empty memes array (never force vine-boom)
+if (!Array.isArray(memes)) {
+  memes = [];
 }
 
-// ── Remotion Hybrid Animated Hook Generation ─────────────────────────────
-let remotionOverlayFile = "";
-try {
-  const hookLayout = hasCam ? 'facecam' : 'full';
-  const fs = require('fs');
-  const tempPayload = '/files/temp/hook_payload_' + Date.now() + '.json';
-  fs.writeFileSync(tempPayload, JSON.stringify({
-    title: rawCaption || "MUST WATCH MOMENT",
-    badge: "MUST WATCH",
-    layout: hookLayout,
-    durationInSeconds: 3.5
-  }));
-  const res = require('child_process').execSync(
-    'wget --header="Content-Type: application/json" --post-file="' + tempPayload + '" -qO- http://remotion-server:3000/render-overlay || true',
-    { timeout: 15000 }
-  ).toString().trim();
-  try { fs.unlinkSync(tempPayload); } catch(e) {}
-  if (res) {
-    const parsed = JSON.parse(res);
-    if (parsed && parsed.success && parsed.n8nPath) {
-      remotionOverlayFile = parsed.n8nPath;
+// ── Smart Hook Caption Formatting (<=36 chars, 1-line <=20 chars, 2-line wrap >20 chars w/ dangling tail strip) ────
+const HOOK_DANGLING_TAIL_RE = /\\s+\\b(TO|THE|A|AN|OF|IN|ON|AT|FOR|WITH|AND|OR|BUT|IF|IS|ARE|THIS|THAT|MY|YOUR|I)$/i;
+function formatHookBannerCaption(str) {
+  let clean = String(str || '').replace(/[{}\\x27\\x22\`]/g, '').replace(/\\s+/g, ' ').trim().toUpperCase();
+  if (!clean) return { text: '', isTwoLine: false, fontSize: 36 };
+  if (clean.length > 36) {
+    const cut = clean.slice(0, 36).replace(/\\s+\\S*$/, '').trim();
+    clean = cut.length >= 12 ? cut : clean.slice(0, 36).trim();
+  }
+  while (HOOK_DANGLING_TAIL_RE.test(clean) && clean.split(' ').length > 2) {
+    clean = clean.replace(HOOK_DANGLING_TAIL_RE, '').trim();
+  }
+  if (clean.length <= 20) {
+    return { text: clean, isTwoLine: false, fontSize: 36 };
+  }
+  const words = clean.split(' ').filter(Boolean);
+  if (words.length <= 1) {
+    return { text: clean, isTwoLine: false, fontSize: 30 };
+  }
+  let bestSplit = 1;
+  let bestDiff = Infinity;
+  for (let k = 1; k < words.length; k++) {
+    const l1 = words.slice(0, k).join(' ');
+    const l2 = words.slice(k).join(' ');
+    const diff = Math.abs(l1.length - l2.length) + (Math.max(l1.length, l2.length) > 20 ? 15 : 0);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      bestSplit = k;
     }
   }
-} catch(e) {}
+  const line1 = words.slice(0, bestSplit).join(' ');
+  const line2 = words.slice(bestSplit).join(' ');
+  return { text: line1 + BS + 'N' + line2, isTwoLine: true, fontSize: 30 };
+}
+
+const hookBanner = formatHookBannerCaption(rawCaption);
+const useAssHookCaption = Boolean(hookBanner.text);
+
+// ── Remotion Animated Hook (Mutually Exclusive w/ ASS ViralCaption) ──────
+let remotionOverlayFile = "";
+if (!useAssHookCaption) {
+  try {
+    const hookLayout = hasCam ? 'facecam' : 'full';
+    const fs = require('fs');
+    const tempPayload = '/files/temp/hook_payload_' + Date.now() + '.json';
+    fs.writeFileSync(tempPayload, JSON.stringify({
+      title: rawCaption || "MUST WATCH MOMENT",
+      badge: "MUST WATCH",
+      layout: hookLayout,
+      durationInSeconds: 3.5
+    }));
+    const res = require('child_process').execSync(
+      'wget --header="Content-Type: application/json" --post-file="' + tempPayload + '" -qO- http://remotion-server:3000/render-overlay || true',
+      { timeout: 15000 }
+    ).toString().trim();
+    try { fs.unlinkSync(tempPayload); } catch(e) {}
+    if (res) {
+      const parsed = JSON.parse(res);
+      if (parsed && parsed.success && parsed.n8nPath) {
+        remotionOverlayFile = parsed.n8nPath;
+      }
+    }
+  } catch(e) {}
+}
 
 const overlayInput = remotionOverlayFile ? ('-loop 1 -t 3.5 -i "' + remotionOverlayFile + '"') : "";
 const memeInputOffset = remotionOverlayFile ? 2 : 1;
@@ -1818,13 +1854,15 @@ const hookEnd = Math.min(clipDur, 1.8);
 const hookEnable = 'between(t,0,' + hookEnd.toFixed(2) + ')';
 const camZoomEnable = climaxEnable;
 
-// ── Non-Overlapping 3-Zone Vertical Layout ────────────────────────────────
-// Zone 1: Persistent Top Hook Banner at y=75 (safe top zone, away from gameplay)
-// Zone 2: Untouched Gameplay Action Zone (y=380 to y=820, zero text collisions)
-// Zone 3: Dynamic Spoken Subtitles at y=920 (safe lower third, above YouTube/TikTok UI)
+// ── Non-Overlapping Split-Screen Vertical Layout (720x1280) ──────────────
+// Zone 1 (y = 0..380):    Top Webcam Frame (720x380)
+// Seam   (y = 380):       Centered Divider-Badge Hook Separator (Option B strip + Alignment=5 Middle-Center ViralCaption)
+// Zone 2 (y = 380..1280): Bottom Gameplay Frame (720x900)
+// Zone 3 (y = 900):       Dynamic Spoken Subtitles
 const isSplitCam = hasCam && !isVertical;
 const subY = 900;
 const captionY = isSplitCam ? 380 : 145;
+const capFontSize = hookBanner.fontSize;
 
 let assContent = [
   '[Script Info]',
@@ -1834,8 +1872,8 @@ let assContent = [
   '',
   '[V4+ Styles]',
   'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
-  'Style: ViralSubs,Lilita One,' + FONT_SIZE + ',' + MAIN_COLOR + ',&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,3,2,20,20,340,1',
-  'Style: ViralCaption,Lilita One,40,&H00D7FF&,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,3,8,20,20,55,1',
+  'Style: ViralSubs,Lilita One,' + FONT_SIZE + ',' + MAIN_COLOR + ',&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,2,20,20,380,1',
+  'Style: ViralCaption,Lilita One,' + capFontSize + ',&H00D7FF&,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,2,5,40,40,0,1',
   '',
   '[Events]',
   'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text'
@@ -1936,7 +1974,7 @@ if (wordData.length > 0) {
             bounceTag = BS + "t(0,45," + BS + "fscx125" + BS + "fscy125)" + BS + "t(45,120," + BS + "fscx100" + BS + "fscy100)";
           }
 
-          return '{' + BS + 'c' + highlightColor + bounceTag + '}' + txt + '{' + BS + 'c' + MAIN_COLOR + '}';
+          return '{' + BS + 'c' + highlightColor + bounceTag + '}' + txt + '{' + BS + 'c' + MAIN_COLOR + BS + 'fscx100' + BS + 'fscy100}';
         }
         return txt;
       }).join(" ") + (j === group.length - 1 ? groupEmoji : "");
@@ -1946,12 +1984,11 @@ if (wordData.length > 0) {
   }
 }
 
-// ── Hook Banner in Top Zone (y=75) ─────────────────────────────────────────
-if (rawCaption) {
-  const cleanCaption = rawCaption.replace(/[{}\\x27\\x22\`]/g, '').trim().toUpperCase();
+// ── Hook Banner Separator (y=380 seam center in split-screen; y=145 in fullscreen/vertical) ──
+if (useAssHookCaption) {
   const capStart = "0:00:00.00";
   const capEnd = formatTimeASS(clipDur);
-  assContent += 'Dialogue: 2,' + capStart + ',' + capEnd + ',ViralCaption,,0,0,0,,{' + BS + 'pos(360,' + captionY + ')}' + cleanCaption + NL;
+  assContent += 'Dialogue: 2,' + capStart + ',' + capEnd + ',ViralCaption,,0,0,0,,{' + BS + 'q2' + BS + 'pos(360,' + captionY + ')}' + hookBanner.text + NL;
 }
 
 // ── FFmpeg Filter Graph with Standardized 9:16 Vertical Stacking ──────────
@@ -1974,19 +2011,15 @@ if (isVertical) {
 
   const bgPart = "[0:v]split=3[v_bg][v_game][v_cam];[v_bg]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,boxblur=20:5[bg]";
   
-  // Tightly cropped webcam centered on face/shoulders with 115% reaction punch zoom and 1.35x climax zoom
-  const camPart = "[v_cam]crop=trunc(iw*" + cwRatio + "/2)*2:trunc(ih*" + chRatio + "/2)*2:trunc(iw*" + cxRatio + "/2)*2:trunc(ih*" + cyRatio + "/2)*2,split=2[c_fg_raw][c_bg_raw];" +
-    "[c_bg_raw]scale=720:380:force_original_aspect_ratio=increase,crop=720:380,boxblur=25:5[c_bg_blur];" +
-    "[c_fg_raw]scale=720:380:force_original_aspect_ratio=decrease[c_fit];" +
-    "[c_bg_blur][c_fit]overlay=(W-w)/2:(H-h)/2,split=3[c_norm][c_react_src][c_punch_src];" +
+  // Smart-fill webcam crop (no blurred pillarboxes, no outer frame border)
+  const camPart = "[v_cam]crop=trunc(iw*" + cwRatio + "/2)*2:trunc(ih*" + chRatio + "/2)*2:trunc(iw*" + cxRatio + "/2)*2:trunc(ih*" + cyRatio + "/2)*2," +
+    "scale=720:380:force_original_aspect_ratio=increase,crop=720:380:(iw-ow)/2:(ih-oh)/2,split=3[c_norm][c_react_src][c_punch_src];" +
     "[c_react_src]scale=trunc(720*1.15/2)*2:-1,crop=720:380:(iw-ow)/2:(ih-oh)/2[c_react];" +
     "[c_punch_src]scale=trunc(720*1.35/2)*2:-1,crop=720:380:(iw-ow)/2:(ih-oh)/2[c_punch];" +
     "[c_norm][c_react]overlay=0:0:enable='" + reactionEnable + "'[c_after_react];" +
-    "[c_after_react][c_punch]overlay=0:0:enable='" + camZoomEnable + "'[c_final];" +
-    "[c_final]drawbox=x=0:y=0:w=720:h=380:color=white:t=4[cam_bordered]";
+    "[c_after_react][c_punch]overlay=0:0:enable='" + camZoomEnable + "'[c_final]";
 
-  // Gameplay cropped to 720:900 with 10% vertical offset (or avatar bar bypass)
-  // Stacked with 1.12x hook zoom, 1.15x reaction zoom, and 1.45x climax punch zoom
+  // Gameplay cropped to 720:900 with dynamic gameYRatio offset and zero outer frame border
   const gamePart = "[v_game]crop='trunc(ih*0.85*(720/900)/2)*2':'trunc(ih*0.85/2)*2':(iw-ow)/2:'trunc(ih*" + gameYRatio + "/2)*2'," +
     "scale=720:900:force_original_aspect_ratio=increase,crop=720:900:(iw-ow)/2:(ih-oh)/2,split=4[g_base][g_hk_src][g_react_src][g_cl_src];" +
     "[g_hk_src]scale=trunc(720*1.12/2)*2:-1,crop=720:900:(iw-ow)/2:(ih-oh)/2[g_hk];" +
@@ -1994,10 +2027,20 @@ if (isVertical) {
     "[g_cl_src]scale=trunc(720*1.45/2)*2:-1,crop=720:900:(iw-ow)/2:(ih-oh)/2[g_cl];" +
     "[g_base][g_hk]overlay=0:0:enable='" + hookEnable + "'[g_after_hk];" +
     "[g_after_hk][g_react]overlay=0:0:enable='" + reactionEnable + "'[g_after_react];" +
-    "[g_after_react][g_cl]overlay=0:0:enable='" + climaxEnable + "'[g_final];" +
-    "[g_final]drawbox=x=0:y=0:w=720:h=900:color=white:t=4[game_bordered]";
+    "[g_after_react][g_cl]overlay=0:0:enable='" + climaxEnable + "'[g_final]";
 
-  const overlayPart = "[bg][cam_bordered]overlay=0:0[bg2];[bg2][game_bordered]overlay=0:380[base_raw];[base_raw]drawbox=x=0:y=378:w=720:h=4:color=white:t=fill[base];" + overlayGraph;
+  // Option B Divider-Badge Separator straddling y=380:
+  // 1-line hook (<=20 chars, 36px): dark strip y=352..408 (h=56) w/ 2px white borders at y=352 & y=406
+  // 2-line hook (21..36 chars, 30px): dark strip y=334..426 (h=92) w/ 2px white borders at y=334 & y=424
+  const bannerH = hookBanner.isTwoLine ? 92 : 56;
+  const bannerY = Math.round(380 - bannerH / 2);
+  const bannerBottomEdgeY = bannerY + bannerH - 2;
+  const seamFilter = useAssHookCaption
+    ? "[base_raw]drawbox=x=0:y=" + bannerY + ":w=720:h=" + bannerH + ":color=black@0.88:t=fill," +
+      "drawbox=x=0:y=" + bannerY + ":w=720:h=2:color=white:t=fill," +
+      "drawbox=x=0:y=" + bannerBottomEdgeY + ":w=720:h=2:color=white:t=fill[base];"
+    : "[base_raw]drawbox=x=0:y=378:w=720:h=4:color=white:t=fill[base];";
+  const overlayPart = "[bg][c_final]overlay=0:0[bg2];[bg2][g_final]overlay=0:380[base_raw];" + seamFilter + overlayGraph;
   filter = bgPart + ";" + camPart + ";" + gamePart + ";" + overlayPart;
 } else {
   // FULL SCREEN GAMEPLAY NO-CAM: 720x1280 frame with top HUD/follower goal bypass, 1.15x reaction zoom & 1.45x punch zoom
