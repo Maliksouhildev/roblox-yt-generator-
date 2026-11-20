@@ -51,8 +51,8 @@ TRANSITIVE_OR_DANGLING_WORDS = (
     "TO|A|AN|THE|OF|IN|ON|AT|FOR|WITH|FROM|BY|AND|OR|BUT|IF|IS|ARE|WAS|WERE|"
     "DO|DOES|DID|NOT|GOING|HAVE|HAS|MY|YOUR|OUR|THEIR|THIS|THAT|I|ME|HE|SHE|WE|THEY|"
     "WE'RE|I'M|IT'S|I'VE|WE'VE|YOU'VE|THEY'VE|HE'S|SHE'S|DON'T|DIDN'T|WON'T|CAN'T|"
-    "LIKE|LOVE|HATE|WANT|NEED|KNOW|THINK|FEEL|SEE|SAW|LOOK|WATCH|GOT|GET|"
-    "MAKE|MADE|TAKE|TOOK|GIVE|GAVE|PUT|SAY|SAID|TELL|TOLD|FIND|FOUND|LET|KEEP|TRY|TRIED|USE|USED"
+    "LIKE|LOVE|HATE|DESPISE|WANT|NEED|KNOW|THINK|FEEL|SEE|SAW|LOOK|WATCH|GOT|GET|"
+    "MAKE|MADE|TAKE|TOOK|GIVE|GAVE|PUT|SAY|SAID|TELL|TOLD|FIND|FOUND|LET|KEEP|TRY|TRIED|USE|USED|ACTUALLY|REALLY"
 )
 
 DANGLING_HOOK_END_RE = re.compile(rf"\b({TRANSITIVE_OR_DANGLING_WORDS})\s*[.!?]*$", re.I)
@@ -197,16 +197,17 @@ def build_prompt_text(summary_doc: dict, candidates: list, meme_files: list, min
         "   - `HUBRIS_WAGER_WASTED_KARMA`: cocky boast/bet -> instant fail, WASTED, or BUSTED.\n"
         "   - `COMEDIC_BANTER_OR_SARCASM`: storytelling or voice-chat punchline.\n"
         "   - `STORY_CUTSCENE_OR_TWIST_REACTION`: Lucia & Jason twist + explosive shock (MUST set `is_story_spoiler: true` and NEVER spoil in `hook_caption`!).\n"
+        "   - ANTI-PASSIVE DRIVING & RADIO GATE: HARD REJECT straight-line boat/car/bike driving, walking to bars/ATMs, or stretches where the streamer sits silently while in-game radio/NPCs play — UNLESS the streamer actively laughs, screams, or delivers a punchline within the first 4 seconds!\n"
         "5. COMPLETE METADATA IN ONE PASS — 19-YEAR-OLD TWITCH/YOUTUBE CLIP EDITOR TONE:\n"
-        "   - Voice: Casual, deadpan, witty — NEVER corporate or AI-sounding. Light natural slang ONLY when it fits (bro, nah, lowkey, cooked, folded, zero chill, wild, humbled, diabolical, sold, tweaking; max 1 per line).\n"
+        "   - Voice: Casual, deadpan, witty 1st/2nd-person clip-editor voice — STRICTLY FORBID robotic 3rd-person openers like 'Streamer reflects...', 'Streamer tries...', 'Streamer attempts...', 'Streamer gets...'. Light natural slang ONLY when it fits (bro, nah, lowkey, cooked, folded, zero chill, wild, humbled; max 1 per line).\n"
         "   - STRICT ANTI-CRINGE BANLIST (NEVER use): skibidi, rizz, sigma, gyatt, ohio, fanum tax, cap, no cap, bussin, slay, fam, lit, yeet, epic gaming moment, must watch.\n"
-        "   - `title`: Natural high-CTR 3-7 word title specifically describing THIS clip (no fake 'Glitch'/'Hack'/'Exploit' unless spoken, no '😱💀 #Shorts' spam).\n"
-        "   - `yt_title`: Natural YouTube Shorts title <=68 chars weaving in streamer name + GTA 6 + funny hook.\n"
-        "   - `hook_caption`: 4-7 punchy words in natural Sentence case (<=38 chars, NOT ALL CAPS; keep GTA 6, NPC, IShowSpeed, CaseOh, xQc proper), NEVER slicing mid-sentence or ending on a dangling word!\n"
-        "   - `desc_line`: Short funny 1-sentence casual reaction line for the YouTube description.\n"
-        "   - `short_description`: 1-2 factual sentences about THIS clip.\n"
+        "   - `grounding_quote`: REQUIRED exact verbatim quote from INSIDE this candidate's transcript that directly proves your hook/title (NO outside VOD guessing!).\n"
+        "   - `title`: Natural high-CTR 3-7 word title specifically describing THIS clip.\n"
+        "   - `youtube_title` / `yt_title`: Natural human clip-channel title <=68 chars (e.g. \"Loserfruit couldn't even read these GTA 6 subtitles\") — NEVER clunky 'Streamer The Reality of ... in GTA 6' concatenation.\n"
+        "   - `hook_caption`: 4-7 punchy words in natural Sentence case (<=38 chars, NOT ALL CAPS; keep GTA 6, NPC, IShowSpeed, CaseOh, xQc, Loserfruit proper; preserve apostrophes like I've/couldn't), COMPLETE grammatical clause!\n"
+        "   - `desc_line` / `short_description`: 1 casual, deadpan clip-editor line (NO 'Streamer reflects/tries/attempts/gets...').\n"
         "   - `visual_value_note`: short 1-line callout specific to this clip.\n"
-        "   - `comment_hook` / `comment_bait_question`: natural low-effort comment trigger (e.g. 'scale of 1-10 how cooked was he here').\n"
+        "   - `comment_hook` / `comment_bait_question`: short natural Shorts comment bait (e.g. 'nah why were there 6 subtitles at once'), NOT corporate survey questions.\n"
         "   - `is_story_spoiler`: boolean; `is_nsfw_or_unsafe`: boolean (must be false for selected clips).\n"
         "   - `climax_quote`: exact short verbatim quote spoken at the payoff spike.\n"
         "   - `reaction_triggers`: 1-2 short verbatim quotes `[{\"quote\": \"...\", \"sfx\": \"<valid meme file>\"}]`.\n"
@@ -280,17 +281,18 @@ def _interleave_vision_parts(summary_doc: dict, candidates: list, meme_files: li
         "   - `HUBRIS_WAGER_WASTED_KARMA`: cocky boast/bet -> instant fail, WASTED, or BUSTED.\n"
         "   - `COMEDIC_BANTER_OR_SARCASM`: storytelling or voice-chat punchline.\n"
         "   - `STORY_CUTSCENE_OR_TWIST_REACTION`: Lucia & Jason twist + explosive shock (MUST set `is_story_spoiler: true` and NEVER spoil in `hook_caption`!).\n"
+        "   - ANTI-PASSIVE DRIVING & RADIO GATE: HARD REJECT straight-line boat/car/bike driving, walking to bars/ATMs, or silent streamer stretches while radio/NPCs play — UNLESS the streamer actively laughs, screams, or delivers a punchline within the first 4 seconds!\n"
         "5. COMPLETE METADATA IN ONE PASS — 19-YEAR-OLD CLIP EDITOR TONE (ZERO HALLUCINATION & BRAND-SAFE):\n"
-        "   - Casual, deadpan, witty tone; light natural slang only when it fits (bro, nah, lowkey, cooked, folded, zero chill, wild, humbled; max 1 per line). NEVER use skibidi/rizz/sigma/gyatt/ohio/fanum tax/no cap/bussin/slay/fam/lit/yeet/epic gaming moment/must watch.\n"
-        "   - NEVER invent glitches, bets, acid labs, or fake NPC hostility! Every title, hook, and description MUST strictly reflect literal, verified actions from the transcript and 3x3 frames.\n"
+        "   - Casual, deadpan, witty 1st/2nd-person clip-editor voice — STRICTLY FORBID robotic openers ('Streamer reflects...', 'Streamer tries...', 'Streamer attempts...', 'Streamer gets...'). Light natural slang only when it fits (bro, nah, lowkey, cooked, folded, zero chill, wild, humbled; max 1 per line). NEVER use skibidi/rizz/sigma/gyatt/ohio/fanum tax/no cap/bussin/slay/fam/lit/yeet/epic gaming moment/must watch.\n"
+        "   - NEVER invent glitches, bets, acid labs, highway work, or fake NPC hostility! Every title, hook, and description MUST strictly reflect literal, verified actions from THIS clip's transcript and 3x3 frames.\n"
+        "   - `grounding_quote`: REQUIRED exact verbatim quote from INSIDE this clip's transcript proving your hook/title.\n"
         "   - BRAND-SAFE: NEVER include YouTube-throttled drug/explicit terms (`COKE`, `COCAINE`, `SUICIDE`, etc.) in titles or hooks.\n"
         "   - `title`: Natural 3-7 word title specifically describing THIS clip (NEVER 'GTA6_Peak_Clip_1').\n"
-        "   - `yt_title`: Natural YouTube Shorts title <=68 chars weaving in streamer name + GTA 6 + funny hook.\n"
-        "   - `hook_caption`: 4-7 punchy words in natural Sentence case (<=38 chars, NOT ALL CAPS; keep GTA 6, NPC, streamer names proper), COMPLETE thought with zero dangling endings!\n"
-        "   - `desc_line`: Short funny 1-sentence casual reaction line for the description.\n"
-        "   - `short_description`: 1-2 factual sentences written specifically for THIS Short.\n"
+        "   - `youtube_title` / `yt_title`: Natural human clip-channel title <=68 chars (e.g. \"Loserfruit couldn't even read these GTA 6 subtitles\").\n"
+        "   - `hook_caption`: 4-7 punchy words in natural Sentence case (<=38 chars, NOT ALL CAPS; keep GTA 6, NPC, streamer names proper; preserve apostrophes), COMPLETE grammatical clause!\n"
+        "   - `desc_line` / `short_description`: 1 casual, deadpan clip-editor line (NO 'Streamer reflects/tries/attempts/gets...').\n"
         "   - `visual_value_note`: short 1-line callout for this clip.\n"
-        "   - `comment_hook` / `comment_bait_question`: natural low-effort comment trigger directly referencing THIS clip.\n"
+        "   - `comment_hook` / `comment_bait_question`: short natural Shorts comment bait directly referencing THIS clip.\n"
         "   - `is_story_spoiler`: boolean; `is_nsfw_or_unsafe`: boolean (must be false for selected clips).\n"
         "   - `climax_quote`, `reaction_triggers`, `memes` (use `[]` when dialogue is clear/calm; only add SFX on real punchlines), `visual_evidence`, `cause_and_effect_setup`.\n"
     )
@@ -627,30 +629,18 @@ def _smart_clip_title(hook: str, raw_txt: str, climax_q: str, arch: str, idx: in
 
 
 def _build_short_description(cl: dict, cand_raw_txt: str = "", climax_q: str = "", visual_note: str = "") -> str:
-    """Guarantee a concrete, Short-specific description grounded in this clip's events and dialogue."""
-    explicit = str(cl.get("short_description") or "").strip()
-    if explicit and len(explicit) >= 25 and not re.search(r"fallback offline mode|watch closely around", explicit, re.I):
+    """Guarantee a concrete, casual clip-editor description grounded in this clip's dialogue (zero robotic 3rd-person slop)."""
+    robotic_re = re.compile(r"^Streamer\s+(?:reflects|tries|attempts|gets|experiences|reacts|is\s+seen)\b", re.I)
+    explicit = str(cl.get("desc_line") or cl.get("short_description") or "").strip()
+    if explicit and len(explicit) >= 18 and not robotic_re.search(explicit) and not re.search(r"fallback offline mode|watch closely around", explicit, re.I):
         return explicit
-    setup = str(cl.get("cause_and_effect_setup") or "").strip()
-    if setup and re.search(r"Empirical multimodal peak|Setup in window", setup, re.I):
-        setup = ""
-    vis_ev = str(cl.get("visual_evidence") or "").strip()
-    if vis_ev and re.search(r"fallback offline mode|3x3 storyboard peak", vis_ev, re.I):
-        vis_ev = ""
-    speech_snip = str(climax_q or cl.get("climax_quote") or cand_raw_txt or "").strip()
-    speech_snip = re.sub(r"\s+", " ", speech_snip)[:160].strip()
-    parts = []
-    if setup:
-        parts.append(setup)
-    if vis_ev and vis_ev != setup:
-        parts.append(vis_ev)
-    if visual_note and not re.search(r"Watch closely around \d", visual_note, re.I):
-        parts.append(visual_note)
-    if not parts and speech_snip:
-        parts.append(f'Wild live moment: "{speech_snip}"')
-    elif speech_snip and speech_snip.lower() not in " ".join(parts).lower() and len(" ".join(parts)) < 120:
-        parts.append(f'Highlight quote: "{speech_snip}"')
-    return " ".join(parts).strip() or "Unfiltered live GTA 6 reaction caught on stream."
+    if climax_q and len(climax_q.split()) >= 3:
+        return f'Bro really said "{climax_q.strip()}" right before everything went sideways.'
+    if cand_raw_txt:
+        snip = " ".join(cand_raw_txt.split()[:14]).strip()
+        if snip:
+            return f'Caught live on stream: "{snip}..."'
+    return "Unfiltered live GTA 6 moment caught on stream."
 
 
 def _words_text(words: list, t0: float, t1: float) -> str:
@@ -1131,23 +1121,38 @@ def normalize_director_clips(
         vis_ev = str(cl.get("visual_evidence") or cl.get("visual_event_description") or f"3x3 grid storyboard at t={payoff_t:.1f}s.").strip()
         tot_clip_dur = round(sum(cs["end"] - cs["start"] for cs in clean_segs), 2)
 
+        # Strict Grounding Verification: verify grounding_quote against assembled clip transcript
+        g_quote = str(cl.get("grounding_quote") or cl.get("climax_quote") or "").strip()
+        q_tokens = [t.lower() for t in re.findall(r"[A-Za-z0-9']+", g_quote) if len(t) >= 3]
+        asm_low = assembled.lower()
+        q_hits = sum(1 for t in q_tokens if t in asm_low) if q_tokens else 0
+        is_grounded = bool(q_tokens) and (q_hits >= max(1, (len(q_tokens) + 1) // 2))
+        if not is_grounded and assembled:
+            hook = _to_sentence_case_hook(_safe_hook_from_text(assembled, raw_title or f"CLIP {idx}").split())
+            raw_title = _smart_clip_title(hook, assembled, str(cl.get("climax_quote") or ""), arch_val, idx)
+
         _natural_fallbacks = [
             "nah how did that even happen",
             "Rockstar really put too much detail in this game",
             "clip of the day or nah",
         ]
         _raw_comment = str(cl.get("comment_hook") or cl.get("comment_bait_question") or "").strip()
-        if not _raw_comment or re.match(r"^(would you have survived this|what would you have done here)\??$", _raw_comment, re.I):
+        if not _raw_comment or re.match(r"^(would you have survived this|what would you have done here|what's the worst)\??$", _raw_comment, re.I):
             _raw_comment = _natural_fallbacks[len(valid_clips) % len(_natural_fallbacks)]
+        _yt_title = str(cl.get("youtube_title") or cl.get("yt_title") or "").strip()[:68]
+        _desc_line = str(cl.get("desc_line") or short_desc).strip()
         valid_clips.append({
             "clip_number": len(valid_clips) + 1,
             "candidate_id": cid,
             "title": raw_title[:60],
-            "yt_title": str(cl.get("yt_title") or "").strip()[:68],
+            "yt_title": _yt_title,
+            "youtube_title": _yt_title,
             "narrative_archetype": arch_val,
             "hook_caption": hook,
-            "desc_line": str(cl.get("desc_line") or "").strip(),
-            "short_description": short_desc,
+            "viral_caption": hook,
+            "grounding_quote": g_quote,
+            "desc_line": _desc_line,
+            "short_description": _desc_line,
             "visual_value_note": visual_note,
             "comment_hook": _raw_comment,
             "comment_bait_question": _raw_comment,

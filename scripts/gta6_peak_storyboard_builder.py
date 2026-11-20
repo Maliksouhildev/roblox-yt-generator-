@@ -525,7 +525,7 @@ def extract_top_candidates(
                 elif cand_e["start"] > float(t_peak) + 3.0 and cand_e["end"] <= w_end:
                     w_end = min(hi_bound, float(cand_e["end"]))
 
-        win_sents = [s for s in sentences if s["end"] >= w_start - 0.1 and s["start"] <= w_end + 0.1]
+        win_sents = [s for s in sentences if w_start <= (s["start"] + s["end"]) * 0.5 <= w_end]
         if win_sents and dense_tx:
             # Never carry >3.5s leading/trailing dead air inside dense multi-hour windows
             first_sp = max(lo_bound, float(win_sents[0]["start"]) - 0.35)
@@ -538,7 +538,7 @@ def extract_top_candidates(
             w_start = max(lo_bound, min(w_start, float(w_end) - 48.0))
             w_end = min(hi_bound, max(w_end, w_start + 55.0))
 
-        win_sents = [s for s in sentences if s["end"] >= w_start - 0.1 and s["start"] <= w_end + 0.1]
+        win_sents = [s for s in sentences if w_start <= (s["start"] + s["end"]) * 0.5 <= w_end]
         if dense_tx and sum(int(s.get("word_count", 0)) for s in win_sents) < 20:
             continue
         cm = chat_meta.get(t_peak) or {}
@@ -638,6 +638,49 @@ def get_adaptive_clip_targets(duration_sec: float) -> tuple[int, int, int]:
     if duration_sec <= 1500.0:
         return 6, 2, 3
     return 8, 4, 5
+
+
+def _measure_webcam_activity(video_path: str, w_start: float, w_end: float, cam_box: dict) -> float:
+    """Return fraction of sampled adjacent frame pairs in cam_box showing active facial/head motion (0.0..1.0)."""
+    if not video_path or not os.path.exists(video_path) or not isinstance(cam_box, dict):
+        return 1.0
+    cw, ch = int(cam_box.get("w") or 0), int(cam_box.get("h") or 0)
+    cx, cy = int(cam_box.get("x") or 0), int(cam_box.get("y") or 0)
+    if cw <= 20 or ch <= 20:
+        return 1.0
+    try:
+        import cv2
+        import numpy as np
+    except Exception:
+        return 1.0
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return 1.0
+    try:
+        span = max(2.0, w_end - w_start)
+        ts_list = [w_start + span * frac for frac in (0.12, 0.28, 0.44, 0.60, 0.76, 0.90)]
+        rois = []
+        for ts in ts_list:
+            cap.set(cv2.CAP_PROP_POS_MSEC, max(0.0, ts * 1000.0))
+            ok, frame = cap.read()
+            if not ok or frame is None:
+                continue
+            fh, fw = frame.shape[:2]
+            x0, y0 = max(0, min(fw - 1, cx)), max(0, min(fh - 1, cy))
+            x1, y1 = max(x0 + 1, min(fw, cx + cw)), max(y0 + 1, min(fh, cy + ch))
+            crop = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
+            rois.append(cv2.resize(crop, (64, 48)))
+        if len(rois) < 3:
+            return 1.0
+        active = sum(
+            1 for i in range(1, len(rois))
+            if float(np.mean(np.abs(rois[i].astype("float32") - rois[i - 1].astype("float32")))) >= 2.2
+        )
+        return round(active / max(1, len(rois) - 1), 3)
+    except Exception:
+        return 1.0
+    finally:
+        cap.release()
 
 
 def is_grid_mostly_static(grid_path: str) -> bool:
@@ -895,12 +938,20 @@ def main():
         with ThreadPoolExecutor(max_workers=2) as ex:
             list(ex.map(lambda c: render_3x3_grid(video_path, c, args.grid_dir, font_path), active_batch))
         for c in active_batch:
-            if c.get("grid_path") and is_grid_mostly_static(c["grid_path"]):
-                c["is_static_screen"] = True
+            cam_box_cfg = face_info.get("cam_box") if isinstance(face_info, dict) else None
+            cam_act = _measure_webcam_activity(video_path, c["window_start"], c["window_end"], cam_box_cfg)
+            c["webcam_activity"] = cam_act
+            is_passive = cam_act < 0.50 and float(c.get("z_db", 0.0)) < 1.2
+            is_static = bool(c.get("grid_path") and is_grid_mostly_static(c["grid_path"]))
+            if is_static or is_passive:
+                c["is_static_screen"] = is_static
+                c["is_passive_silent"] = is_passive
                 if reserves:
                     rep = reserves.pop(0)
                     render_3x3_grid(video_path, rep, args.grid_dir, font_path)
-                    if not (rep.get("grid_path") and is_grid_mostly_static(rep["grid_path"])):
+                    rep_act = _measure_webcam_activity(video_path, rep["window_start"], rep["window_end"], cam_box_cfg)
+                    rep["webcam_activity"] = rep_act
+                    if not (rep.get("grid_path") and is_grid_mostly_static(rep["grid_path"])) and not (rep_act < 0.50 and float(rep.get("z_db", 0.0)) < 1.2):
                         candidates.append(rep)
             else:
                 candidates.append(c)

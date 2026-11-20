@@ -60,7 +60,7 @@ checks = [
 
     # 7. Create Subtitle Binary checks
     ("Create Subtitle Binary", "fs.existsSync('/files/temp/screams.json')", "CreateSubtitle screams.json disk loader"),
-    ("Create Subtitle Binary", "trunc(ih*0.85*(720/900)/2)*2", "CreateSubtitle 720:820 aspect gameplay crop"),
+    ("Create Subtitle Binary", "trunc(ih*0.92*(720/860)/2)*2", "CreateSubtitle 720:860 aspect gameplay crop"),
     ("Create Subtitle Binary", "gameYRatio", "CreateSubtitle dynamic gameYRatio vertical offset"),
     ("Create Subtitle Binary", "trunc(ih*0.86*(720/1280)/2)*2", "CreateSubtitle no-cam top HUD bypass crop"),
     ("Create Subtitle Binary", "trunc(ih*0.11/2)*2", "CreateSubtitle no-cam y=11% offset"),
@@ -70,8 +70,8 @@ checks = [
     ("Create Subtitle Binary", "equalizer=f=3500", "CreateSubtitle voice chat de-harshing EQ"),
     ("Loop Clips", 'options', "LoopClips splitInBatches configured"),
     ("Create Subtitle Binary", "sanitizeCaption", "CreateSubtitle sanitizeCaption anti-placeholder leak"),
-    ("Create Subtitle Binary", "subY = 1000", "CreateSubtitle lower-third subtitle y=1000"),
-    ("Create Subtitle Binary", "captionY = isSplitCam ? 380 : 145", "CreateSubtitle divider-seam hook caption y=380 (split-cam) / y=145 (fullscreen)"),
+    ("Create Subtitle Binary", "subY = 1040", "CreateSubtitle lower-third subtitle y=1040"),
+    ("Create Subtitle Binary", "captionY = isSplitCam ? 420 : 145", "CreateSubtitle divider-seam hook caption y=420 (split-cam) / y=145 (fullscreen)"),
 
     # 8. Hook & Zero-Second Retention checks
     ("1. Prepare Scout Prompt", "ZERO-SECOND RETENTION & STRICT ANTI-MID-THOUGHT PREAMBLE", "Scout zero-second retention & anti-mid-thought preamble rule"),

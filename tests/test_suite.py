@@ -243,8 +243,8 @@ class TestPipelineComprehensive(unittest.TestCase):
     def test_three_zone_vertical_layout_collision_prevention(self):
         """Floating seam layout: y=0..380 cam flush with y=380..1280 gameplay, floating seam hook y=380 (y=145 no-cam), y=1000 dynamic subs."""
         cs_code = self.nodes["Create Subtitle Binary"]["parameters"]["jsCode"]
-        self.assertIn("const subY = 1000;", cs_code, "Subtitles must be at y=1000 in lower-third above YT UI")
-        self.assertIn("const captionY = isSplitCam ? 380 : 145;", cs_code, "Hook banner must float on y=380 seam (split-cam) or y=145 (no-cam)")
+        self.assertIn("const subY = 1040;", cs_code, "Subtitles must be at y=1040 in lower-third above YT UI")
+        self.assertIn("const captionY = isSplitCam ? 420 : 145;", cs_code, "Hook banner must float on y=420 seam (split-cam) or y=145 (no-cam)")
 
     def test_subtitle_styling_color_highlight_and_no_single_word_lines(self):
         """Review Point 4: Rock-solid font metrics (no \fscx line jitter) and min 2 words per line."""

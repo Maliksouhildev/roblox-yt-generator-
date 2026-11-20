@@ -1705,7 +1705,7 @@ if (!Array.isArray(memes)) {
 }
 
 // ── Floating Mixed-Case Hook Formatter (<=40 chars, 1-line <=28c @42px, 2-line >28c @34px, yellow keyword accent) ────
-const HOOK_DANGLING_TAIL_RE = /\\s+\\b(TO|THE|A|AN|OF|IN|ON|AT|FOR|WITH|AND|OR|BUT|IF|IS|ARE|THIS|THAT|MY|YOUR|I)$/i;
+const HOOK_DANGLING_TAIL_RE = /\\s+\\b(TO|THE|A|AN|OF|IN|ON|AT|FOR|WITH|AND|OR|BUT|IF|IS|ARE|THIS|THAT|MY|YOUR|I|DESPISE|HATE|LOVE|WANT|NEED|FOUND|SAW|GOT|MADE|DID|ACTUALLY|REALLY)$/i;
 const HOOK_SKIP_HIGHLIGHT = new Set([
   'THE','IS','ARE','WAS','WERE','BE','BEEN','BEING','AM','A','AN','IN','ON','AT','TO','OF','FOR','WITH',
   'BY','FROM','THIS','THAT','THESE','THOSE','IT','ITS','HE','SHE','WE','THEY','YOU','I','MY','YOUR','OUR',
@@ -1918,8 +1918,8 @@ const camZoomEnable = climaxEnable;
 // Zone 2 (y = 380..1280): Bottom Gameplay Frame (720x900) flush at y=380
 // Zone 3 (y = 1000):      Dynamic Spoken Subtitles (clean lower-third above YouTube Shorts bottom UI)
 const isSplitCam = hasCam && !isVertical;
-const subY = 1000;
-const captionY = isSplitCam ? 380 : 145;
+const subY = 1040;
+const captionY = isSplitCam ? 420 : 145;
 const capFontSize = hookBanner.fontSize;
 
 let assContent = [
@@ -1930,7 +1930,7 @@ let assContent = [
   '',
   '[V4+ Styles]',
   'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
-  'Style: ViralSubs,Lilita One,' + FONT_SIZE + ',' + MAIN_COLOR + ',&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,2,20,20,280,1',
+  'Style: ViralSubs,Lilita One,' + FONT_SIZE + ',' + MAIN_COLOR + ',&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,2,20,20,240,1',
   'Style: ViralCaption,Lilita One,' + capFontSize + ',&HFFFFFF&,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,6,2,5,40,40,0,1',
   '',
   '[Events]',
@@ -2127,7 +2127,7 @@ const gameYRatio = avatarRowDetected ? "0.20" : "0.10";
 
 let filter = "";
 if (isVertical) {
-  filter = '[0:v]scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2[base];' + overlayGraph;
+  filter = '[0:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280:(iw-ow)/2:(ih-oh)/2[base];' + overlayGraph;
 } else if (hasCam) {
   // ZERO-GAP SPLIT SCREEN: Top Cam (720x380) [~30%] + Bottom Game (720x900) [~70%] = 1280, clean 4px divider at y=380
   const cwRatio = (camW / 1920).toFixed(4);
@@ -2139,24 +2139,24 @@ if (isVertical) {
   
   // Smart-fill webcam crop (no blurred pillarboxes, no outer frame border)
   const camPart = "[v_cam]crop=trunc(iw*" + cwRatio + "/2)*2:trunc(ih*" + chRatio + "/2)*2:trunc(iw*" + cxRatio + "/2)*2:trunc(ih*" + cyRatio + "/2)*2," +
-    "scale=720:380:force_original_aspect_ratio=increase,crop=720:380:(iw-ow)/2:(ih-oh)/2,split=3[c_norm][c_react_src][c_punch_src];" +
-    "[c_react_src]scale=trunc(720*1.15/2)*2:-1,crop=720:380:(iw-ow)/2:(ih-oh)/2[c_react];" +
-    "[c_punch_src]scale=trunc(720*1.35/2)*2:-1,crop=720:380:(iw-ow)/2:(ih-oh)/2[c_punch];" +
+    "scale=720:420:force_original_aspect_ratio=increase,crop=720:420:(iw-ow)/2:(ih-oh)/2,split=3[c_norm][c_react_src][c_punch_src];" +
+    "[c_react_src]scale=trunc(720*1.15/2)*2:-1,crop=720:420:(iw-ow)/2:(ih-oh)/2[c_react];" +
+    "[c_punch_src]scale=trunc(720*1.35/2)*2:-1,crop=720:420:(iw-ow)/2:(ih-oh)/2[c_punch];" +
     "[c_norm][c_react]overlay=0:0:enable='" + reactionEnable + "'[c_after_react];" +
     "[c_after_react][c_punch]overlay=0:0:enable='" + camZoomEnable + "'[c_final]";
 
   // Gameplay cropped to 720:900 with dynamic gameYRatio offset and zero outer frame border
-  const gamePart = "[v_game]crop='trunc(ih*0.85*(720/900)/2)*2':'trunc(ih*0.85/2)*2':(iw-ow)/2:'trunc(ih*" + gameYRatio + "/2)*2'," +
-    "scale=720:900:force_original_aspect_ratio=increase,crop=720:900:(iw-ow)/2:(ih-oh)/2,split=4[g_base][g_hk_src][g_react_src][g_cl_src];" +
-    "[g_hk_src]scale=trunc(720*1.12/2)*2:-1,crop=720:900:(iw-ow)/2:(ih-oh)/2[g_hk];" +
-    "[g_react_src]scale=trunc(720*1.15/2)*2:-1,crop=720:900:(iw-ow)/2:(ih-oh)/2[g_react];" +
-    "[g_cl_src]scale=trunc(720*1.45/2)*2:-1,crop=720:900:(iw-ow)/2:(ih-oh)/2[g_cl];" +
+  const gamePart = "[v_game]crop='trunc(ih*0.92*(720/860)/2)*2':'trunc(ih*0.92/2)*2':(iw-ow)/2:'min(trunc(ih*" + gameYRatio + "/2)*2,ih-oh)'," +
+    "scale=720:860:force_original_aspect_ratio=increase,crop=720:860:(iw-ow)/2:(ih-oh)/2,split=4[g_base][g_hk_src][g_react_src][g_cl_src];" +
+    "[g_hk_src]scale=trunc(720*1.12/2)*2:-1,crop=720:860:(iw-ow)/2:(ih-oh)/2[g_hk];" +
+    "[g_react_src]scale=trunc(720*1.15/2)*2:-1,crop=720:860:(iw-ow)/2:(ih-oh)/2[g_react];" +
+    "[g_cl_src]scale=trunc(720*1.45/2)*2:-1,crop=720:860:(iw-ow)/2:(ih-oh)/2[g_cl];" +
     "[g_base][g_hk]overlay=0:0:enable='" + hookEnable + "'[g_after_hk];" +
     "[g_after_hk][g_react]overlay=0:0:enable='" + reactionEnable + "'[g_after_react];" +
     "[g_after_react][g_cl]overlay=0:0:enable='" + climaxEnable + "'[g_final]";
 
   // Direct flush stacking at y=380 (NO black bars, NO white divider lines — ViralCaption floats directly over the seam)
-  const overlayPart = "[bg][c_final]overlay=0:0[bg2];[bg2][g_final]overlay=0:380[base];" + overlayGraph;
+  const overlayPart = "[bg][c_final]overlay=0:0[bg2];[bg2][g_final]overlay=0:420[base];" + overlayGraph;
   filter = bgPart + ";" + camPart + ";" + gamePart + ";" + overlayPart;
 } else {
   // FULL SCREEN GAMEPLAY NO-CAM: 720x1280 frame with top HUD/follower goal bypass, 1.15x reaction zoom & 1.45x punch zoom
