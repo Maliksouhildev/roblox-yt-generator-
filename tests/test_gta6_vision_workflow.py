@@ -33,7 +33,7 @@ class TestGta6WorkflowStructure(unittest.TestCase):
         self.assertIs(self.wf["active"], True)
         self.assertFalse(self.nodes_by_name["Schedule Trigger"].get("disabled", False))
         sched_interval = self.nodes_by_name["Schedule Trigger"]["parameters"]["rule"]["interval"][0]
-        self.assertEqual(sched_interval.get("expression"), "0 */2 * * *")
+        self.assertEqual(sched_interval.get("expression"), "*/15 * * * *")
         self.assertFalse(self.nodes_by_name["Webhook"].get("disabled", False))
         self.assertEqual(self.orig_wf["id"], "D2hITsyjP5dVsqBZ")
         self.assertEqual(self.orig_wf["name"], "YouTube Short Automation (Bypassed Version)")
@@ -169,7 +169,7 @@ class TestGta6WorkflowStructure(unittest.TestCase):
         self.assertEqual(self.conns["IF: Has Webcam?"]["main"][1][0]["node"], "Delete Source VOD")
         self.assertEqual(self.conns["Fallback Download"]["main"][0][0]["node"], "Wait Before Next Stream")
         self.assertEqual(self.conns["Wait Before Next Stream"]["main"][0][0]["node"], "Find Stream")
-        self.assertIn("ABORT_NO_WEBCAM", csb_js)
+        self.assertIn("ABORT_PREGAME_NO_GAMEPLAY", csb_js)
         self.assertIn(".render.mp4", csb_js)
         self.assertIn("stream_shorts_created.flag", ws_cmd)
         self.assertIn("has_webcam", ws_cmd)
@@ -679,7 +679,7 @@ class TestGta6PeakAndVisionLogic(unittest.TestCase):
             self.assertNotIn("😱", d1_cap)
             self.assertNotIn(r"\N", d1_cap)
             self.assertIn(r"{\pos(360,1040)}", c1["ass"])
-            self.assertIn("[bg][c_final]overlay=0:0[bg2];[bg2][g_final]overlay=0:420[base];", c1["cmd"])
+            self.assertIn("vstack=inputs=2[base]", c1["cmd"])
             self.assertNotIn("drawbox", c1["cmd"])
 
             # 2) Two-line split-cam hook (29..40 chars) -> fontSize=34, flush seam, zero drawbox
@@ -705,10 +705,10 @@ class TestGta6PeakAndVisionLogic(unittest.TestCase):
             d_verb = [ln for ln in c_verb["ass"].splitlines() if ln.startswith("Dialogue: 2,")][0]
             self.assertFalse(d_verb.lower().endswith("despise"))
 
-            # 4) Vertical / no-cam mode -> captionY = 145
+            # 4) Vertical / no-cam mode -> captionY = 175
             c3 = _run_case("SIX STAR COPS IN GTA", has_cam=False, dims="720x1280")
             d3_cap = [ln for ln in c3["ass"].splitlines() if ln.startswith("Dialogue: 2,")][0]
-            self.assertIn(r"{\q2\pos(360,145)}", d3_cap)
+            self.assertIn(r"{\q2\pos(360,175)}", d3_cap)
             self.assertIn("GTA", d3_cap)
 
     def test_progressive_subtitles_silence_clamp_and_natural_sidecar(self):
@@ -790,6 +790,91 @@ class TestGta6PeakAndVisionLogic(unittest.TestCase):
             finally:
                 if os.path.exists(tp2):
                     os.remove(tp2)
+
+    def test_dynamic_layout_timeline_transitions_and_quality_gates(self):
+        """Verify FULLSCREEN_CAM duplicate-head prevention, SPLIT_PIP->FULLSCREEN_CAM->SPLIT_PIP transitions, virality>=6.8 gate, and trailing silence trim."""
+        import subprocess
+        import tempfile
+        import sys
+        import cv2
+        import numpy as np
+
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        sys.path.insert(0, os.path.join(repo_root, "scripts"))
+        import clip_layout_timeline as clt
+
+        # 1) FULLSCREEN_CAM classification when face is large & centered -> zero duplicate heads (cam_box=None, caption_y=175)
+        with tempfile.TemporaryDirectory() as td:
+            vid_path = os.path.join(td, "fullcam.mp4")
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            vw = cv2.VideoWriter(vid_path, fourcc, 10.0, (480, 270))
+            for _ in range(30):
+                frame = np.zeros((270, 480, 3), dtype=np.uint8)
+                # Large centered skin-toned face region (BGR) covering > 22% height
+                cv2.rectangle(frame, (180, 40), (300, 190), (140, 170, 210), -1)
+                vw.write(frame)
+            vw.release()
+            res_lt = clt.analyze_video_layout(vid_path)
+            self.assertGreaterEqual(len(res_lt["segments"]), 1)
+            self.assertEqual(res_lt["segments"][0]["mode"], "FULLSCREEN_CAM")
+            self.assertIsNone(res_lt["segments"][0]["cam_box"])
+            self.assertEqual(res_lt["segments"][0]["caption_y"], 175)
+
+        # 2) Mid-clip transition SPLIT_PIP -> FULLSCREEN_CAM -> SPLIT_PIP in Create Subtitle Binary
+        with open(os.path.join(repo_root, "workflows/gta6_vision_shorts_workflow.json"), encoding="utf-8") as f:
+            wf_obj = json.load(f)
+        nodes_map = {n["name"]: n for n in wf_obj["nodes"]}
+        cs_code = nodes_map["Create Subtitle Binary"]["parameters"]["jsCode"]
+
+        # Inject a mocked /files/temp/layout_timeline.json via fs.readFileSync interception in Node
+        timeline_mock = {
+            "clip_duration": 36.0,
+            "width": 1920,
+            "height": 1080,
+            "segments": [
+                {"start": 0.0, "end": 12.0, "mode": "SPLIT_PIP", "cam_box": [20, 20, 380, 240], "face_cx": 0.12, "caption_y": 420},
+                {"start": 12.0, "end": 24.0, "mode": "FULLSCREEN_CAM", "cam_box": None, "face_cx": 0.50, "caption_y": 175},
+                {"start": 24.0, "end": 36.0, "mode": "SPLIT_PIP", "cam_box": [20, 20, 380, 240], "face_cx": 0.12, "caption_y": 420},
+            ],
+        }
+        harness = (
+            "const fs = require('fs');\n"
+            "const origRead = fs.readFileSync;\n"
+            f"fs.readFileSync = function(p, enc) {{ if (String(p).includes('layout_timeline.json')) return {json.dumps(json.dumps(timeline_mock))}; return origRead.apply(fs, arguments); }};\n"
+            "const $input = { first: () => ({ json: { words: [{ word: 'Look', start: 0.5, end: 0.9 }, { word: 'chat', start: 1.0, end: 1.4 }] } }) };\n"
+            "const $ = (name) => ({\n"
+            "  item: { json: name === 'Loop Clips' ? { title: 'Transition Test', hook_caption: 'GTA 6 cops have zero chill', start_time: 0, end_time: 36, segments: [{start:0,end:36}], virality_score: 8.8 } : {} },\n"
+            "  last: () => ({ json: name === 'Parse Cam Config' ? { ai_found: true, cam_x: 20, cam_y: 20, cam_w: 380, cam_h: 240 } : {} })\n"
+            "});\n"
+            "const out = (function() {\n" + cs_code + "\n})();\n"
+            "console.log(JSON.stringify({ cmd: out[0].json.command, ass: Buffer.from(out[0].binary.data.data, 'base64').toString('utf8') }));\n"
+        )
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as tf:
+            tf.write(harness)
+            tp = tf.name
+        try:
+            r = subprocess.run(["node", tp], capture_output=True, text=True, timeout=15)
+            self.assertEqual(r.returncode, 0, f"Transition harness failed: {r.stderr}")
+            out = json.loads(r.stdout.strip().splitlines()[-1])
+            self.assertIn("concat=n=3:v=1:a=0[base]", out["cmd"])
+            self.assertIn("vstack=inputs=2[segout0]", out["cmd"])
+            self.assertNotIn("vstack=inputs=2[segout1]", out["cmd"])
+            self.assertIn("vstack=inputs=2[segout2]", out["cmd"])
+            cap_lines = [ln for ln in out["ass"].splitlines() if ln.startswith("Dialogue: 2,")]
+            self.assertEqual(len(cap_lines), 3)
+            self.assertIn(r"\pos(360,420)", cap_lines[0])
+            self.assertIn(r"\pos(360,175)", cap_lines[1])
+            self.assertIn(r"\pos(360,420)", cap_lines[2])
+        finally:
+            if os.path.exists(tp):
+                os.remove(tp)
+
+        # 3) Hard virality_score < 6.8 rejection & 42s max duration in 5. Split Clips + gta6_vision_director.py
+        split_code = nodes_map["5. Split Clips"]["parameters"]["jsCode"]
+        self.assertIn("virality_score || 0) >= 6.8", split_code)
+        ext_code = nodes_map["6. Extract Viral Segments"]["parameters"]["jsCode"]
+        self.assertIn("silTail > 1.5", ext_code)
+        self.assertIn("totalClipDur > 42.0", ext_code)
 
 
 if __name__ == "__main__":

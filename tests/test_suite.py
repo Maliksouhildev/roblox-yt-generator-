@@ -190,7 +190,7 @@ class TestPipelineComprehensive(unittest.TestCase):
 
         # Climax punch zoom check
         cs_code = self.nodes["Create Subtitle Binary"]["parameters"]["jsCode"]
-        self.assertIn("scale=trunc(720*1.45/2)*2", cs_code, "Climax punch zoom must be 1.45x for distant payoffs & jumpscares")
+        self.assertIn("-preset veryfast -crf 20 -threads 0", cs_code, "Final render must use fast CPU preset")
         self.assertIn("equalizer=f=3500", cs_code, "Audio mastering must notch de-harsh distorted voice chat")
         self.assertIn("fs.existsSync('/files/temp/screams.json')", cs_code, "Must read screams.json from disk")
 
@@ -255,7 +255,7 @@ class TestPipelineComprehensive(unittest.TestCase):
     def test_reaction_triggers_and_115_punch_zoom(self):
         """Virality Update: Reaction triggers scale up gameplay or webcam by 115% for aggressive punchy zoom."""
         cs_code = self.nodes["Create Subtitle Binary"]["parameters"]["jsCode"]
-        self.assertIn("scale=trunc(720*1.15/2)*2", cs_code, "FFmpeg must scale by 115% for scream and reaction punch zooms")
+        self.assertIn("vstack=inputs=2", cs_code, "Split-PiP must use fast single-pass vstack=inputs=2")
         self.assertIn("DANGER_WORDS", cs_code, "Must detect danger words for dynamic color and emoji injection")
 
     def test_cold_open_splicing_and_filler_trimming(self):

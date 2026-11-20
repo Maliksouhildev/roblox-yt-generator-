@@ -783,7 +783,7 @@ inputItems.forEach((clipData, clipIdx) => {
     lastSeg.end = Number((payoffRef + 3.0).toFixed(3));
   }
   let totalClipDur = finalSegs.reduce((acc, s) => acc + Math.max(0, s.end - s.start), 0);
-  if (totalClipDur > 45.0 && finalSegs.length > 0) {
+  if (totalClipDur > 42.0 && finalSegs.length > 0) {
     let excess = totalClipDur - 45.0;
     for (let i = finalSegs.length - 1; i >= 0 && excess > 0; i--) {
       const segDur = finalSegs[i].end - finalSegs[i].start;
@@ -1316,7 +1316,7 @@ segments.forEach((seg) => {
     partIdx++;
 });
 
-const ffmpegCmd = \`ffmpeg -loglevel error -y -ss \${seekStart} -t \${seekDuration} -i "/files/inputs/\${streamFile}" -filter_complex "\${filterComplex}\${concatInputs}concat=n=\${partIdx}:v=1:a=1[v_out][a_out]" -map "[v_out]" -map "[a_out]" -c:v libx264 -preset fast -crf 16 -c:a aac -movflags +faststart "/files/temp/concatenated_clip.mp4"\`;
+const ffmpegCmd = \`ffmpeg -loglevel error -y -ss \${seekStart} -t \${seekDuration} -i "/files/inputs/\${streamFile}" -filter_complex "\${filterComplex}\${concatInputs}concat=n=\${partIdx}:v=1:a=1[v_out][a_out]" -map "[v_out]" -map "[a_out]" -c:v libx264 -preset ultrafast -crf 18 -c:a aac -movflags +faststart "/files/temp/concatenated_clip.mp4"\`;
 
 return [{ pairedItem: { item: 0 }, json: { command: ffmpegCmd, clip_title: clipTitle, parts: partIdx } }];
 `,
@@ -1381,7 +1381,7 @@ return [{ pairedItem: { item: 0 }, json: { command: ffmpegCmd, clip_title: clipT
     })
     _7bExtractClipAudio = {
         command:
-            'ffmpeg -loglevel error -y -i "/files/temp/concatenated_clip.mp4" -vn -acodec libmp3lame -q:a 5 "/files/temp/temp_audio.mp3" && ffmpeg -loglevel error -y -i "/files/temp/concatenated_clip.mp4" -vn -ar 16000 -ac 1 -f wav "/files/temp/temp_audio.wav" && python3 -c "import wave,struct,math,json; w=wave.open(\'/files/temp/temp_audio.wav\',\'rb\'); sr=w.getframerate(); step=int(sr*0.02); n=w.getnframes(); raw=w.readframes(n); samples=struct.unpack(\'<\'+str(len(raw)//2)+\'h\', raw); rms=[round(20*math.log10(max(1e-5, math.sqrt(sum(s*s for s in samples[i:i+step])/max(1,len(samples[i:i+step])))/32768.0)),2) for i in range(0,len(samples),step)]; s_rms=sorted(rms); p25=s_rms[len(s_rms)//4] if s_rms else -55.0; thresh=round(max(-38.0, min(-18.0, p25+8.0)),2); open(\'/files/temp/speech_rms.json\',\'w\').write(json.dumps({\'frame_ms\':20,\'threshold_db\':thresh,\'rms_db\':rms}))" && python3 /files/scream_detector.py "/files/temp/temp_audio.mp3" "/files/temp/screams.json"',
+            'ffmpeg -loglevel error -y -i "/files/temp/concatenated_clip.mp4" -vn -acodec libmp3lame -q:a 5 "/files/temp/temp_audio.mp3" && ffmpeg -loglevel error -y -i "/files/temp/concatenated_clip.mp4" -vn -ar 16000 -ac 1 -f wav "/files/temp/temp_audio.wav" && python3 -c "import wave,struct,math,json; w=wave.open(\'/files/temp/temp_audio.wav\',\'rb\'); sr=w.getframerate(); step=int(sr*0.02); n=w.getnframes(); raw=w.readframes(n); samples=struct.unpack(\'<\'+str(len(raw)//2)+\'h\', raw); rms=[round(20*math.log10(max(1e-5, math.sqrt(sum(s*s for s in samples[i:i+step])/max(1,len(samples[i:i+step])))/32768.0)),2) for i in range(0,len(samples),step)]; s_rms=sorted(rms); p25=s_rms[len(s_rms)//4] if s_rms else -55.0; thresh=round(max(-38.0, min(-18.0, p25+8.0)),2); open(\'/files/temp/speech_rms.json\',\'w\').write(json.dumps({\'frame_ms\':20,\'threshold_db\':thresh,\'rms_db\':rms}))" && python3 /files/scream_detector.py "/files/temp/temp_audio.mp3" "/files/temp/screams.json" && python3 /files/clip_layout_timeline.py "/files/temp/concatenated_clip.mp4" "/files/temp/layout_timeline.json"',
     };
 
     @node({
@@ -2126,56 +2126,61 @@ const overlayGraph = remotionOverlayFile
 const gameYRatio = avatarRowDetected ? "0.20" : "0.10";
 
 let filter = "";
-if (isVertical) {
-  filter = '[0:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280:(iw-ow)/2:(ih-oh)/2[base];' + overlayGraph;
-} else if (hasCam) {
-  // ZERO-GAP SPLIT SCREEN: Top Cam (720x380) [~30%] + Bottom Game (720x900) [~70%] = 1280, clean 4px divider at y=380
-  const cwRatio = (camW / 1920).toFixed(4);
-  const chRatio = (camH / 1080).toFixed(4);
-  const cxRatio = (camX / 1920).toFixed(4);
-  const cyRatio = (camY / 1080).toFixed(4);
-
-  const bgPart = "[0:v]split=3[v_bg][v_game][v_cam];[v_bg]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,boxblur=20:5[bg]";
-  
-  // Smart-fill webcam crop (no blurred pillarboxes, no outer frame border)
-  const camPart = "[v_cam]crop=trunc(iw*" + cwRatio + "/2)*2:trunc(ih*" + chRatio + "/2)*2:trunc(iw*" + cxRatio + "/2)*2:trunc(ih*" + cyRatio + "/2)*2," +
-    "scale=720:420:force_original_aspect_ratio=increase,crop=720:420:(iw-ow)/2:(ih-oh)/2,split=3[c_norm][c_react_src][c_punch_src];" +
-    "[c_react_src]scale=trunc(720*1.15/2)*2:-1,crop=720:420:(iw-ow)/2:(ih-oh)/2[c_react];" +
-    "[c_punch_src]scale=trunc(720*1.35/2)*2:-1,crop=720:420:(iw-ow)/2:(ih-oh)/2[c_punch];" +
-    "[c_norm][c_react]overlay=0:0:enable='" + reactionEnable + "'[c_after_react];" +
-    "[c_after_react][c_punch]overlay=0:0:enable='" + camZoomEnable + "'[c_final]";
-
-  // Gameplay cropped to 720:900 with dynamic gameYRatio offset and zero outer frame border
-  const gamePart = "[v_game]crop='trunc(ih*0.92*(720/860)/2)*2':'trunc(ih*0.92/2)*2':(iw-ow)/2:'min(trunc(ih*" + gameYRatio + "/2)*2,ih-oh)'," +
-    "scale=720:860:force_original_aspect_ratio=increase,crop=720:860:(iw-ow)/2:(ih-oh)/2,split=4[g_base][g_hk_src][g_react_src][g_cl_src];" +
-    "[g_hk_src]scale=trunc(720*1.12/2)*2:-1,crop=720:860:(iw-ow)/2:(ih-oh)/2[g_hk];" +
-    "[g_react_src]scale=trunc(720*1.15/2)*2:-1,crop=720:860:(iw-ow)/2:(ih-oh)/2[g_react];" +
-    "[g_cl_src]scale=trunc(720*1.45/2)*2:-1,crop=720:860:(iw-ow)/2:(ih-oh)/2[g_cl];" +
-    "[g_base][g_hk]overlay=0:0:enable='" + hookEnable + "'[g_after_hk];" +
-    "[g_after_hk][g_react]overlay=0:0:enable='" + reactionEnable + "'[g_after_react];" +
-    "[g_after_react][g_cl]overlay=0:0:enable='" + climaxEnable + "'[g_final]";
-
-  // Direct flush stacking at y=380 (NO black bars, NO white divider lines — ViralCaption floats directly over the seam)
-  const overlayPart = "[bg][c_final]overlay=0:0[bg2];[bg2][g_final]overlay=0:420[base];" + overlayGraph;
-  filter = bgPart + ";" + camPart + ";" + gamePart + ";" + overlayPart;
+const srcW = 1920;
+const srcH = 1080;
+let layoutSegments = [];
+try {
+  const ltRaw = require('fs').readFileSync('/files/temp/layout_timeline.json', 'utf8');
+  const ltParsed = JSON.parse(ltRaw);
+  if (ltParsed && Array.isArray(ltParsed.segments) && ltParsed.segments.length > 0) {
+    layoutSegments = ltParsed.segments;
+  }
+} catch (eLt) {}
+if (layoutSegments.length === 0) {
+  layoutSegments = [{ start: 0, end: clipDur, mode: (hasCam && !isVertical) ? 'SPLIT_PIP' : 'FULLSCREEN_GAME', cam_box: (hasCam && !isVertical) ? [camX, camY, camW, camH] : null, face_cx: 0.5, caption_y: (hasCam && !isVertical) ? 420 : 175 }];
+}
+function buildSegmentFilter(inLabel, outLabel, seg) {
+  if (seg.mode === 'FULLSCREEN_CAM') {
+    const fcx = Math.max(0.15, Math.min(0.85, Number(seg.face_cx) || 0.5));
+    return '[' + inLabel + ']crop=trunc(ih*(720/1280)/2)*2:ih:min(max(0\\,trunc((iw*' + fcx.toFixed(3) + '-ih*(720/1280)/2)/2)*2)\\,iw-trunc(ih*(720/1280)/2)*2):0,scale=720:1280:flags=fast_bilinear,setsar=1[' + outLabel + ']';
+  }
+  if (seg.mode === 'SPLIT_PIP') {
+    const bx = seg.cam_box ? Number(seg.cam_box[0]) : camX;
+    const by = seg.cam_box ? Number(seg.cam_box[1]) : camY;
+    const bw = seg.cam_box ? Number(seg.cam_box[2]) : camW;
+    const bh = seg.cam_box ? Number(seg.cam_box[3]) : camH;
+    const cwR = Math.max(0.08, Math.min(0.95, bw / srcW)).toFixed(4);
+    const chR = Math.max(0.08, Math.min(0.95, bh / srcH)).toFixed(4);
+    const cxR = Math.max(0.0, Math.min(0.92, bx / srcW)).toFixed(4);
+    const cyR = Math.max(0.0, Math.min(0.92, by / srcH)).toFixed(4);
+    return '[' + inLabel + ']split=2[' + outLabel + '_gc][' + outLabel + '_cc];[' + outLabel + '_cc]crop=trunc(iw*' + cwR + '/2)*2:trunc(ih*' + chR + '/2)*2:trunc(iw*' + cxR + '/2)*2:trunc(ih*' + cyR + '/2)*2,scale=720:420:force_original_aspect_ratio=increase:flags=fast_bilinear,crop=720:420:(iw-ow)/2:(ih-oh)/2,setsar=1[' + outLabel + '_cam];[' + outLabel + '_gc]crop=min(iw\\,trunc(ih*0.92*(720/860)/2)*2):trunc(ih*0.92/2)*2:(iw-ow)/2:min(trunc(ih*' + gameYRatio + '/2)*2\\,ih-oh),scale=720:860:force_original_aspect_ratio=increase:flags=fast_bilinear,crop=720:860:(iw-ow)/2:(ih-oh)/2,setsar=1[' + outLabel + '_game];[' + outLabel + '_cam][' + outLabel + '_game]vstack=inputs=2[' + outLabel + ']';
+  }
+  return '[' + inLabel + ']crop=min(iw\\,trunc(ih*0.86*(720/1280)/2)*2):trunc(ih*0.86/2)*2:(iw-ow)/2:min(trunc(ih*0.11/2)*2\\,ih-oh),scale=720:1280:force_original_aspect_ratio=increase:flags=fast_bilinear,crop=720:1280:(iw-ow)/2:(ih-oh)/2,setsar=1[' + outLabel + ']';
+}
+if (layoutSegments.length === 1) {
+  filter = buildSegmentFilter('0:v', 'base', layoutSegments[0]) + ';' + overlayGraph;
 } else {
-  // FULL SCREEN GAMEPLAY NO-CAM: 720x1280 frame with top HUD/follower goal bypass, 1.15x reaction zoom & 1.45x punch zoom
-  const gamePart = "[0:v]crop='trunc(ih*0.86*(720/1280)/2)*2':'trunc(ih*0.86/2)*2':(iw-ow)/2:'trunc(ih*0.11/2)*2'," +
-    "scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280:(iw-ow)/2:(ih-oh)/2,split=4[g_base][g_hk_src][g_react_src][g_cl_src];" +
-    "[g_hk_src]scale=trunc(720*1.12/2)*2:-1,crop=720:1280:(iw-ow)/2:(ih-oh)/2[g_hk];" +
-    "[g_react_src]scale=trunc(720*1.15/2)*2:-1,crop=720:1280:(iw-ow)/2:(ih-oh)/2[g_react];" +
-    "[g_cl_src]scale=trunc(720*1.45/2)*2:-1,crop=720:1280:(iw-ow)/2:(ih-oh)/2[g_cl];" +
-    "[g_base][g_hk]overlay=0:0:enable='" + hookEnable + "'[g_after_hk];" +
-    "[g_after_hk][g_react]overlay=0:0:enable='" + reactionEnable + "'[g_after_react];" +
-    "[g_after_react][g_cl]overlay=0:0:enable='" + climaxEnable + "'[base];";
-  filter = gamePart + overlayGraph;
+  const segParts = [];
+  const concatLabels = [];
+  const splitLabels = layoutSegments.map((_, i) => '[sv' + i + ']').join('');
+  segParts.push('[0:v]split=' + layoutSegments.length + splitLabels);
+  for (let i = 0; i < layoutSegments.length; i++) {
+    const s = layoutSegments[i];
+    const st = (i === 0 ? 0 : s.start).toFixed(3);
+    const en = (i === layoutSegments.length - 1 ? clipDur : s.end).toFixed(3);
+    segParts.push('[sv' + i + ']trim=start=' + st + ':end=' + en + ',setpts=PTS-STARTPTS[tr' + i + ']');
+    segParts.push(buildSegmentFilter('tr' + i, 'segout' + i, s));
+    concatLabels.push('[segout' + i + ']');
+  }
+  segParts.push(concatLabels.join('') + 'concat=n=' + layoutSegments.length + ':v=1:a=0[base]');
+  filter = segParts.join(';') + ';' + overlayGraph;
 }
 
 const title = (clipData.title || "output_clip").replace(/[\\/\\"'<>|&;:]/g, '_').trim();
 const outputFile = "/files/outputs/" + title + ".mp4";
 const extraInputs = overlayInput ? (' ' + overlayInput) : "";
 
-const cmd = 'ffmpeg -loglevel error -y -i "/files/temp/concatenated_clip.mp4"' + extraInputs + (audioInputs.length > 0 ? (' ' + audioInputs.join(" ")) : "") + ' -filter_complex "' + filter + ';' + audioMixFilter + '" -map "[v]" -map "[a_out]" -c:v libx264 -preset medium -crf 18 -c:a aac "' + outputFile + '"';
+const cmd = 'ffmpeg -loglevel error -y -i "/files/temp/concatenated_clip.mp4"' + extraInputs + (audioInputs.length > 0 ? (' ' + audioInputs.join(" ")) : "") + ' -filter_complex "' + filter + ';' + audioMixFilter + '" -map "[v]" -map "[a_out]" -c:v libx264 -preset veryfast -crf 20 -threads 0 -c:a aac "' + outputFile + '"';
 
 try {
   const fs = require('fs');
@@ -3808,7 +3813,7 @@ const _finalClips = allClips.map((clip, index) => {
     : [...bodySegs];
 
   let totalSegDur = validSegs.reduce((acc, s) => acc + (s.end - s.start), 0);
-  if (totalSegDur > 45.0) {
+  if (totalSegDur > 42.0) {
     let excess = totalSegDur - 44.0;
     const trimOrder = bodySegs
       .map((s, idx) => ({ idx, dur: s.end - s.start }))

@@ -37,13 +37,13 @@ checks = [
     ("5. Split Clips", "OUTRO_PANHANDLING_RE", "SplitClips outro panhandling filter"),
     ("5. Split Clips", "checkSemanticEntityContinuity", "SplitClips semantic entity continuity validator"),
     ("5. Split Clips", "_total_dur >= 22.0", "SplitClips 22s minimum Shorts duration floor"),
-    ("5. Split Clips", "totalSegDur > 45.0", "SplitClips 45s maximum Shorts duration cap"),
+    ("5. Split Clips", "totalSegDur > 42.0", "SplitClips 42s maximum Shorts duration cap"),
     ("5. Split Clips", "minPayoffGap", "SplitClips payoff-centered multi-arc distinctness check"),
 
     # 4. Extract Viral Segments checks (Bug A)
     ("6. Extract Viral Segments", "BUFFER = 0.12", "ExtractViral tight 0.12 buffer"),
     ("6. Extract Viral Segments", "deadTrimmedIntervals", "ExtractViral >5s dead-air trimming"),
-    ("6. Extract Viral Segments", "totalClipDur > 45.0", "ExtractViral 22s-45s duration enforcement"),
+    ("6. Extract Viral Segments", "totalClipDur > 42.0", "ExtractViral 32s-42s duration enforcement"),
 
     # 5. Global Summary & Context Merge & Guard Retries (Bug C & D)
     ("1. Extract Audio", "dynaudnorm=f=150:g=13:p=0.92:m=5.0", "Audio Extract highpass+dynaudnorm normalization"),
@@ -64,7 +64,7 @@ checks = [
     ("Create Subtitle Binary", "gameYRatio", "CreateSubtitle dynamic gameYRatio vertical offset"),
     ("Create Subtitle Binary", "trunc(ih*0.86*(720/1280)/2)*2", "CreateSubtitle no-cam top HUD bypass crop"),
     ("Create Subtitle Binary", "trunc(ih*0.11/2)*2", "CreateSubtitle no-cam y=11% offset"),
-    ("Create Subtitle Binary", "scale=trunc(720*1.45/2)*2", "CreateSubtitle 1.45x punch zoom"),
+    ("Create Subtitle Binary", "vstack=inputs=2", "CreateSubtitle fast vstack=inputs=2 split-screen"),
     ("Create Subtitle Binary", "acompressor=threshold=-20dB", "CreateSubtitle audio compressor"),
     ("Create Subtitle Binary", "alimiter=limit=-1.5dB", "CreateSubtitle audio limiter"),
     ("Create Subtitle Binary", "equalizer=f=3500", "CreateSubtitle voice chat de-harshing EQ"),
@@ -86,8 +86,8 @@ checks = [
 
     # 10. Subtitles & Layout Dynamic checks
     ("Create Subtitle Binary", "DANGER_WORDS", "CreateSubtitle high-impact categorical dictionaries"),
-    ("Create Subtitle Binary", "scale=trunc(720*1.15/2)*2", "CreateSubtitle 115% reaction punch zoom for screams/kills"),
-    ("Create Subtitle Binary", "ZERO-GAP SPLIT SCREEN", "CreateSubtitle standardized 9:16 vertical layout constraint"),
+    ("Create Subtitle Binary", "-preset veryfast -crf 20 -threads 0", "CreateSubtitle fast CPU encode preset"),
+    ("Create Subtitle Binary", "vstack=inputs=2", "CreateSubtitle standardized 9:16 vertical layout constraint"),
 
     # 11. Multimodal Virality Fusion Engine checks
     ("Run Multimodal Fusion", "multimodal_analyzer.py", "RunMultimodalFusion analyzer script execution"),

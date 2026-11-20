@@ -1119,7 +1119,19 @@ def normalize_director_clips(
             visual_note = str(cl.get("visual_evidence") or "").strip() or "Watch the live streamer reaction unfold here."
         short_desc = _build_short_description(cl, assembled, str(cl.get("climax_quote") or ""), visual_note)
         vis_ev = str(cl.get("visual_evidence") or cl.get("visual_event_description") or f"3x3 grid storyboard at t={payoff_t:.1f}s.").strip()
+        _vscore = float(cl.get("virality_score") or (cand or {}).get("est_virality_10") or 8.5)
+        if _vscore < 6.8:
+            continue
+
+        # Hard 42.0s max duration cap
         tot_clip_dur = round(sum(cs["end"] - cs["start"] for cs in clean_segs), 2)
+        if tot_clip_dur > 42.0 and clean_segs:
+            excess = tot_clip_dur - 42.0
+            if (clean_segs[-1]["end"] - clean_segs[-1]["start"]) - excess >= 4.0:
+                clean_segs[-1]["end"] = round(clean_segs[-1]["end"] - excess, 2)
+                clean_segs[-1]["duration"] = round(clean_segs[-1]["end"] - clean_segs[-1]["start"], 2)
+                clean_segs[-1]["spoken_text"] = _words_text(w_list, clean_segs[-1]["start"], clean_segs[-1]["end"]) if w_list else clean_segs[-1].get("spoken_text", "")
+                tot_clip_dur = round(sum(cs["end"] - cs["start"] for cs in clean_segs), 2)
 
         # Strict Grounding Verification: verify grounding_quote against assembled clip transcript
         g_quote = str(cl.get("grounding_quote") or cl.get("climax_quote") or "").strip()
@@ -1140,6 +1152,12 @@ def normalize_director_clips(
         if not _raw_comment or re.match(r"^(would you have survived this|what would you have done here|what's the worst)\??$", _raw_comment, re.I):
             _raw_comment = _natural_fallbacks[len(valid_clips) % len(_natural_fallbacks)]
         _yt_title = str(cl.get("youtube_title") or cl.get("yt_title") or "").strip()[:68]
+        # Reject hallucinated youtube_title unrelated to clip speech/title
+        if _yt_title and assembled:
+            yt_toks = [t.lower() for t in re.findall(r"[A-Za-z]{4,}", _yt_title) if t.lower() not in {"gta", "grand", "theft", "auto", "vice", "city", "leonida", "shorts", "stream", "live", "when", "this", "that", "with", "from", "just", "even", "these", "those", "couldnt", "couldn"}]
+            ref_ctx = f"{asm_low} {raw_title.lower()} {hook.lower()}"
+            if yt_toks and sum(1 for t in yt_toks if t in ref_ctx) == 0:
+                _yt_title = raw_title[:68]
         _desc_line = str(cl.get("desc_line") or short_desc).strip()
         valid_clips.append({
             "clip_number": len(valid_clips) + 1,
