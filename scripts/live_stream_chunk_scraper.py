@@ -1325,11 +1325,22 @@ def run_scraper(
     }
 
 
+def _count_fresh_input_chunks() -> int:
+    if not os.path.isdir(INPUTS_DIR):
+        return 0
+    return sum(
+        1 for f in os.listdir(INPUTS_DIR)
+        if f.endswith(".mp4") and not f.endswith(".processing.mp4") and os.path.getsize(os.path.join(INPUTS_DIR, f)) > MIN_VALID_BYTES
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description="Two-tier GTA 6 live stream & VOD 1-hour chunk scraper.")
     parser.add_argument("--probe-only", action="store_true", help="Discover, probe, and rank candidates without downloading or locking.")
     parser.add_argument("--dry-run", action="store_true", help="Probe and print download/slice plan without fetching media.")
     parser.add_argument("--no-wait", action="store_true", help="Do not sleep in 60s intervals when live streams are < 45 mins old.")
+    parser.add_argument("--stock-target", type=int, default=1, help="Ensure at least N fresh .mp4 files exist in /files/inputs (max 2 new downloads per run).")
+    parser.add_argument("--fallback-url", default="", help="Optional streamer channel/VOD URL to probe if primary pool yields no candidate.")
     args = parser.parse_args()
 
     use_lock = not args.dry_run and not args.probe_only
@@ -1339,6 +1350,35 @@ def main():
 
     try:
         res = run_scraper(dry_run=args.dry_run, no_wait=args.no_wait, probe_only=args.probe_only)
+        # Fallback to Pick Random Streamer URL if primary discovery yielded no candidate
+        if (
+            not args.dry_run
+            and not args.probe_only
+            and not res.get("downloaded")
+            and args.fallback_url
+        ):
+            fb_info = probe_url_metadata(args.fallback_url)
+            if isinstance(fb_info, dict) and fb_info.get("id"):
+                # Temporarily inject candidate through second pass if not already completed
+                state = load_json(STATE_PATH, {})
+                st = state.get(str(fb_info["id"]), {}) if isinstance(state, dict) else {}
+                if not (isinstance(st, dict) and st.get("completed")):
+                    extra_res = run_scraper(dry_run=False, no_wait=args.no_wait, probe_only=False)
+                    if extra_res.get("downloaded"):
+                        res = extra_res
+
+        # Top up fresh stock in /files/inputs up to stock-target (cap at 1 extra download per run)
+        if (
+            not args.dry_run
+            and not args.probe_only
+            and args.stock_target > 1
+            and _count_fresh_input_chunks() < args.stock_target
+        ):
+            topup = run_scraper(dry_run=False, no_wait=args.no_wait, probe_only=False)
+            if isinstance(res, dict):
+                res["stock_topup"] = topup.get("status")
+                res["fresh_input_count"] = _count_fresh_input_chunks()
+
         print(json.dumps(res, indent=2))
     finally:
         if use_lock:

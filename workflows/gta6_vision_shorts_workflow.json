@@ -65,7 +65,7 @@
     },
     {
       "parameters": {
-        "command": "if [ -f /files/temp/pipeline.lock ]; then lock_age=$(( $(date +%s) - $(stat -c %Y /files/temp/pipeline.lock 2>/dev/null || echo 0) )); if [ \"$lock_age\" -lt 1500 ]; then echo \"\"; exit 0; fi; fi; echo \"$$\" > /files/temp/pipeline.lock; rm -f /files/temp/stream_shorts_created.flag; file=\"\"; for cand in $(ls -1 /files/inputs/ 2>/dev/null | grep \"\\.mp4$\" | grep -v \"\\.processing\\.mp4$\"); do if [ -s \"/files/inputs/$cand\" ]; then file=\"$cand\"; break; else c_stem=\"${cand%.mp4}\"; rm -f \"/files/inputs/$cand\" \"/files/inputs/${c_stem}.info.json\" \"/files/inputs/${c_stem}.live_chat.json\" \"/files/inputs/${c_stem}.en.live_chat.json\"; fi; done; if [ -z \"$file\" ]; then for stale in $(ls -1 /files/inputs/ 2>/dev/null | grep \"\\.processing\\.mp4$\"); do stale_stem=\"${stale%.processing.mp4}\"; if [ -s \"/files/inputs/$stale\" ]; then mv \"/files/inputs/$stale\" \"/files/inputs/${stale_stem}.mp4\"; if [ -f \"/files/inputs/${stale_stem}.processing.info.json\" ] && [ ! -f \"/files/inputs/${stale_stem}.info.json\" ]; then mv -f \"/files/inputs/${stale_stem}.processing.info.json\" \"/files/inputs/${stale_stem}.info.json\"; fi; if [ -f \"/files/inputs/${stale_stem}.processing.live_chat.json\" ] && [ ! -f \"/files/inputs/${stale_stem}.live_chat.json\" ]; then mv -f \"/files/inputs/${stale_stem}.processing.live_chat.json\" \"/files/inputs/${stale_stem}.live_chat.json\"; fi; file=\"${stale_stem}.mp4\"; break; else rm -f \"/files/inputs/$stale\" \"/files/inputs/${stale_stem}.processing.info.json\" \"/files/inputs/${stale_stem}.processing.live_chat.json\" \"/files/inputs/${stale}.info.json\" \"/files/inputs/${stale}.live_chat.json\"; fi; done; fi; if [ -n \"$file\" ]; then rm -f /files/temp/transcript.json /files/temp/unified_timeline_index.json /files/temp/viral_anchors.json /files/temp/audio_energy.json /files/temp/chat_laughter_clusters.json /files/temp/face_emotions.json /files/temp/comedic_beats.json /files/temp/global_summary.json /files/temp/screams.json /files/temp/cam_config.json /files/temp/cam_ref_grid.jpg /files/temp/ref_*.jpg /files/temp/audio.mp3 /files/temp/concatenated_clip.mp4 /files/temp/clip_audio.mp3 /files/temp/subs.ass /files/temp/active_stream.txt /files/temp/gta6_candidates.json /files/temp/gta6_cand_*_grid.jpg /files/temp/gta6_vision_director_out.json /files/temp/stream_shorts_created.flag; stem=\"${file%.mp4}\"; proc=\"${stem}.processing.mp4\"; mv \"/files/inputs/$file\" \"/files/inputs/$proc\"; if [ -f \"/files/inputs/${stem}.info.json\" ]; then mv -f \"/files/inputs/${stem}.info.json\" \"/files/inputs/${stem}.processing.info.json\"; fi; if [ -f \"/files/inputs/${stem}.en.live_chat.json\" ] && [ ! -f \"/files/inputs/${stem}.live_chat.json\" ]; then mv -f \"/files/inputs/${stem}.en.live_chat.json\" \"/files/inputs/${stem}.live_chat.json\"; fi; if [ -f \"/files/inputs/${stem}.live_chat.json\" ]; then mv -f \"/files/inputs/${stem}.live_chat.json\" \"/files/inputs/${stem}.processing.live_chat.json\"; fi; echo \"$proc\"; else echo \"\"; fi"
+        "command": "rm -f /files/temp/stream_shorts_created.flag /files/temp/pipeline.lock; if pgrep -f \"/files/(multimodal_fusion|gta6_peak_storyboard_builder|gta6_vision_director)\\.py|concatenated_clip\\.mp4\" >/dev/null 2>&1; then echo \"\"; exit 0; fi; file=\"\"; is_exhausted() { [ -f /files/temp/exhausted_vods.txt ] && grep -Fxq \"$1\" /files/temp/exhausted_vods.txt 2>/dev/null; }; for p in /files/inputs/*_chunk*.mp4; do [ -e \"$p\" ] || continue; cand=\"${p#/files/inputs/}\"; case \"$cand\" in *.processing.mp4) continue ;; esac; if [ -s \"$p\" ] && ! is_exhausted \"${cand%.mp4}\" && ! is_exhausted \"$cand\"; then file=\"$cand\"; break; elif [ ! -s \"$p\" ]; then c_stem=\"${cand%.mp4}\"; rm -f \"$p\" \"/files/inputs/${c_stem}.info.json\" \"/files/inputs/${c_stem}.live_chat.json\" \"/files/inputs/${c_stem}.en.live_chat.json\"; fi; done; if [ -z \"$file\" ]; then for p in /files/inputs/*.mp4; do [ -e \"$p\" ] || continue; cand=\"${p#/files/inputs/}\"; case \"$cand\" in *.processing.mp4) continue ;; esac; if [ -s \"$p\" ] && ! is_exhausted \"${cand%.mp4}\" && ! is_exhausted \"$cand\"; then file=\"$cand\"; break; elif [ ! -s \"$p\" ]; then c_stem=\"${cand%.mp4}\"; rm -f \"$p\" \"/files/inputs/${c_stem}.info.json\" \"/files/inputs/${c_stem}.live_chat.json\" \"/files/inputs/${c_stem}.en.live_chat.json\"; fi; done; fi; if [ -z \"$file\" ]; then for p in /files/inputs/*.processing.mp4; do [ -e \"$p\" ] || continue; stale=\"${p#/files/inputs/}\"; stale_stem=\"${stale%.processing.mp4}\"; if is_exhausted \"$stale_stem\" || is_exhausted \"$stale\"; then rm -f \"$p\" \"/files/inputs/${stale_stem}.processing.info.json\" \"/files/inputs/${stale_stem}.processing.live_chat.json\" \"/files/inputs/${stale_stem}.info.json\" \"/files/inputs/${stale_stem}.live_chat.json\" \"/files/inputs/${stale_stem}.en.live_chat.json\"; continue; fi; if [ -s \"$p\" ]; then mv \"$p\" \"/files/inputs/${stale_stem}.mp4\"; if [ -f \"/files/inputs/${stale_stem}.processing.info.json\" ] && [ ! -f \"/files/inputs/${stale_stem}.info.json\" ]; then mv -f \"/files/inputs/${stale_stem}.processing.info.json\" \"/files/inputs/${stale_stem}.info.json\"; fi; if [ -f \"/files/inputs/${stale_stem}.processing.live_chat.json\" ] && [ ! -f \"/files/inputs/${stale_stem}.live_chat.json\" ]; then mv -f \"/files/inputs/${stale_stem}.processing.live_chat.json\" \"/files/inputs/${stale_stem}.live_chat.json\"; fi; file=\"${stale_stem}.mp4\"; break; else rm -f \"$p\" \"/files/inputs/${stale_stem}.processing.info.json\" \"/files/inputs/${stale_stem}.processing.live_chat.json\" \"/files/inputs/${stale}.info.json\" \"/files/inputs/${stale}.live_chat.json\"; fi; done; fi; if [ -n \"$file\" ]; then rm -f /files/temp/transcript.json /files/temp/unified_timeline_index.json /files/temp/viral_anchors.json /files/temp/audio_energy.json /files/temp/chat_laughter_clusters.json /files/temp/face_emotions.json /files/temp/comedic_beats.json /files/temp/global_summary.json /files/temp/screams.json /files/temp/cam_config.json /files/temp/cam_ref_grid.jpg /files/temp/ref_*.jpg /files/temp/audio.mp3 /files/temp/concatenated_clip.mp4 /files/temp/clip_audio.mp3 /files/temp/subs.ass /files/temp/layout_timeline.json /files/temp/speech_rms.json /files/temp/active_stream.txt /files/temp/gta6_candidates.json /files/temp/gta6_cand_*_grid.jpg /files/temp/gta6_vision_director_out.json /files/temp/stream_shorts_created.flag; stem=\"${file%.mp4}\"; proc=\"${stem}.processing.mp4\"; mv \"/files/inputs/$file\" \"/files/inputs/$proc\"; if [ -f \"/files/inputs/${stem}.info.json\" ]; then mv -f \"/files/inputs/${stem}.info.json\" \"/files/inputs/${stem}.processing.info.json\"; fi; if [ -f \"/files/inputs/${stem}.en.live_chat.json\" ] && [ ! -f \"/files/inputs/${stem}.live_chat.json\" ]; then mv -f \"/files/inputs/${stem}.en.live_chat.json\" \"/files/inputs/${stem}.live_chat.json\"; fi; if [ -f \"/files/inputs/${stem}.live_chat.json\" ]; then mv -f \"/files/inputs/${stem}.live_chat.json\" \"/files/inputs/${stem}.processing.live_chat.json\"; fi; echo \"$proc\"; else echo \"\"; fi"
       },
       "id": "902599e5-d85a-472c-a17d-e425f6b049ff",
       "name": "Find Stream",
@@ -768,7 +768,7 @@
     },
     {
       "parameters": {
-        "command": "python3 /files/live_stream_chunk_scraper.py"
+        "command": "rm -f /files/temp/scraper_run.log; python3 /files/live_stream_chunk_scraper.py --stock-target 3 --fallback-url \"{{ $json.url }}\" >/files/temp/scraper_run.log 2>&1; rc=$?; tail -n 20 /files/temp/scraper_run.log; exit $rc"
       },
       "id": "fallback-download",
       "name": "Fallback Download",
@@ -1185,7 +1185,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const fs = require('fs');\nconst flagPath = '/files/temp/stream_shorts_created.flag';\nlet createdFiles = [];\ntry {\n  if (fs.existsSync(flagPath)) {\n    createdFiles = fs.readFileSync(flagPath, 'utf8')\n      .split(/\\r?\\n/)\n      .map(s => s.trim())\n      .filter(Boolean)\n      .filter(fname => {\n        try { return fs.statSync('/files/outputs/' + fname).size > 10000; } catch (e) { return false; }\n      });\n  }\n} catch (e) {}\n\nlet streamAttempt = 0;\nwhile (true) {\n  try {\n    const fItems = $items('Find Stream', 0, streamAttempt);\n    if (!fItems || fItems.length === 0) break;\n    streamAttempt++;\n  } catch (e) {\n    break;\n  }\n}\nstreamAttempt = Math.max(1, streamAttempt);\nconst MAX_STREAM_RETRIES = 10;\nconst shortsCreated = createdFiles.length;\nconst shouldRetryStream = (shortsCreated === 0) && (streamAttempt < MAX_STREAM_RETRIES);\n\nlet streamFile = '';\ntry { streamFile = (($('Edit Fields').last ? $('Edit Fields').last() : $('Edit Fields').first())).json.stream_file || ''; } catch (e) {}\n\nreturn [{\n  json: {\n    shorts_created: shortsCreated,\n    created_files: createdFiles,\n    stream_attempt: streamAttempt,\n    max_stream_retries: MAX_STREAM_RETRIES,\n    should_retry_stream: shouldRetryStream,\n    stream_file: streamFile\n  }\n}];"
+        "jsCode": "const fs = require('fs');\nconst flagPath = '/files/temp/stream_shorts_created.flag';\nlet createdFiles = [];\ntry {\n  if (fs.existsSync(flagPath)) {\n    createdFiles = fs.readFileSync(flagPath, 'utf8')\n      .split(/\\r?\\n/)\n      .map(s => s.trim())\n      .filter(Boolean)\n      .filter(fname => {\n        try { return fs.statSync('/files/outputs/' + fname).size > 10000; } catch (e) { return false; }\n      });\n  }\n} catch (e) {}\n\nlet streamAttempt = 0;\nwhile (true) {\n  try {\n    const fItems = $items('Find Stream', 0, streamAttempt);\n    if (!fItems || fItems.length === 0) break;\n    streamAttempt++;\n  } catch (e) {\n    break;\n  }\n}\nstreamAttempt = Math.max(1, streamAttempt);\nconst MAX_STREAM_RETRIES = 10;\nlet exhaustedFromSplit = false;\ntry { exhaustedFromSplit = Boolean($input.first().json && $input.first().json._exhausted_vod); } catch(e) {}\nconst shortsCreated = createdFiles.length;\nconst shouldDeleteVod = (shortsCreated > 0) || exhaustedFromSplit;\nconst shouldRetryStream = (shortsCreated === 0) && (streamAttempt < MAX_STREAM_RETRIES);\n\nlet streamFile = '';\ntry { streamFile = (($('Edit Fields').last ? $('Edit Fields').last() : $('Edit Fields').first())).json.stream_file || ''; } catch (e) {}\n\nreturn [{\n  json: {\n    shorts_created: shortsCreated,\n    should_delete_vod: shouldDeleteVod,\n    created_files: createdFiles,\n    stream_attempt: streamAttempt,\n    max_stream_retries: MAX_STREAM_RETRIES,\n    should_retry_stream: shouldRetryStream,\n    stream_file: streamFile\n  }\n}];"
       },
       "id": "check-stream-shorts-created-id",
       "name": "Check Stream Shorts Created",
@@ -1370,7 +1370,7 @@
           "conditions": [
             {
               "id": "cond-should-delete-vod",
-              "leftValue": "={{ Number($json.shorts_created || 0) > 0 || Number($json.stream_attempt || 0) >= Number($json.max_stream_retries || 10) }}",
+              "leftValue": "={{ Number($json.shorts_created || 0) > 0 || Boolean($json.should_delete_vod) || Number($json.stream_attempt || 0) >= Number($json.max_stream_retries || 10) }}",
               "rightValue": true,
               "operator": {
                 "type": "boolean",
@@ -1389,6 +1389,37 @@
       "position": [
         -85460,
         26080
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-clips-ready",
+              "leftValue": "={{ Boolean($json._exhausted_vod) !== true }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-clips-ready-exhausted-vod",
+      "name": "IF: Clips Ready?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -85560,
+        26140
       ]
     }
   ],
@@ -1816,7 +1847,7 @@
       "main": [
         [
           {
-            "node": "If Bypass Loop Sandbox",
+            "node": "IF: Clips Ready?",
             "type": "main",
             "index": 0
           }
@@ -2216,6 +2247,24 @@
         [
           {
             "node": "IF: Retry Next Stream?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: Clips Ready?": {
+      "main": [
+        [
+          {
+            "node": "If Bypass Loop Sandbox",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Check Stream Shorts Created",
             "type": "main",
             "index": 0
           }
