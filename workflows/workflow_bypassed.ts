@@ -2142,7 +2142,7 @@ if (layoutSegments.length === 0) {
 function buildSegmentFilter(inLabel, outLabel, seg) {
   if (seg.mode === 'FULLSCREEN_CAM') {
     const fcx = Math.max(0.15, Math.min(0.85, Number(seg.face_cx) || 0.5));
-    return '[' + inLabel + ']crop=trunc(ih*(720/1280)/2)*2:ih:min(max(0\\,trunc((iw*' + fcx.toFixed(3) + '-ih*(720/1280)/2)/2)*2)\\,iw-trunc(ih*(720/1280)/2)*2):0,scale=720:1280:flags=fast_bilinear,setsar=1[' + outLabel + ']';
+    return '[' + inLabel + ']crop=trunc(ih*(720/1280)/2)*2:ih:min(max(0' + BS + ',trunc((iw*' + fcx.toFixed(3) + '-ih*(720/1280)/2)/2)*2)' + BS + ',iw-trunc(ih*(720/1280)/2)*2):0,scale=720:1280:flags=fast_bilinear,setsar=1[' + outLabel + ']';
   }
   if (seg.mode === 'SPLIT_PIP') {
     const bx = seg.cam_box ? Number(seg.cam_box[0]) : camX;
@@ -2153,9 +2153,9 @@ function buildSegmentFilter(inLabel, outLabel, seg) {
     const chR = Math.max(0.08, Math.min(0.95, bh / srcH)).toFixed(4);
     const cxR = Math.max(0.0, Math.min(0.92, bx / srcW)).toFixed(4);
     const cyR = Math.max(0.0, Math.min(0.92, by / srcH)).toFixed(4);
-    return '[' + inLabel + ']split=2[' + outLabel + '_gc][' + outLabel + '_cc];[' + outLabel + '_cc]crop=trunc(iw*' + cwR + '/2)*2:trunc(ih*' + chR + '/2)*2:trunc(iw*' + cxR + '/2)*2:trunc(ih*' + cyR + '/2)*2,scale=720:420:force_original_aspect_ratio=increase:flags=fast_bilinear,crop=720:420:(iw-ow)/2:(ih-oh)/2,setsar=1[' + outLabel + '_cam];[' + outLabel + '_gc]crop=min(iw\\,trunc(ih*0.92*(720/860)/2)*2):trunc(ih*0.92/2)*2:(iw-ow)/2:min(trunc(ih*' + gameYRatio + '/2)*2\\,ih-oh),scale=720:860:force_original_aspect_ratio=increase:flags=fast_bilinear,crop=720:860:(iw-ow)/2:(ih-oh)/2,setsar=1[' + outLabel + '_game];[' + outLabel + '_cam][' + outLabel + '_game]vstack=inputs=2[' + outLabel + ']';
+    return '[' + inLabel + ']split=2[' + outLabel + '_gc][' + outLabel + '_cc];[' + outLabel + '_cc]crop=trunc(iw*' + cwR + '/2)*2:trunc(ih*' + chR + '/2)*2:trunc(iw*' + cxR + '/2)*2:trunc(ih*' + cyR + '/2)*2,scale=720:420:force_original_aspect_ratio=increase:flags=fast_bilinear,crop=720:420:(iw-ow)/2:(ih-oh)/2,setsar=1[' + outLabel + '_cam];[' + outLabel + '_gc]crop=min(iw' + BS + ',trunc(ih*0.92*(720/860)/2)*2):trunc(ih*0.92/2)*2:(iw-ow)/2:min(trunc(ih*' + gameYRatio + '/2)*2' + BS + ',ih-oh),scale=720:860:force_original_aspect_ratio=increase:flags=fast_bilinear,crop=720:860:(iw-ow)/2:(ih-oh)/2,setsar=1[' + outLabel + '_game];[' + outLabel + '_cam][' + outLabel + '_game]vstack=inputs=2[' + outLabel + ']';
   }
-  return '[' + inLabel + ']crop=min(iw\\,trunc(ih*0.86*(720/1280)/2)*2):trunc(ih*0.86/2)*2:(iw-ow)/2:min(trunc(ih*0.11/2)*2\\,ih-oh),scale=720:1280:force_original_aspect_ratio=increase:flags=fast_bilinear,crop=720:1280:(iw-ow)/2:(ih-oh)/2,setsar=1[' + outLabel + ']';
+  return '[' + inLabel + ']crop=min(iw' + BS + ',trunc(ih*0.86*(720/1280)/2)*2):trunc(ih*0.86/2)*2:(iw-ow)/2:min(trunc(ih*0.11/2)*2' + BS + ',ih-oh),scale=720:1280:force_original_aspect_ratio=increase:flags=fast_bilinear,crop=720:1280:(iw-ow)/2:(ih-oh)/2,setsar=1[' + outLabel + ']';
 }
 if (layoutSegments.length === 1) {
   filter = buildSegmentFilter('0:v', 'base', layoutSegments[0]) + ';' + overlayGraph;

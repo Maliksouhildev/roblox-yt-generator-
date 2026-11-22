@@ -860,6 +860,10 @@ class TestGta6PeakAndVisionLogic(unittest.TestCase):
             self.assertIn("vstack=inputs=2[segout0]", out["cmd"])
             self.assertNotIn("vstack=inputs=2[segout1]", out["cmd"])
             self.assertIn("vstack=inputs=2[segout2]", out["cmd"])
+            # FFmpeg filter_complex requires \, inside min()/max() crop expressions (not raw commas)
+            self.assertIn(r"min(iw\,trunc(ih*0.92*(720/860)/2)*2)", out["cmd"])
+            self.assertIn(r"min(max(0\,trunc((iw*", out["cmd"])
+            self.assertIn(r"),iw-trunc(ih*(720/1280)/2)*2)".replace("),", r"\,"), out["cmd"])
             cap_lines = [ln for ln in out["ass"].splitlines() if ln.startswith("Dialogue: 2,")]
             self.assertEqual(len(cap_lines), 3)
             self.assertIn(r"\pos(360,420)", cap_lines[0])

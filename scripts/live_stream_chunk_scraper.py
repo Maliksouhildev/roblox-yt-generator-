@@ -1392,9 +1392,8 @@ def main():
             and not res.get("downloaded")
             and args.fallback_url
         ):
-            fb_info = probe_url_metadata(args.fallback_url)
+            fb_info = probe_stream(args.fallback_url)
             if isinstance(fb_info, dict) and fb_info.get("id"):
-                # Temporarily inject candidate through second pass if not already completed
                 state = load_json(STATE_PATH, {})
                 st = state.get(str(fb_info["id"]), {}) if isinstance(state, dict) else {}
                 if not (isinstance(st, dict) and st.get("completed")):
