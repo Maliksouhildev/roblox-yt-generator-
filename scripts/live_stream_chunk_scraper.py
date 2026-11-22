@@ -1018,8 +1018,30 @@ def build_download_commands(meta: dict, start_sec: int, end_sec: int, out_base: 
     ]
 
 
+_LIGHT_INFO_KEYS = (
+    "id", "title", "fulltitle", "description", "uploader", "uploader_id",
+    "channel", "display_id", "duration", "is_live", "live_status",
+    "extractor", "extractor_key", "webpage_url", "release_timestamp",
+    "timestamp", "view_count", "concurrent_view_count", "concurrent_viewers",
+    "categories", "tags", "chapters", "heatmap",
+    "chunk_start_sec", "chunk_end_sec",
+)
+
+
+def _compact_info_doc(doc: dict) -> dict:
+    """Strip bulky formats/thumbnails/captions while keeping heatmap, chapters, creator, and chunk bounds."""
+    if not isinstance(doc, dict):
+        return {}
+    slim = {k: doc[k] for k in _LIGHT_INFO_KEYS if k in doc and doc[k] is not None}
+    if "description" in slim and isinstance(slim["description"], str) and len(slim["description"]) > 1500:
+        slim["description"] = slim["description"][:1500]
+    if "tags" in slim and isinstance(slim["tags"], list):
+        slim["tags"] = slim["tags"][:30]
+    return slim
+
+
 def _stamp_chunk_bounds_in_info_json(info_path: str, start_sec: float, end_sec: float) -> None:
-    """Record chunk_start_sec / chunk_end_sec inside the chunk's .info.json for local heatmap alignment."""
+    """Compact .info.json & stamp chunk_start_sec / chunk_end_sec + heatmap for local alignment."""
     if not info_path or not os.path.isfile(info_path):
         return
     try:
@@ -1027,10 +1049,11 @@ def _stamp_chunk_bounds_in_info_json(info_path: str, start_sec: float, end_sec: 
             doc = json.load(f)
         if not isinstance(doc, dict):
             return
-        doc["chunk_start_sec"] = round(float(start_sec), 2)
-        doc["chunk_end_sec"] = round(float(end_sec), 2)
+        slim = _compact_info_doc(doc)
+        slim["chunk_start_sec"] = round(float(start_sec), 2)
+        slim["chunk_end_sec"] = round(float(end_sec), 2)
         with open(info_path, "w", encoding="utf-8") as f:
-            json.dump(doc, f, ensure_ascii=False)
+            json.dump(slim, f, ensure_ascii=False)
     except Exception:
         pass
 
@@ -1314,6 +1337,7 @@ def run_scraper(
             if os.path.exists(tw_tmp_base + ".info.json"):
                 shutil.move(tw_tmp_base + ".info.json", out_base + ".info.json")
             new_end_sec = last_end_sec + int(round(dur))
+            _stamp_chunk_bounds_in_info_json(out_base + ".info.json", last_end_sec, new_end_sec)
         else:
             _remove_prefix_files(tw_tmp_base)
             cleanup_partial_files(out_base)

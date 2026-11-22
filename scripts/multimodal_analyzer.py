@@ -340,6 +340,8 @@ def analyze_face_reactions(video_path: str, cam_config_path: str, sample_interva
                 intensity = max(intensity, 75.0)
             if head_vel > 0.15:
                 intensity = min(100.0, intensity + 12.0)
+            if mouth_motion >= 0.045:
+                intensity = min(100.0, max(intensity + 8.0, 58.0))
 
             records.append({
                 "time": round(curr_time, 2),
@@ -615,9 +617,17 @@ def run_fusion(
     else:
         w_chat, w_face, w_audio = 0.0, 0.0, 1.0
 
+    # Penalize passive / dead-air seconds lacking vocal energy & lacking face motion delta
+    avg_bin_rms = {int(round(float(b.get("t", 0.0)))): float(b.get("db", -30.0)) for b in (audio_meta.get("raw_bins") or [])}
+    med_stream_rms = float(audio_meta.get("median_rms_db", -28.0) or -28.0)
     for item in timeline:
-        comp = (w_chat * item["chat_score"]) + (w_face * item["face_score"]) + (w_audio * item["audio_score"])
-        item["composite_score"] = round(comp, 1)
+        sec_i = int(round(item["time"]))
+        rms_v = avg_bin_rms.get(sec_i)
+        passive_penalty = 0.0
+        if rms_v is not None and rms_v < (med_stream_rms - 6.0) and item["face_score"] < 45.0 and item["chat_score"] < 40.0:
+            passive_penalty = 18.0
+        comp = (w_chat * item["chat_score"]) + (w_face * item["face_score"]) + (w_audio * item["audio_score"]) - passive_penalty
+        item["composite_score"] = round(max(0.0, comp), 1)
 
     # Find Peaks
     peaks = []

@@ -47,12 +47,14 @@ SHOCK_SPEECH_RE = re.compile(
     re.I,
 )
 HOUSEKEEPING_RE = re.compile(
-    r"(thank you for the super\s*chat|get your entries in|enter you into the giveaway|"
+    r"(thank you for the super\s*chat|for the super chat|get your entries in|enter you into the giveaway|"
     r"type [a-z0-9]+ into the chat|thank you for the raid|thanks for the raid|welcome raiders|"
     r"we'?re going to say bye|going to say bye|ending the stream|see you next time|don'?t forget to subscribe|"
     r"make sure to subscribe|subscribe to the channel|everybody subscribe|hit the like button|"
     r"smash (?:that |the )?like|thanks? for watching|peace out everybody|comment\b[^.?!]{0,40}\btomorrow|"
-    r"thank you so much for watching|catch you guys tomorrow|subathon timer|shoutout to the raiders)",
+    r"thank you so much for watching|catch you guys tomorrow|subathon timer|shoutout to the raiders|"
+    r"gifted\s+\w*\s*premiums|gifted\s+(?:subs?|memberships?)|thank you for the \$\d|"
+    r"welcome to the champions club|thank you for subscribing)",
     re.I,
 )
 GTA6_PROMPT_HALLUCINATION_TOKENS = (
@@ -630,6 +632,18 @@ def extract_top_candidates(
             w_start = max(lo_bound, min(w_start, float(w_end) - 24.0))
             w_end = min(hi_bound, max(w_end, w_start + 30.0))
 
+        # 0-3s Hook Energy Check: shift w_start forward if first 3s lack speech AND lack vocal/face spike
+        if sentences:
+            h_words = sum(int(s.get("word_count", 0)) for s in win_sents if float(s["end"]) >= w_start and float(s["start"]) <= w_start + 3.0)
+            h_zdb = max((float((raw_bins.get(sec) or {}).get("z_db", 0.0)) for sec in range(int(w_start), int(w_start + 3.0) + 1)), default=0.0)
+            h_zf = max((float(face_scores.get(sec, 0.0)) for sec in range(int(w_start), int(w_start + 3.0) + 1)), default=0.0)
+            if h_words < 2 and h_zdb < 1.5 and h_zf < 1.0:
+                active_early = [s for s in win_sents if float(s["end"]) <= float(t_peak) - 3.0 and int(s.get("word_count", 0)) >= 2]
+                if active_early:
+                    cand_shift = max(w_start, float(active_early[0]["start"]) - 0.25)
+                    if (w_end - cand_shift) >= 16.0:
+                        w_start = cand_shift
+
         win_sents = [s for s in sentences if w_start <= (s["start"] + s["end"]) * 0.5 <= w_end]
         if dense_tx and sum(int(s.get("word_count", 0)) for s in win_sents) < 10:
             continue
@@ -686,21 +700,21 @@ def extract_top_candidates(
         wpm_val = word_sum / (win_dur_s / 60.0)
         if wpm_val >= 145.0:
             win_tags.append(f"[WPM_SPIKE:{int(round(wpm_val))}wpm]")
-        if any(SHOCK_SPEECH_RE.search(str(s.get("text") or "")) for s in win_sents) and not any("dB_PEAK" in t or "SCREAM" in t for t in win_tags):
+        shock_hits = sum(1 for s in win_sents if SHOCK_SPEECH_RE.search(str(s.get("text") or "")))
+        if (shock_hits >= 2 or (shock_hits >= 1 and (peak_z_db >= 1.4 or wpm_val >= 165.0))) and not any("dB_PEAK" in t or "SCREAM" in t for t in win_tags):
             win_tags.append("[WPM_SPIKE:SHOCK_EXCLAIM]")
         streamer_spoken_sec = 0.0
         for si_l, s in enumerate(win_sents):
             m, sec_f = divmod(max(0.0, s["start"]), 60.0)
             q_tag = " [CHAT_QUESTION_CLUSTER]" if (q_cluster and si_l == len(win_sents) // 2) else ""
             lines.append(f"[{int(m):02d}:{sec_f:04.1f} | {s['speaker_tag']}{q_tag}] {s['text']}")
-            if s.get("speaker_tag") == "STREAMER":
+            if s.get("speaker_tag") in ("[STREAMER]", "STREAMER"):
                 streamer_spoken_sec += max(0.0, min(w_end, float(s["end"])) - max(w_start, float(s["start"])))
             for tg in (s.get("tags") or []):
                 if tg not in win_tags:
                     win_tags.append(tg)
         streamer_silence_ratio = round(max(0.0, min(1.0, 1.0 - (streamer_spoken_sec / win_dur_s))), 3)
 
-        shock_hits = sum(1 for s in win_sents if SHOCK_SPEECH_RE.search(str(s.get("text") or "")))
         peak_z_crowd = max(peak_z_chat, peak_z_hm)
         sig_strength = (
             (1.15 if peak_z_db >= 2.8 else (0.85 if peak_z_db >= 2.1 else (0.35 if peak_z_db >= 1.4 else 0.0)))

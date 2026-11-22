@@ -52,7 +52,12 @@ MYSTERY_PATTERNS = re.compile(
     re.I,
 )
 HOUSEKEEPING_NOISE = re.compile(
-    r"(thank you for the super\s*chat|for the super chat|get your entries in|enter you into the giveaway|type [a-z0-9]+ into the chat|friend request|let me search him up|make a [0-9,]+ game\s*pass|every giveaway we do|draw a winner|stops the bots|spam the word|thank you for the raid|thanks for the raid|welcome raiders|watch till the end of the stream|keep counter|we'?re going to say bye|ending the stream|see you next time)",
+    r"(thank you for the super\s*chat|for the super chat|get your entries in|enter you into the giveaway|"
+    r"type [a-z0-9]+ into the chat|friend request|let me search him up|make a [0-9,]+ game\s*pass|every giveaway we do|"
+    r"draw a winner|stops the bots|spam the word|thank you for the raid|thanks for the raid|welcome raiders|"
+    r"watch till the end of the stream|keep counter|we'?re going to say bye|ending the stream|see you next time|"
+    r"gifted\s+\w*\s*premiums|gifted\s+(?:subs?|memberships?)|thank you for the \$\d|"
+    r"welcome to the champions club|thank you for subscribing)",
     re.I,
 )
 STOPWORDS = {
@@ -433,6 +438,65 @@ def build_sentences_with_cadence(words: list):
     return sentences
 
 
+def load_heatmap_peaks(heatmap_path=None, info_path=None, video_path="", duration=3600.0):
+    """Load chunk-aligned YouTube 'Most Replayed' heatmap peaks from heatmap_peaks.json or .info.json."""
+    peaks = []
+    if heatmap_path and os.path.exists(heatmap_path):
+        try:
+            doc = json.load(open(heatmap_path, "r", encoding="utf-8", errors="ignore"))
+            if isinstance(doc, dict) and isinstance(doc.get("peaks"), list):
+                return doc["peaks"]
+        except Exception:
+            pass
+    default_hm = "/files/temp/heatmap_peaks.json"
+    if not heatmap_path and os.path.exists(default_hm):
+        try:
+            doc = json.load(open(default_hm, "r", encoding="utf-8", errors="ignore"))
+            if isinstance(doc, dict) and isinstance(doc.get("peaks"), list) and doc["peaks"]:
+                return doc["peaks"]
+        except Exception:
+            pass
+
+    cand_info = []
+    if info_path:
+        cand_info.append(info_path)
+    if video_path:
+        stem = re.sub(r"(\.processing)?\.mp4$", "", os.path.basename(video_path), flags=re.I)
+        d0 = os.path.dirname(video_path) or "/files/inputs"
+        for d in (d0, "/files/inputs"):
+            cand_info.extend([
+                os.path.join(d, f"{stem}.processing.info.json"),
+                os.path.join(d, f"{stem}.info.json"),
+            ])
+    found = next((p for p in cand_info if p and os.path.isfile(p)), "")
+    if not found:
+        return peaks
+    try:
+        doc = json.load(open(found, "r", encoding="utf-8", errors="ignore"))
+        raw_hm = doc.get("heatmap") or []
+        if not isinstance(raw_hm, list) or not raw_hm:
+            return peaks
+        chunk_start = float(doc.get("chunk_start_sec") or 0.0)
+        eff_dur = float(duration or doc.get("duration") or 3600.0)
+        local_b = []
+        for entry in raw_hm:
+            if not isinstance(entry, dict):
+                continue
+            st = float(entry.get("start_time", 0.0)) - chunk_start
+            en = float(entry.get("end_time", st + 1.0)) - chunk_start
+            val = max(0.0, min(1.0, float(entry.get("value", 0.0))))
+            if en <= 0.0 or st >= eff_dur:
+                continue
+            local_b.append({"start": round(max(0.0, st), 2), "end": round(min(eff_dur, en), 2), "mid": round((max(0.0, st) + min(eff_dur, en)) * 0.5, 2), "value": round(val, 4)})
+        if local_b:
+            vals = sorted((b["value"] for b in local_b), reverse=True)
+            cut15 = vals[min(14, len(vals) - 1)]
+            peaks = [b for b in local_b if b["value"] >= 0.55 or (b["value"] >= cut15 and b["value"] >= 0.35)]
+    except Exception:
+        pass
+    return peaks
+
+
 def build_unified_index(
     transcript_path=None,
     audio_energy_path=None,
@@ -442,6 +506,8 @@ def build_unified_index(
     top_k=20,
     save_cache=True,
     stream_file=None,
+    heatmap_path=None,
+    info_path=None,
 ):
     active_stream = _resolve_active_stream(stream_file)
     whisper = load_whisper(transcript_path)
@@ -451,6 +517,7 @@ def build_unified_index(
 
     sentences = build_sentences_with_cadence(whisper["words"])
     duration = whisper["duration"] or (sentences[-1]["end"] if sentences else 3600.0)
+    heatmap_peaks = load_heatmap_peaks(heatmap_path=heatmap_path, info_path=info_path, video_path=active_stream, duration=duration)
 
     # Pre-index raw audio RMS bins & face motion samples for fast O(log N) lookup
     raw_bins = sorted(audio_meta.get("raw_bins") or [], key=lambda x: x.get("t", 0.0))
@@ -578,6 +645,12 @@ def build_unified_index(
             else:
                 tags.append(f"[FACE:{str(best_f.get('dominant', 'reaction')).upper()}]")
 
+        matched_hm = [h for h in heatmap_peaks if float(h.get("start", 0.0)) <= en + 4.0 and float(h.get("end", 0.0)) >= st - 4.0]
+        if matched_hm:
+            best_hm = max(matched_hm, key=lambda h: float(h.get("value", 0.0)))
+            tags.append(f"[HEATMAP_PEAK:val={float(best_hm.get('value', 0.0)):.2f}]")
+            tags.append("[CROWD_REPLAY]")
+
         tag_str = (" " + " ".join(tags)) if tags else ""
         line_str = f"[{st:.1f}s - {en:.1f}s | {format_mmss(st)}]{tag_str} {s['text']}"
         s["tags"] = tags
@@ -590,9 +663,11 @@ def build_unified_index(
     num_sec = max(1, int(math.ceil(duration)))
     z_db_sec = [0.0] * num_sec
     z_chat_sec = [0.0] * num_sec
+    z_heatmap_sec = [0.0] * num_sec
     z_face_sec = [0.0] * num_sec
     z_wpm_sec = [0.0] * num_sec
     i_viewer_sec = [0.0] * num_sec
+    streamer_speech_sec = [0.0] * num_sec
     sec_audio = [None] * num_sec
     sec_chat = [None] * num_sec
     sec_face = [None] * num_sec
@@ -621,6 +696,15 @@ def build_unified_index(
                 z_chat_sec[u] = zv
                 sec_chat[u] = c
 
+    for hp in heatmap_peaks:
+        hs0 = min(num_sec - 1, max(0, int(float(hp.get("start", 0.0)))))
+        hs1 = min(num_sec - 1, max(hs0, int(float(hp.get("end", hs0 + 1.0)))))
+        hv = max(0.0, min(1.0, float(hp.get("value", 0.0))))
+        zv_hm = round(1.5 + hv * 2.3, 3)
+        for u in range(hs0, hs1 + 1):
+            if zv_hm > z_heatmap_sec[u]:
+                z_heatmap_sec[u] = zv_hm
+
     face_intens = [float(fe.get("intensity", 50.0)) for fe in face_events] or [50.0]
     mean_fi = sum(face_intens) / len(face_intens)
     std_fi = max(15.0, math.sqrt(sum((x - mean_fi) ** 2 for x in face_intens) / len(face_intens)))
@@ -633,6 +717,21 @@ def build_unified_index(
                 z_face_sec[u] = zv
                 sec_face[u] = fe
 
+    # Incorporate raw webcam mouth/head motion deltas from samples
+    head_vels = [float(fs.get("head_vel", 0.0)) for fs in face_samples_sorted if fs.get("head_vel") is not None]
+    med_hv = sorted(head_vels)[len(head_vels) // 2] if len(head_vels) >= 5 else 0.05
+    for fs in face_samples_sorted:
+        sec_i = min(num_sec - 1, max(0, int(float(fs.get("time", 0.0)))))
+        mm_v = float(fs.get("mouth_motion", 0.0))
+        hv_v = float(fs.get("head_vel", 0.0))
+        delta_z = 0.0
+        if med_mouth_motion > 0.015 and mm_v > med_mouth_motion * 1.8:
+            delta_z += min(1.5, (mm_v / max(0.01, med_mouth_motion)) * 0.45)
+        if med_hv > 0.01 and hv_v > med_hv * 1.9:
+            delta_z += min(1.5, (hv_v / max(0.01, med_hv)) * 0.45)
+        if delta_z > 0.0:
+            z_face_sec[sec_i] = max(z_face_sec[sec_i], round(delta_z, 3))
+
     penalty_sec = [0.0] * num_sec
     bonus_sec = [0.0] * num_sec
     for s in annotated_lines:
@@ -641,6 +740,8 @@ def build_unified_index(
         sec_sents[st_s].append(s)
         zv_wpm = max(0.0, float(s.get("z_wpm", 0.0)))
         for u in range(st_s, en_s + 1):
+            if not s.get("is_viewer_voice"):
+                streamer_speech_sec[u] = 1.0
             if zv_wpm > z_wpm_sec[u]:
                 z_wpm_sec[u] = zv_wpm
             if s.get("is_viewer_voice"):
@@ -655,11 +756,19 @@ def build_unified_index(
         max_db = max(z_db_sec[max(0, t - 1):min(num_sec, t + 2)])
         chat_slice = z_chat_sec[min(num_sec - 1, t + 3):min(num_sec, t + 9)]
         max_chat = max(chat_slice) if chat_slice else 0.0
+        hm_slice = z_heatmap_sec[max(0, t - 3):min(num_sec, t + 5)]
+        max_hm = max(hm_slice) if hm_slice else 0.0
+        max_crowd = max(max_chat, max_hm)
         max_face = z_face_sec[t]
         max_wpm = z_wpm_sec[t]
         iv_slice = i_viewer_sec[max(0, t - 3):min(num_sec, t + 1)]
         i_viewer = 1.0 if (iv_slice and max(iv_slice) > 0.0) else 0.0
-        vt = (0.25 * max_db) + (0.30 * max_chat) + (0.20 * max_face) + (0.15 * max_wpm) + (0.10 * i_viewer) + bonus_sec[t] - penalty_sec[t]
+        # Penalize silent/passive cutscene windows lacking streamer speech and face/vocal spike
+        sp_win = streamer_speech_sec[max(0, t - 4):min(num_sec, t + 5)]
+        sp_cov = (sum(sp_win) / max(1, len(sp_win))) if sp_win else 0.0
+        sil_pen = 0.9 if (sentences and sp_cov < 0.25 and max_db < 1.8 and max_face < 1.2) else 0.0
+        hm_fusion_boost = 0.45 if (max_hm >= 1.5 and (max_face >= 0.8 or max_db >= 1.2)) else 0.0
+        vt = (0.25 * max_db) + (0.30 * max_crowd) + (0.20 * max_face) + (0.15 * max_wpm) + (0.10 * i_viewer) + bonus_sec[t] + hm_fusion_boost - penalty_sec[t] - sil_pen
         v_scores.append((t, vt))
 
     v_scores.sort(key=lambda x: x[1], reverse=True)

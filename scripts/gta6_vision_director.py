@@ -50,9 +50,10 @@ GTA6_ARCHETYPES = [
 TRANSITIVE_OR_DANGLING_WORDS = (
     "TO|A|AN|THE|OF|IN|ON|AT|FOR|WITH|FROM|BY|AND|OR|BUT|IF|IS|ARE|WAS|WERE|"
     "DO|DOES|DID|NOT|GOING|HAVE|HAS|MY|YOUR|OUR|THEIR|THIS|THAT|I|ME|HE|SHE|WE|THEY|"
-    "WE'RE|I'M|IT'S|I'VE|WE'VE|YOU'VE|THEY'VE|HE'S|SHE'S|DON'T|DIDN'T|WON'T|CAN'T|"
+    "WE'RE|I'M|IT'S|I'VE|WE'VE|YOU'VE|THEY'VE|HE'S|SHE'S|DON'T|DIDN'T|WASN'T|COULDN'T|WOULDN'T|SHOULDN'T|WON'T|CAN'T|"
     "LIKE|LOVE|HATE|DESPISE|WANT|NEED|KNOW|THINK|FEEL|SEE|SAW|LOOK|WATCH|GOT|GET|"
-    "MAKE|MADE|TAKE|TOOK|GIVE|GAVE|PUT|SAY|SAID|TELL|TOLD|FIND|FOUND|LET|KEEP|TRY|TRIED|USE|USED|ACTUALLY|REALLY"
+    "MAKE|MADE|TAKE|TOOK|GIVE|GAVE|PUT|SAY|SAID|TELL|TOLD|FIND|FOUND|LET|KEEP|TRY|TRIED|USE|USED|"
+    "ACTUALLY|REALLY|JUST|VERY|TOO|TRULY|LITERALLY|DEFINITELY|TOTALLY|COMPLETELY|STILL|ALREADY|BEING|GETTING|COMING|TRYING"
 )
 
 DANGLING_HOOK_END_RE = re.compile(rf"\b({TRANSITIVE_OR_DANGLING_WORDS})\s*[.!?]*$", re.I)
@@ -87,9 +88,11 @@ RAW_INTERJECTION_START_RE = re.compile(
     re.I,
 )
 ROBOTIC_COPY_RE = re.compile(
-    r"(?:^streamer\s+(?:reflects|tries|attempts|gets|experiences|reacts|is\s+seen)\b|"
+    r"(?:^(?:the\s+)?(?:streamer|doc|creator|he|she|bro)\s+(?:reflects|tries|attempts|gets|experiences|reacts|breaks\s+down|explains|vents|discusses|shares|claims|declares|is\s+seen)\b|"
+    r"\b(?:breaks\s+down|explains\s+(?:his|her|the)|vents\s+about|declares\s+himself)\b|"
     r"bro\s+really\s+said\s+[\"']|right\s+before\s+everything\s+went\s+sideways|"
     r"did\s+you\s+see\s+that\s+coming\s+at|fallback\s+offline\s+mode|watch\s+closely\s+around|"
+    r"live\s+gameplay\s+(?:reaction\s+peak|moment(?:\s+at)?)|"
     r"^gta6_(?:peak_)?clip_\d+$|^crazy\s+leonida\s+moment\s+\d+$)",
     re.I,
 )
@@ -631,18 +634,20 @@ def _guard_and_format_hook(raw_hook: str, raw_text: str, title: str) -> str:
 
 
 def _safe_hook_from_text(text: str, title: str) -> str:
-    """Synthesize a clean 3-5 word (<=28 char) grounded headline without mid-clause truncation or dangling verbs."""
+    """Synthesize a clean 3-7 word (<=38 char) grounded headline without mid-clause truncation or dangling verbs."""
     t_clean = _strip_unspoken_clickbait(title, text)
     # Try clean title words first if headline-like (not generic)
     t_words = [
         w.upper() for w in re.findall(r"[A-Za-z0-9']+", str(t_clean or ""))
         if not re.match(r"^(PEAK|CLIP|MOMENT|GAMING)$", w, re.I)
-    ][:5]
+    ][:7]
     while t_words and DANGLING_HOOK_END_RE.match(t_words[-1]) and len(t_words) > 3:
         t_words.pop()
-    while t_words and len(" ".join(t_words)) > 28 and len(t_words) > 3:
+    while t_words and len(" ".join(t_words)) > 38 and len(t_words) > 3:
         t_words.pop()
-    if 3 <= len(t_words) <= 5 and len(" ".join(t_words)) <= 28 and not DANGLING_HOOK_END_RE.match(t_words[-1]):
+    while t_words and DANGLING_HOOK_END_RE.match(t_words[-1]) and len(t_words) > 3:
+        t_words.pop()
+    if 3 <= len(t_words) <= 7 and len(" ".join(t_words)) <= 38 and not DANGLING_HOOK_END_RE.match(t_words[-1]):
         return " ".join(t_words)
 
     clean_words = re.findall(r"[A-Za-z0-9']+", _strip_unspoken_clickbait(text, text))
@@ -658,13 +663,13 @@ def _safe_hook_from_text(text: str, title: str) -> str:
             continue
         if wu not in kept:
             kept.append(wu)
-        if len(kept) >= 5:
+        if len(kept) >= 6:
             break
     while kept and DANGLING_HOOK_END_RE.match(kept[-1]) and len(kept) > 3:
         kept.pop()
-    while kept and len(" ".join(kept)) > 28 and len(kept) > 3:
+    while kept and len(" ".join(kept)) > 38 and len(kept) > 3:
         kept.pop()
-    if 3 <= len(kept) <= 5 and len(" ".join(kept)) <= 28 and not DANGLING_HOOK_END_RE.match(kept[-1]):
+    if 3 <= len(kept) <= 7 and len(" ".join(kept)) <= 38 and not DANGLING_HOOK_END_RE.match(kept[-1]):
         return " ".join(kept)
     return "LIVE STREAM CHAOS REACTION"
 
@@ -675,69 +680,99 @@ def _strip_speaker_prefix(line: str) -> str:
     return s.lstrip("] ").strip()
 
 
+_TOPIC_HOOK_KEYWORDS = (
+    (re.compile(r"\b(?:alligator|gator|croc)\b", re.I), ("Gator Ambush In Vice City", "A Vice City gator ruined everything here", "Leonida gators have zero chill", "Even the wildlife here picks fights mid-chase.", "would you survive a Leonida swamp")),
+    (re.compile(r"\b(?:swat|tactical|raid|skylight|breach)\b", re.I), ("SWAT Breached Mid Stream", "SWAT had zero chill right here", "SWAT dropped through the roof", "Zero warning before three officers crashed straight into the room.", "how do you even escape that breach")),
+    (re.compile(r"\b(?:chopper|helicopter)\b", re.I), ("Mid Air Chopper Collision", "That chopper did not expect this", "That helicopter had no chance", "One bad turn launched the whole chase right into the chopper.", "was that skill or pure physics luck")),
+    (re.compile(r"\b(?:motorcycle|bike|wheelie)\b", re.I), ("Highway Bike Wipeout Live", "That highway wheelie ended instantly", "Motorcycle getaway ended too fast", "One second of flexing on the highway turned into an instant ragdoll.", "instant karma or terrible luck")),
+    (re.compile(r"\b(?:cop|cops|police|5-star|five star|six star|wasted|busted)\b", re.I), ("Five Star Police Box In", "Vice City cops never let up", "GTA 6 cops have zero chill", "Cops boxed every exit the second that siren went off.", "how long are you lasting at five stars")),
+    (re.compile(r"\b(?:npc|security|guard|performer)\b", re.I), ("Unpredictable Vice City NPC", "This NPC woke up choosing chaos", "Leonida NPCs are built different", "Rockstar really gave these NPCs way too much attitude.", "best NPC reaction you've seen yet")),
+    (re.compile(r"\b(?:truck|car|van|ramp|bridge|crash)\b", re.I), ("Insane Highway Bridge Launch", "Nobody expected that bridge launch", "Physics went crazy right here", "One clipped curb launched the whole ride straight off the bridge.", "GTA physics really locked in here")),
+)
+
+
+def _extract_topic_phrase(raw_text: str) -> str:
+    """Extract a crisp 2-3 content word phrase from transcript avoiding filler/profanity."""
+    stop = {
+        "the", "and", "that", "this", "with", "just", "like", "yeah", "okay", "what", "when", "where",
+        "they", "them", "there", "their", "have", "from", "about", "right", "here", "really", "actually",
+        "going", "gonna", "wanna", "bro", "dude", "guys", "wait", "whoa", "huh", "shit", "fuck", "fucking",
+        "mean", "know", "think", "look", "see", "get", "got", "make", "said", "going", "youre", "dont",
+    }
+    toks = [w for w in re.findall(r"[A-Za-z][A-Za-z']{2,12}", str(raw_text or "")) if w.lower() not in stop]
+    seen = []
+    for w in toks:
+        wl = w.lower()
+        if wl not in {x.lower() for x in seen}:
+            seen.append(w.capitalize() if wl not in _HOOK_SPECIAL_CASE else _HOOK_SPECIAL_CASE[wl])
+        if len(seen) >= 3:
+            break
+    return " ".join(seen)
+
+
 def _synthesize_clean_metadata(
     arch: str,
     visual_ev: str,
     streamer_handle: str = "",
     idx: int = 1,
     is_spoiler: bool = False,
+    raw_text: str = "",
+    used_titles: set | None = None,
 ) -> dict:
-    """Synthesize punchy, natural metadata from visual_event_description + archetype + streamer (NEVER raw Whisper filler)."""
+    """Synthesize unique, natural 19yo clip-editor metadata from topic keywords + archetype (ZERO robotic templates)."""
     creator = str(streamer_handle or "").strip().lstrip("@")
     short_creator = creator if (creator and creator.lower() not in {"streamer", "unknown"}) else "Bro"
     vis = str(visual_ev or "").strip()
-    is_generic_vis = not vis or bool(re.search(r"3x3\s+(?:grid|storyboard)|centered around reaction peak|active webcam reaction", vis, re.I))
-
-    arch_defaults = {
-        "OPEN_WORLD_CHAOS_OR_COP_CHASE": (
-            "GTA 6 Cops Showed Zero Mercy",
-            f"{short_creator} couldn't escape this GTA 6 chaos",
-            "GTA 6 cops have zero chill",
-            "Everything went from zero to six-star chaos in two seconds flat.",
-            "scale of 1-10 how cooked was he here",
-        ),
-        "LEONIDA_NPC_ENCOUNTER_OR_ROAST": (
-            "Vice City NPC Caught Him Off Guard",
-            f"{short_creator} wasn't ready for this GTA 6 NPC",
-            f"{short_creator} wasn't ready for this NPC",
-            "Leonida NPCs really wake up choosing chaos every single time.",
-            "nah why did that NPC actually do that",
-        ),
-        "HUBRIS_WAGER_WASTED_KARMA": (
-            "Instant Karma in Vice City",
-            f"{short_creator} talked crazy and got humbled in GTA 6",
-            "Bro got humbled in two seconds",
-            "Talked big for one second and the game immediately humbled him.",
-            "instant karma or total bad luck",
-        ),
-        "HOW_TO_TIP_OR_SECRET_DISCOVERY": (
-            "Hidden Detail Caught Live in GTA 6",
-            f"{short_creator} found a wild detail in GTA 6",
-            "Rockstar really put this in GTA 6",
-            "Blink and you'd miss this insane detail Rockstar hid in Leonida.",
-            "did anyone else even notice this detail",
-        ),
-        "COMEDIC_BANTER_OR_SARCASM": (
-            "Unfiltered Live GTA 6 Moment",
-            f"{short_creator} completely lost it in GTA 6",
-            "He really didn't see this coming",
-            "Chat was losing it the second this unfolded live on stream.",
-            "clip of the day or nah",
-        ),
-        "STORY_CUTSCENE_OR_TWIST_REACTION": (
-            "Wild GTA 6 Story Moment Live",
-            f"{short_creator} was speechless during this GTA 6 scene",
-            "His reaction says everything here",
-            "Zero chance anyone expected that turn live on stream.",
-            "did that scene catch you off guard too",
-        ),
-    }
-    base_title, base_yt, base_hook, base_desc, base_comment = arch_defaults.get(
-        arch,
-        arch_defaults["OPEN_WORLD_CHAOS_OR_COP_CHASE"],
+    is_generic_vis = (
+        not vis
+        or bool(ROBOTIC_COPY_RE.search(vis))
+        or bool(re.search(r"3x3\s+(?:grid|storyboard)|centered around reaction peak|active webcam reaction|\bt=\d+(?:\.\d+)?s\b", vis, re.I))
     )
 
-    if not is_generic_vis:
+    arch_pools = {
+        "OPEN_WORLD_CHAOS_OR_COP_CHASE": [
+            ("Vice City Chase Went Sideways", f"{short_creator} couldn't shake this wild chase", "This chase got out of control", "Two wrong turns later the entire lobby had sirens on his bumper.", "how long would you survive that chase"),
+            ("Zero Escape From Vice PD", f"{short_creator} walked straight into a trap here", "Nowhere left to run here", "No backup, zero cover, and somehow he still tried to talk his way out.", "did he actually deserve that takedown"),
+            ("Total Chaos On The Highway", f"{short_creator} turned a normal drive into mayhem", "Everything exploded in two seconds", "One risky shortcut triggered absolute mayhem down the block.", "cleanest escape attempt or total throw"),
+        ],
+        "LEONIDA_NPC_ENCOUNTER_OR_ROAST": [
+            ("Vice City NPC Stole The Scene", f"{short_creator} wasn't ready for this wild NPC", "Leonida NPCs have zero filter", "The NPC barely paused before stealing the entire moment live.", "why do these NPCs act like real players"),
+            ("Street Encounter Gone Wrong", f"{short_creator} picked the wrong NPC to test", "He really tested the wrong NPC", "Tried talking slick on the sidewalk and immediately regretted it.", "would you walk away or fight back"),
+            ("Unscripted Street Comedy Live", f"{short_creator} couldn't hold it together here", "This NPC confrontation was unreal", "Zero script, just pure unhinged Vice City sidewalk energy.", "rate that NPC comeback out of 10"),
+        ],
+        "HUBRIS_WAGER_WASTED_KARMA": [
+            ("Confidence Backfired In Two Seconds", f"{short_creator} talked crazy right before chaos hit", "Confidence backfired in two seconds", "Talked bold for half a beat before the game immediately humbled him.", "instant karma or just terrible timing"),
+            ("Biggest Jinx Of The Stream", f"{short_creator} jinxed himself live on stream", "He literally called it right before", "Set himself up with the cleanest jinx of the whole broadcast.", "best jinx of the week or nah"),
+            ("Famous Last Words Live", f"{short_creator} said one thing too many here", "Those famous last words hurt", "You can hear the exact moment his confidence left the room.", "scale of 1-10 how cooked was he"),
+        ],
+        "HOW_TO_TIP_OR_SECRET_DISCOVERY": [
+            ("Hidden Spot Caught Live", f"{short_creator} stumbled onto a wild hidden detail", "Blink and you'd miss this detail", "Almost drove right past a detail most players completely miss.", "did you already know about this spot"),
+            ("Wild Mechanics Test Paid Off", f"{short_creator} tested a sneaky trick live", "This sneaky trick actually worked", "Chat swore it wouldn't work until the timing lined up cleanly.", "actually useful trick or pure luck"),
+            ("Secret Route Saved The Run", f"{short_creator} pulled off an unreal secret line", "Wait that route actually worked", "Found the tightest shortcut under pressure without crashing once.", "who else tries this shortcut next run"),
+        ],
+        "COMEDIC_BANTER_OR_SARCASM": [
+            ("Everyone Lost It At This Line", f"{short_creator} caught everyone off guard live", "He actually said that live", "Zero hesitation before dropping the funniest line of the stream.", "clip of the night or not even close"),
+            ("Deadpan Timing Hit Different", f"{short_creator} delivered the wildest timing here", "That timing hit way too hard", "You couldn't script a better comedic pause if you tried.", "did that joke catch you off guard"),
+            ("Chat Could Not Breathe Here", f"{short_creator} broke the whole call right here", "Everyone lost it at that line", "One offhand remark completely derailed the entire squad mid-run.", "who had the better reaction here"),
+        ],
+        "STORY_CUTSCENE_OR_TWIST_REACTION": [
+            ("Plot Twist Frozen Reaction", f"{short_creator} went dead silent at that twist", "Nobody expected that sudden turn", "Zero warning before that story beat flipped the entire scene.", "did that twist surprise you too"),
+            ("Wild Scene Caught Him Speechless", f"{short_creator} wasn't ready for that story turn", "He went dead silent for real", "Even chat froze for a full second watching that reveal hit.", "best story turn so far or nah"),
+            ("Shocked Silence Live On Stream", f"{short_creator} didn't see that reveal coming", "Everything just changed right there", "All the jokes stopped the millisecond that line dropped on screen.", "rate that reveal 1 to 10"),
+        ],
+    }
+    pool = arch_pools.get(arch, arch_pools["OPEN_WORLD_CHAOS_OR_COP_CHASE"])
+    base_title, base_yt, base_hook, base_desc, base_comment = pool[(max(1, idx) - 1) % len(pool)]
+
+    matched_kw = False
+    if raw_text:
+        for kw_re, (kw_t, kw_yt, kw_h, kw_d, kw_c) in _TOPIC_HOOK_KEYWORDS:
+            if kw_re.search(raw_text):
+                base_title, base_yt, base_hook, base_desc, base_comment = kw_t, kw_yt, kw_h, kw_d, kw_c
+                matched_kw = True
+                break
+
+    if not is_generic_vis and not matched_kw:
         vis_clean = re.sub(r"[^A-Za-z0-9'\s-]", " ", vis)
         vis_clean = re.sub(r"\s+", " ", vis_clean).strip()
         vis_words = [w for w in vis_clean.split() if len(w) <= 14][:7]
@@ -746,8 +781,38 @@ def _synthesize_clean_metadata(
             if len(" ".join(vis_words)) <= 48:
                 base_title = " ".join(w.capitalize() if w.lower() not in _HOOK_SPECIAL_CASE else _HOOK_SPECIAL_CASE[w.lower()] for w in vis_words[:6])
 
+    topic_p = _extract_topic_phrase(raw_text)
+    if used_titles is not None and base_title.lower() in used_titles:
+        # Differentiate deterministically with grounded topic words or alternate pool slot so filenames never collide
+        if topic_p and not RAW_INTERJECTION_START_RE.match(topic_p) and (topic_p.lower() + " chaos") not in used_titles:
+            cand_t = f"{topic_p} Moment" if len(topic_p.split()) >= 2 else f"{base_title} ({topic_p})"
+            if cand_t.lower() not in used_titles and not is_garbage_title_or_hook(cand_t, raw_text):
+                base_title = cand_t
+        if base_title.lower() in used_titles:
+            # Cycle across all archetype pools + grounded index labels
+            all_opts = [opt for opts in arch_pools.values() for opt in opts]
+            found_u = False
+            for off in range(len(all_opts)):
+                o_t, o_yt, o_h, o_d, o_c = all_opts[(idx + off) % len(all_opts)]
+                if o_t.lower() not in used_titles:
+                    base_title, base_yt, base_hook, base_desc, base_comment = o_t, o_yt, o_h, o_d, o_c
+                    found_u = True
+                    break
+            if not found_u:
+                suffixes = ("Part Two", "Round Two", "Replay", "Aftermath", "Extended", "Uncut")
+                for sf in suffixes:
+                    t_try = f"{base_title[:44]} {sf}"
+                    if t_try.lower() not in used_titles:
+                        base_title = t_try
+                        break
+                else:
+                    base_title = f"{base_title[:46]} Clip {idx}"
+
+    if used_titles is not None:
+        used_titles.add(base_title.lower())
+
     if is_spoiler and re.search(r"\b(dies|dead|betray|ending|killed)\b", base_hook, re.I):
-        base_hook = "His reaction says everything here"
+        base_hook = "Nobody expected that sudden turn"
 
     return {
         "title": base_title[:58],
@@ -820,12 +885,13 @@ def _smart_clip_title(hook: str, raw_txt: str, climax_q: str, arch: str, idx: in
     return _synthesize_clean_metadata(arch, visual_ev, streamer_handle=streamer_handle, idx=idx)["title"]
 
 
-def _build_short_description(cl: dict, cand_raw_txt: str = "", climax_q: str = "", visual_note: str = "", arch: str = "", streamer_handle: str = "") -> str:
-    """Guarantee a concrete, casual clip-editor description (zero robotic 3rd-person or 'Bro really said' slop)."""
+def _build_short_description(cl: dict, cand_raw_txt: str = "", climax_q: str = "", visual_note: str = "", arch: str = "", streamer_handle: str = "", idx: int = 1) -> str:
+    """Guarantee a concrete, casual clip-editor description (zero robotic 3rd-person or timestamp slop)."""
     explicit = str(cl.get("desc_line") or cl.get("short_description") or "").strip()
-    if explicit and len(explicit) >= 16 and not ROBOTIC_COPY_RE.search(explicit):
+    is_stale_vis = bool(re.search(r"\bt=\d+(?:\.\d+)?s\b|3x3\s+(?:grid|storyboard)|reaction peak", explicit, re.I))
+    if explicit and len(explicit) >= 16 and not ROBOTIC_COPY_RE.search(explicit) and not is_stale_vis:
         return explicit
-    return _synthesize_clean_metadata(arch or str(cl.get("narrative_archetype") or ""), visual_note, streamer_handle=streamer_handle)["short_description"]
+    return _synthesize_clean_metadata(arch or str(cl.get("narrative_archetype") or ""), visual_note, streamer_handle=streamer_handle, idx=idx, raw_text=cand_raw_txt)["short_description"]
 
 
 def _words_text(words: list, t0: float, t1: float) -> str:
@@ -843,19 +909,32 @@ def _words_text(words: list, t0: float, t1: float) -> str:
     return " ".join(out).strip()
 
 
-def _trim_leading_dead_air(st: float, en: float, words: list, payoff_t: float) -> tuple[float, float]:
-    """Advance clip start past >4.2s internal silent gaps only when >=34.0s duration remains before payoff."""
+def _trim_leading_dead_air(st: float, en: float, words: list, payoff_t: float, hi_bound: float | None = None) -> tuple[float, float]:
+    """Advance clip start past >1.5s leading silent gaps (0-3s Hook Energy Check), extending end within hi_bound if needed."""
     if not words:
         return st, en
-    seg_ws = [w for w in words if float(w.get("end", 0.0)) >= st and float(w.get("start", 0.0)) <= en]
+    max_hi = float(hi_bound) if hi_bound is not None else float(words[-1].get("end", en))
+    seg_ws = [w for w in words if float(w.get("end", 0.0)) >= st and float(w.get("start", 0.0)) <= max(en, max_hi)]
     if len(seg_ws) < 2:
         return st, en
-    for i in range(len(seg_ws) - 1):
+    # Hard 0-3s opening speech density check: if [st, st+3.0] has < 2 spoken words, advance start to real speech onset
+    w_in_3s = [w for w in seg_ws if float(w.get("start", 0.0)) <= st + 3.0]
+    if len(w_in_3s) < 2:
+        for i in range(len(seg_ws) - 1):
+            g = float(seg_ws[i + 1].get("start", 0.0)) - float(seg_ws[i].get("end", 0.0))
+            nxt_st = float(seg_ws[i + 1].get("start", 0.0))
+            if (g > 1.5 or nxt_st > st + 2.2) and nxt_st <= st + 12.0:
+                after_start = max(st, nxt_st - 0.20)
+                new_en = max(en, min(max_hi, after_start + 18.0))
+                if (new_en - after_start) >= 14.0 and (payoff_t <= after_start or after_start <= payoff_t - 4.0):
+                    return round(after_start, 2), round(new_en, 2)
+    for i in range(min(4, len(seg_ws) - 1)):
         g = float(seg_ws[i + 1].get("start", 0.0)) - float(seg_ws[i].get("end", 0.0))
-        if g > 4.2:
-            after_start = float(seg_ws[i + 1].get("start", st)) - 0.10
-            if (en - after_start) >= 34.0 and after_start <= payoff_t - 10.0:
-                return round(after_start, 2), en
+        if g > 2.2:
+            after_start = float(seg_ws[i + 1].get("start", st)) - 0.20
+            new_en = max(en, min(max_hi, after_start + 18.0))
+            if (new_en - after_start) >= 14.0 and (payoff_t <= after_start or after_start <= payoff_t - 4.0):
+                return round(after_start, 2), round(new_en, 2)
             before_end = float(seg_ws[i].get("end", en)) + 0.15
             if (before_end - st) >= 14.0 and payoff_t <= before_end + 1.0:
                 return st, round(before_end, 2)
@@ -878,7 +957,7 @@ def _snap_boundary_with_words(
     """
     if not words:
         return round(st, 2), round(en, 2), "", "", ""
-    st, en = _trim_leading_dead_air(st, en, words, payoff_t)
+    st, en = _trim_leading_dead_air(st, en, words, payoff_t, hi_bound=hi_bound)
 
     max_end = float(words[-1].get("end", hi_bound))
     lo = max(3.0, lo_bound - 2.0)
@@ -925,10 +1004,10 @@ def _snap_boundary_with_words(
         clean_starts.sort(key=lambda x: x[0])
         st = round(clean_starts[0][1], 2)
 
-    # 2. Ensure payoff aftermath (1.5s - 3.0s after payoff_t), duration 14.0s-39.5s, and strong terminal sentence
+    # 2. Ensure payoff aftermath (1.5s - 3.0s after payoff_t), duration 14.0s-37.5s, and strong terminal sentence
     min_dur_end = st + 14.5
     pref_end = max(min_dur_end, min(st + 34.0, (payoff_t + 2.5) if payoff_t > st else en))
-    max_target_end = min(hi, st + 39.5)
+    max_target_end = min(hi, st + 37.5)
     min_target_end = min(max_target_end, min_dur_end)
 
     clean_ends = []
@@ -1061,6 +1140,7 @@ def deterministic_candidate_fallback(
         _, max_clips = _target_clip_range(candidates)
 
     clips = []
+    used_titles: set[str] = set()
     for idx, c in enumerate(candidates[:max_clips], start=1):
         w0 = float(c.get("window_start", 10.0))
         w1 = float(c.get("window_end", w0 + 44.0))
@@ -1094,8 +1174,8 @@ def deterministic_candidate_fallback(
             if stripped and len(stripped.split()) >= 3 and not WEAK_TAIL_FILLER_RE.match(stripped):
                 climax_q = stripped[:70]
                 break
-        vis_ev = f"Live gameplay reaction peak around t={tp:.1f}s in Vice City."
-        synth = _synthesize_clean_metadata(arch, vis_ev, streamer_handle=streamer_handle, idx=idx, is_spoiler=False)
+        vis_ev = ""
+        synth = _synthesize_clean_metadata(arch, vis_ev, streamer_handle=streamer_handle, idx=idx, is_spoiler=False, raw_text=raw_txt, used_titles=used_titles)
         clean_segs = [{
             "start": round(st, 2),
             "end": round(en, 2),
@@ -1152,21 +1232,26 @@ def normalize_director_clips(
     streamer_handle: str = "",
     api_keys: list | None = None,
     mistral_keys: list | None = None,
+    min_clips: int | None = None,
 ) -> dict:
-    """Enforce single-scene window bounds, tight 14s-40s pacing, crowd/cutscene scoring, and non-filler titles."""
+    """Enforce single-scene window bounds, tight 14s-38s pacing, crowd/cutscene scoring, lazy-LLM candidate top-up, and non-filler titles."""
     cand_map = {c.get("candidate_id"): c for c in candidates}
     meme_set = set(meme_files)
     default_sfx = "vine-boom-sound-effect_KT89XIq.mp3" if "vine-boom-sound-effect_KT89XIq.mp3" in meme_set else meme_files[0]
     w_list = words or []
     w_starts = [float(w.get("start", 0.0)) for w in w_list]
+    def_min, def_max = _target_clip_range(candidates)
+    if min_clips is None:
+        min_clips = def_min
     if max_clips is None:
-        _, max_clips = _target_clip_range(candidates)
+        max_clips = def_max
 
     raw_clips = parsed.get("clips") if isinstance(parsed, dict) else []
     if not isinstance(raw_clips, list) or not raw_clips:
         return deterministic_candidate_fallback(candidates, meme_files, words=w_list, max_clips=max_clips, streamer_handle=streamer_handle)
 
     valid_clips = []
+    used_titles: set[str] = set()
     for idx, cl in enumerate(raw_clips[:max(10, max_clips + 2)], start=1):
         if not isinstance(cl, dict) or cl.get("is_nsfw_or_unsafe") is True:
             continue
@@ -1242,10 +1327,10 @@ def normalize_director_clips(
         if _vscore < 6.8:
             continue
 
-        # Hard 14.0s floor & 40.0s max duration cap (ZERO 35s+ filler bloat!)
+        # Hard 14.0s floor & 38.0s max duration cap (ZERO 38s+ filler bloat!)
         tot_clip_dur = round(sum(cs["end"] - cs["start"] for cs in clean_segs), 2)
-        if tot_clip_dur > 40.0 and clean_segs:
-            excess = tot_clip_dur - 40.0
+        if tot_clip_dur > 38.0 and clean_segs:
+            excess = tot_clip_dur - 38.0
             if (clean_segs[-1]["end"] - clean_segs[-1]["start"]) - excess >= 4.0:
                 clean_segs[-1]["end"] = round(clean_segs[-1]["end"] - excess, 2)
                 clean_segs[-1]["duration"] = round(clean_segs[-1]["end"] - clean_segs[-1]["start"], 2)
@@ -1254,7 +1339,7 @@ def normalize_director_clips(
         if tot_clip_dur < 14.0:
             continue
 
-        synth = _synthesize_clean_metadata(arch_val, vis_ev, streamer_handle=streamer_handle, idx=idx, is_spoiler=is_spoiler)
+        synth = _synthesize_clean_metadata(arch_val, vis_ev, streamer_handle=streamer_handle, idx=idx, is_spoiler=is_spoiler, raw_text=assembled, used_titles=used_titles)
         raw_title = _strip_unspoken_clickbait(str(cl.get("title") or "").strip(), assembled)
         raw_hook = str(cl.get("hook_caption") or "").strip()
         raw_yt = _strip_unspoken_clickbait(str(cl.get("youtube_title") or cl.get("yt_title") or "").strip(), assembled)[:68]
@@ -1268,8 +1353,9 @@ def normalize_director_clips(
         hook = synth["hook_caption"] if is_garbage_title_or_hook(raw_hook, assembled) else _guard_and_format_hook(raw_hook, assembled, raw_title or synth["title"])
         if is_garbage_title_or_hook(hook, assembled):
             hook = synth["hook_caption"]
-        if is_garbage_title_or_hook(raw_title, assembled):
+        if is_garbage_title_or_hook(raw_title, assembled) or raw_title.lower() in used_titles:
             raw_title = synth["title"]
+        used_titles.add(raw_title.lower())
         _yt_title = raw_yt if (raw_yt and not is_garbage_title_or_hook(raw_yt, assembled)) else synth["youtube_title"]
 
         memes_out = []
@@ -1293,10 +1379,10 @@ def normalize_director_clips(
         visual_note = str(cl.get("visual_value_note") or "").strip()
         if not visual_note or "Watch for the peak moment mid-clip" in visual_note:
             visual_note = vis_ev or "Watch the live streamer reaction unfold here."
-        short_desc = _build_short_description(cl, assembled, str(cl.get("climax_quote") or ""), vis_ev, arch=arch_val, streamer_handle=streamer_handle)
+        short_desc = _build_short_description(cl, assembled, str(cl.get("climax_quote") or ""), vis_ev, arch=arch_val, streamer_handle=streamer_handle, idx=idx)
 
         _raw_comment = str(cl.get("comment_hook") or cl.get("comment_bait_question") or "").strip()
-        if not _raw_comment or ROBOTIC_COPY_RE.search(_raw_comment) or re.match(r"^(would you have survived this|what would you have done here|what's the worst)\??$", _raw_comment, re.I):
+        if not _raw_comment or ROBOTIC_COPY_RE.search(_raw_comment) or re.match(r"^(would you have survived this|what would you have done here|what's the worst|bro really said)\??", _raw_comment, re.I):
             _raw_comment = synth["comment_bait_question"]
 
         valid_clips.append({
@@ -1367,6 +1453,48 @@ def normalize_director_clips(
 
     for c in valid_clips:
         c.pop("_needs_title_repair", None)
+
+    # Top up lazy-LLM runs (e.g. Gemini emitting only 3-4 clips on a 50-min chunk) from isolated remaining peak candidates
+    if valid_clips and min_clips and len(valid_clips) < min_clips and candidates:
+        used_cids = {c.get("candidate_id") for c in valid_clips}
+        spare_cands = []
+        for cand in candidates:
+            if cand.get("candidate_id") in used_cids:
+                continue
+            c_peak = float(cand.get("peak_time") or (float(cand.get("window_start", 0.0)) + float(cand.get("window_end", 0.0))) * 0.5)
+            c_w0, c_w1 = float(cand.get("window_start", 0.0)), float(cand.get("window_end", 0.0))
+            overlaps_existing = any(
+                abs(c_peak - float(vc.get("payoff_time", 0.0))) < 45.0
+                or min(c_w1, float(vc.get("end_time", 0.0))) - max(c_w0, float(vc.get("start_time", 0.0))) > 2.0
+                for vc in valid_clips
+            )
+            if not overlaps_existing and float(cand.get("est_virality_10", 7.0)) >= 6.5:
+                spare_cands.append(cand)
+        if spare_cands:
+            fb_extras = deterministic_candidate_fallback(
+                spare_cands, meme_files, words=w_list, max_clips=(min_clips - len(valid_clips)), streamer_handle=streamer_handle
+            ).get("clips") or []
+            for ex in fb_extras:
+                if ex.get("title", "").lower() in used_titles:
+                    ex_synth = _synthesize_clean_metadata(
+                        ex.get("narrative_archetype", "OPEN_WORLD_CHAOS_OR_COP_CHASE"),
+                        "",
+                        streamer_handle=streamer_handle,
+                        idx=len(valid_clips) + 1,
+                        raw_text=ex.get("assembled_spoken_script", ""),
+                        used_titles=used_titles,
+                    )
+                    ex["title"] = ex_synth["title"]
+                    ex["yt_title"] = ex_synth["youtube_title"]
+                    ex["youtube_title"] = ex_synth["youtube_title"]
+                    ex["hook_caption"] = ex_synth["hook_caption"]
+                    ex["viral_caption"] = ex_synth["hook_caption"]
+                else:
+                    used_titles.add(ex.get("title", "").lower())
+                ex["clip_number"] = len(valid_clips) + 1
+                valid_clips.append(ex)
+                if len(valid_clips) >= min_clips:
+                    break
 
     return {"clips": valid_clips} if valid_clips else deterministic_candidate_fallback(candidates, meme_files, words=w_list, max_clips=max_clips, streamer_handle=streamer_handle)
 

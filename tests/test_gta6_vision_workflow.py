@@ -879,7 +879,7 @@ class TestGta6PeakAndVisionLogic(unittest.TestCase):
         self.assertIn("virality_score || 0) >= 6.8", split_code)
         ext_code = nodes_map["6. Extract Viral Segments"]["parameters"]["jsCode"]
         self.assertIn("silTail > 1.2", ext_code)
-        self.assertIn("totalClipDur > 40.0", ext_code)
+        self.assertIn("totalClipDur > 38.0", ext_code)
 
     def test_no_loop_killing_throws_or_empty_returns_and_skip_gates(self):
         """Verify 6. Extract Viral Segments & Create Subtitle Binary return _skip_clip instead of throwing/[], and skip gates route cleanly back to Loop Clips."""
@@ -1201,6 +1201,97 @@ class TestGta6PeakAndVisionLogic(unittest.TestCase):
         self.assertFalse(vision_director.is_garbage_title_or_hook(c["hook_caption"], cands[0]["raw_text"]), c["hook_caption"])
         self.assertNotIn("bro really said", c["desc_line"].lower())
         self.assertNotIn("did you see that coming", c["comment_hook"].lower())
+
+    def test_autonomous_loop_regressions_heatmap_tfi_dangling_hooks_and_info_compact(self):
+        """Verify Iter 1-4 wins: lightweight .info.json compaction, TFI heatmap+delta fusion, accurate streamer_silence_ratio, 0-3s shift, fit38 hooks, and dangling 'just' rejection."""
+        import tempfile
+        import scripts.live_stream_chunk_scraper as scraper
+        import scripts.telemetry_fusion_indexer as tfi
+
+        # 1) Lightweight .info.json compaction preserves heatmap & chunk bounds while dropping massive formats/thumbnails
+        with tempfile.TemporaryDirectory() as td:
+            ip = os.path.join(td, "test_chunk.info.json")
+            with open(ip, "w", encoding="utf-8") as f:
+                json.dump({
+                    "id": "vid123",
+                    "title": "GTA 6 Stream",
+                    "uploader_id": "@TypicalGamer",
+                    "duration": 3600,
+                    "heatmap": [{"start_time": 120.0, "end_time": 150.0, "value": 0.91}],
+                    "formats": [{"format_id": str(i), "url": "x" * 200} for i in range(50)],
+                    "thumbnails": [{"url": "y" * 200} for _ in range(30)],
+                }, f)
+            scraper._stamp_chunk_bounds_in_info_json(ip, 0.0, 3000.0)
+            with open(ip, "r", encoding="utf-8") as f:
+                comp = json.load(f)
+            self.assertNotIn("formats", comp)
+            self.assertNotIn("thumbnails", comp)
+            self.assertEqual(comp["chunk_start_sec"], 0.0)
+            self.assertEqual(comp["chunk_end_sec"], 3000.0)
+            self.assertEqual(len(comp["heatmap"]), 1)
+
+            # 2) telemetry_fusion_indexer fuses [HEATMAP_PEAK] + suppresses gifted Rumble shoutouts
+            tx_p = os.path.join(td, "tx.json")
+            ae_p = os.path.join(td, "ae.json")
+            fe_p = os.path.join(td, "fe.json")
+            with open(tx_p, "w", encoding="utf-8") as f:
+                json.dump({
+                    "duration": 400.0,
+                    "words": (
+                        [{"word": w, "start": 50.0 + i * 0.4, "end": 50.3 + i * 0.4} for i, w in enumerate("AJ five gifted Rumble premiums thank you for the $5 superchat welcome to the Champions Club".split())]
+                        + [{"word": w, "start": 125.0 + i * 0.4, "end": 125.3 + i * 0.4} for i, w in enumerate("No way that truck just flew over the bridge into the helicopter".split())]
+                    ),
+                }, f)
+            with open(ae_p, "w", encoding="utf-8") as f:
+                json.dump({"peaks": [], "raw_bins": [{"t": 130.0, "db": -10.0, "z_db": 2.5}], "median_rms_db": -28.0, "std_db": 5.0}, f)
+            with open(fe_p, "w", encoding="utf-8") as f:
+                json.dump({"top_events": [], "samples": [{"time": 130.0, "intensity": 72.0, "mouth_motion": 0.09, "head_vel": 0.22}]}, f)
+            idx_doc = tfi.build_unified_index(
+                transcript_path=tx_p, audio_energy_path=ae_p, face_path=fe_p,
+                output_dir=None, top_k=5, save_cache=False, info_path=ip,
+            )
+            self.assertTrue(any("[HEATMAP_PEAK" in " ".join(s.get("tags") or []) for s in idx_doc["annotated_sentences"]))
+            self.assertTrue(any(120.0 <= a["peak_time"] <= 145.0 for a in idx_doc["anchors"]))
+
+        # 3) Accurate streamer_silence_ratio (< 1.0) on [STREAMER] lines + 0-3s start shift
+        raw_bins = {t: {"db": -28.0, "z_db": 0.0, "spec_boost": 0.0, "audio_score": 0.0} for t in range(300)}
+        raw_bins[130] = {"db": -8.0, "z_db": 4.0, "spec_boost": 0.5, "audio_score": 7.0}
+        sents = [
+            {"start": 100.0, "end": 101.0, "text": "Wait.", "word_count": 1, "speaker_tag": "[STREAMER]", "is_viewer_voice": False, "tags": []},
+            {"start": 118.0, "end": 134.0, "text": "No way that helicopter just clipped the bridge tower right there!", "word_count": 11, "speaker_tag": "[STREAMER]", "is_viewer_voice": False, "tags": []},
+        ]
+        cands = peak_builder.extract_top_candidates(
+            300.0, sents, {"median_db": -28.0, "raw_bins": raw_bins}, {"scores": {}, "meta": {}}, {"enabled": False, "scores": {}, "mouth_by_sec": {}}, top_k=3
+        )
+        self.assertTrue(len(cands) >= 1)
+        self.assertLess(cands[0]["streamer_silence_ratio"], 0.90)
+
+        # 4) Dangling intensifier "Bro really just" replaced & 6-word hook "The anticipation for GTA 6 is real" NOT chopped by 5. Split Clips
+        dangling_hook = vision_director._guard_and_format_hook("Bro really just", "That NPC just jumped over the counter", "The Most Chaotic GTA 6 NPC Encounter")
+        self.assertFalse(dangling_hook.lower().endswith("just"), dangling_hook)
+        with open(os.path.join(ROOT, "workflows", "gta6_vision_shorts_workflow.json"), "r", encoding="utf-8") as f:
+            wf = json.load(f)
+        split_js = [n for n in wf["nodes"] if n["name"] == "5. Split Clips"][0]["parameters"]["jsCode"]
+        import subprocess
+        js_probe = (
+            "const fsReal = require('fs');\n"
+            "require = (m) => m === 'fs' ? { existsSync: () => false, readFileSync: fsReal.readFileSync, writeFileSync: () => {}, appendFileSync: () => {} } : require(m);\n"
+            "const $input = { all: () => [{ json: { text: JSON.stringify({ clips: [{ title: 'GTA 6 Bridge Chaos', yt_title: 'GTA 6 physics went wild right here', hook_caption: 'The anticipation for GTA 6 is real', desc_line: 'Doc explains his theory on bridge physics.', start_time: 100, end_time: 124, segments: [{start: 100, end: 124}], virality_score: 8.8 }] }) } }] };\n"
+            "const $ = () => ({ first: () => ({ json: { duration: 1200, dry_run: true } }), last: () => ({ json: { duration: 1200, dry_run: true } }) });\n"
+            "console.log(JSON.stringify((function(){\n" + split_js + "\n})()));\n"
+        )
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as tf:
+            tf.write(js_probe)
+            tp = tf.name
+        try:
+            r = subprocess.run(["node", tp], capture_output=True, text=True, timeout=15)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            out = json.loads(r.stdout)[0]["json"]
+            self.assertEqual(out["hook_caption"], "The anticipation for GTA 6 is real")
+            self.assertNotIn("explains his theory", out["desc_line"].lower())
+        finally:
+            if os.path.exists(tp):
+                os.remove(tp)
 
 
 if __name__ == "__main__":
