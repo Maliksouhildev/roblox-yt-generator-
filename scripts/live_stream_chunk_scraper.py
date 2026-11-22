@@ -516,7 +516,7 @@ def discover_and_probe_candidates(
                     pass
         now_ep = time.time()
         live_eval = evaluate_candidates(list(by_id.values()), state, now_ep)
-        if any(c.get("ready") for c in live_eval):
+        if any(c.get("ready") and float(c.get("score") or 0.0) >= 110.0 for c in live_eval):
             return list(by_id.values())
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -589,6 +589,8 @@ def evaluate_candidates(probed_streams: list[dict], state: dict, now_epoch: floa
         st = state.get(vid, {})
         if not isinstance(st, dict):
             st = {}
+        if st.get("completed"):
+            continue
         if float(st.get("failed_until", 0) or 0) > now_epoch:
             continue
 
@@ -598,8 +600,6 @@ def evaluate_candidates(probed_streams: list[dict], state: dict, now_epoch: floa
         chunk_idx = int(st.get("chunk_idx") or (chunks_taken + 1))
 
         if not is_live:
-            if st.get("completed"):
-                continue
             vod_dur = float(meta.get("duration") or st.get("source_duration_sec") or 0.0)
             if vod_dur > 0.0:
                 if last_end_sec >= vod_dur - 5:

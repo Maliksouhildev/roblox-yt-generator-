@@ -660,7 +660,9 @@ class TestLiveChatSlicingAndChunkLifecycle(unittest.TestCase):
             "release_timestamp": now - 4000,
             "concurrent_view_count": 50000,
         }
-        state = {"cd_live": {"failed_until": now + 1800}}
+        state = {"cd_live": {"failed_until": now + 1800}, "done_live": {"completed": True}}
+        done_live = {**cooldown_live, "id": "done_live"}
+        self.assertIsNone(scraper.select_best_candidate([done_live], state, now, allow_wait=False)[0])
         with mock.patch.object(scraper, "probe_stream", side_effect=lambda u, *a: cooldown_live if "IShowSpeed" in u else None), \
              mock.patch.object(scraper, "discover_flat_playlist", return_value=[]):
             cands = scraper.discover_and_probe_candidates(
