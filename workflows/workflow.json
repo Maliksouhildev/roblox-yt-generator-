@@ -820,7 +820,8 @@
           "id": "PF1ZMT03O2E5waqU",
           "name": "Groq account 2"
         }
-      }
+      },
+      "onError": "continueErrorOutput"
     },
     {
       "parameters": {
@@ -854,7 +855,8 @@
     },
     {
       "parameters": {
-        "unit": "minutes"
+        "unit": "seconds",
+        "amount": 3
       },
       "id": "ca072c3b-c487-433c-9986-27a57a6578bd",
       "webhookId": "017cc4b5-fe1d-4c08-ae5a-1e794a91d20f",
@@ -1153,7 +1155,7 @@
     },
     {
       "parameters": {
-        "command": "=rm -f \"/files/temp/audio.mp3\" && ffmpeg -loglevel error -y -i \"/files/inputs/{{ $('Edit Fields').last().json.stream_file }}\" -vn -af \"highpass=f=80,dynaudnorm=f=150:g=13:p=0.92:m=5.0\" -acodec libmp3lame -b:a 32k -ac 1 -ar 16000 \"/files/temp/audio.mp3\""
+        "command": "=rm -f \"/files/temp/audio.mp3\" \"/files/temp/audio_big.mp3\" && ffmpeg -loglevel error -y -i \"/files/inputs/{{ $('Edit Fields').last().json.stream_file }}\" -vn -af \"highpass=f=80,dynaudnorm=f=150:g=13:p=0.92:m=5.0\" -acodec libmp3lame -b:a 32k -ac 1 -ar 16000 \"/files/temp/audio.mp3\" && sz=$(stat -c %s \"/files/temp/audio.mp3\" 2>/dev/null || echo 0); if [ \"$sz\" -gt 24000000 ]; then dur=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"/files/temp/audio.mp3\" | cut -d. -f1); [ -z \"$dur\" ] || [ \"$dur\" -lt 60 ] && dur=7200; kbps=$(( (22 * 8 * 1024) / dur )); [ \"$kbps\" -lt 8 ] && kbps=8; [ \"$kbps\" -gt 24 ] && kbps=24; mv -f \"/files/temp/audio.mp3\" \"/files/temp/audio_big.mp3\"; if [ \"$dur\" -gt 14400 ]; then dur_arg=\"-t 14400\"; else dur_arg=\"\"; fi; ffmpeg -loglevel error -y -i \"/files/temp/audio_big.mp3\" $dur_arg -acodec libmp3lame -b:a \"${kbps}k\" -ac 1 -ar 16000 \"/files/temp/audio.mp3\" && rm -f \"/files/temp/audio_big.mp3\"; fi"
       },
       "id": "b9c69031-3668-45b5-9ae9-2d12c4d9c5b5",
       "name": "1. Extract Audio",
@@ -3075,6 +3077,13 @@
         [
           {
             "node": "Save Whisper Transcript",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Delete Source VOD",
             "type": "main",
             "index": 0
           }
