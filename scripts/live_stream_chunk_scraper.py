@@ -585,6 +585,8 @@ def evaluate_candidates(probed_streams: list[dict], state: dict, now_epoch: floa
         st = state.get(vid, {})
         if not isinstance(st, dict):
             st = {}
+        if float(st.get("failed_until", 0) or 0) > now_epoch:
+            continue
 
         is_live = bool(meta.get("is_live", False))
         last_end_sec = int(st.get("last_end_sec", 0) or 0)
@@ -891,10 +893,11 @@ def build_yt_live_dvr_command(
         return [
             "timeout", "-s", "INT", "-k", "30", str(DVR_FETCH_TIMEOUT_SEC),
             *yt_cmd,
+            "--js-runtimes", "node",
             "--live-from-start",
             "-N", "8",
             "--write-info-json",
-            "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+            "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080][ext=mp4]+bestaudio[ext=mp4]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
             "--merge-output-format", "mp4",
             "-o", raw_tpl,
             meta["url"],
@@ -903,9 +906,10 @@ def build_yt_live_dvr_command(
     return [
         "timeout", "-s", "INT", "-k", "30", str(LIVE_EDGE_RECORD_SEC),
         *yt_cmd,
+        "--js-runtimes", "node",
         "-N", "8",
         "--write-info-json",
-        "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080][ext=mp4]+bestaudio[ext=mp4]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
         "--merge-output-format", "mp4",
         "-o", raw_tpl,
         meta["url"],
@@ -931,13 +935,14 @@ def build_vod_download_command(meta: dict, vod_base: str) -> list[str]:
     return [
         "timeout", "-s", "INT", "-k", "30", str(DVR_FETCH_TIMEOUT_SEC),
         *yt_cmd,
+        "--js-runtimes", "node",
         "-N", "8",
         "--socket-timeout", "20",
         "--no-playlist",
         "--match-filter", f"duration <= {MAX_VOD_DUR_SEC}",
         "--write-info-json",
         "--write-subs", "--sub-langs", "live_chat",
-        "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080][ext=mp4]+bestaudio[ext=mp4]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
         "--merge-output-format", "mp4",
         "-o", vod_base + ".%(ext)s",
         meta["url"],
@@ -1343,6 +1348,8 @@ def run_scraper(
             "vod_cleaned": bool(finished_vod),
         }
 
+    state[vid] = {**st, "failed_until": time.time() + 1800, "last_scraped_epoch": time.time()}
+    save_json(STATE_PATH, state)
     return {
         "status": "failed_or_too_short",
         "downloaded": False,
