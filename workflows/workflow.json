@@ -1113,7 +1113,7 @@
     },
     {
       "parameters": {
-        "command": "rm -f /files/temp/scraper_run.log; python3 /files/live_stream_chunk_scraper.py --stock-target 3 --fallback-url \"{{ $json.url }}\" >/files/temp/scraper_run.log 2>&1; rc=$?; tail -n 20 /files/temp/scraper_run.log; exit $rc"
+        "command": "=rm -f /files/temp/scraper_run.log; python3 /files/live_stream_chunk_scraper.py --stock-target 3 --fallback-url \"{{ $json.url }}\" >/files/temp/scraper_run.log 2>&1; rc=$?; tail -n 20 /files/temp/scraper_run.log; exit $rc"
       },
       "id": "fallback-download",
       "name": "Fallback Download",
