@@ -129,6 +129,29 @@ def probe_duration(video_path: str) -> float:
         return 0.0
 
 
+def probe_video_duration(video_path: str) -> float:
+    """Probe the v:0 video stream duration specifically (catches audio-3000s / video-80s DVR corruption)."""
+    if not video_path or not os.path.exists(video_path):
+        return 0.0
+    try:
+        with subprocess.Popen(
+            [
+                "ffprobe", "-v", "error", "-select_streams", "v:0",
+                "-show_entries", "stream=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1", video_path,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        ) as proc:
+            raw, _ = proc.communicate(timeout=15)
+            out = raw.decode("utf-8", errors="replace").strip() if raw else ""
+            if proc.returncode == 0 and out and out != "N/A":
+                return max(0.0, float(out))
+    except Exception:
+        pass
+    return probe_duration(video_path)
+
+
 def load_json(path: str, default):
     if not path or not os.path.exists(path):
         return default
@@ -654,6 +677,9 @@ def validate_chunk_file(
     if size <= min_bytes:
         return False, 0.0, size
     dur = probe_duration(mp4_path)
+    v_dur = probe_video_duration(mp4_path)
+    if v_dur < min_dur or (dur > 0.0 and v_dur < dur * 0.70):
+        return False, min(dur, v_dur), size
     return (dur >= min_dur), dur, size
 
 
@@ -973,7 +999,9 @@ def slice_and_copy_sidecars(
         chunk_sec = CHUNK_SEC
     if min_slice_sec is None:
         min_slice_sec = MIN_SLICE_DUR_SEC
-    actual_dur = probe_duration(src_mp4)
+    fmt_dur = probe_duration(src_mp4)
+    v_dur = probe_video_duration(src_mp4)
+    actual_dur = min(fmt_dur, v_dur) if v_dur > 0.0 else fmt_dur
     if actual_dur < min_slice_sec:
         return False, actual_dur, float(start_sec), 0.0
 
