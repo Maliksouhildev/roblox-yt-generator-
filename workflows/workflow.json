@@ -85,7 +85,7 @@
           },
           "conditions": [
             {
-              "leftValue": "={{ $json.stdout.trim().length }}",
+              "leftValue": "={{ ($json.stdout.trim() && $json.stdout.trim() !== '__SKIP_CONCURRENT__') ? $json.stdout.trim().length : 0 }}",
               "rightValue": 0,
               "operator": {
                 "type": "number",
