@@ -387,6 +387,95 @@ def analyze_face_reactions(video_path: str, cam_config_path: str, sample_interva
     }
 
 
+def load_youtube_heatmap(video_path: str, duration: float = 0.0, info_path: str = "") -> dict:
+    """Load YouTube 'Most Replayed' heatmap from chunk .info.json and offset into chunk-local seconds."""
+    cand_paths = []
+    if info_path:
+        cand_paths.append(info_path)
+    if video_path:
+        input_dir = os.path.dirname(video_path) or "/files/inputs"
+        raw_base = os.path.splitext(os.path.basename(video_path))[0]
+        clean_base = raw_base[:-11] if raw_base.endswith(".processing") else raw_base
+        for d in (input_dir, "/files/inputs"):
+            for fn in (
+                f"{clean_base}.processing.info.json",
+                f"{clean_base}.info.json",
+                f"{raw_base}.info.json",
+            ):
+                p = os.path.join(d, fn)
+                if p not in cand_paths:
+                    cand_paths.append(p)
+    found_path = next((p for p in cand_paths if p and os.path.isfile(p)), "")
+    if not found_path:
+        return {"buckets": [], "peaks": [], "chunk_start_sec": 0.0, "source": ""}
+    try:
+        with open(found_path, "r", encoding="utf-8", errors="ignore") as f:
+            doc = json.load(f)
+    except Exception:
+        return {"buckets": [], "peaks": [], "chunk_start_sec": 0.0, "source": found_path}
+    if not isinstance(doc, dict):
+        return {"buckets": [], "peaks": [], "chunk_start_sec": 0.0, "source": found_path}
+    raw_hm = doc.get("heatmap")
+    if not isinstance(raw_hm, list) or not raw_hm:
+        return {"buckets": [], "peaks": [], "chunk_start_sec": 0.0, "source": found_path}
+
+    chunk_start = doc.get("chunk_start_sec")
+    if chunk_start is None:
+        m = re.search(r"_chunk(\d+)", os.path.basename(video_path or found_path), re.I)
+        chunk_idx = int(m.group(1)) if m else 1
+        chunk_start = float(max(0, chunk_idx - 1) * 3000.0)
+    else:
+        chunk_start = float(chunk_start or 0.0)
+
+    eff_dur = float(duration or 0.0)
+    if eff_dur <= 0.0:
+        ce = doc.get("chunk_end_sec")
+        if ce is not None and float(ce) > chunk_start:
+            eff_dur = float(ce) - chunk_start
+        else:
+            eff_dur = float(doc.get("duration") or 3600.0)
+
+    local_buckets = []
+    for entry in raw_hm:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            st = float(entry.get("start_time", 0.0)) - chunk_start
+            en = float(entry.get("end_time", st + 1.0)) - chunk_start
+            val = float(entry.get("value", 0.0))
+        except (TypeError, ValueError):
+            continue
+        if en <= 0.0 or st >= eff_dur:
+            continue
+        st_c = max(0.0, st)
+        en_c = min(eff_dur, en)
+        if en_c <= st_c:
+            continue
+        local_buckets.append({
+            "start": round(st_c, 2),
+            "end": round(en_c, 2),
+            "mid": round((st_c + en_c) * 0.5, 2),
+            "value": round(max(0.0, min(1.0, val)), 4),
+        })
+
+    if not local_buckets:
+        return {"buckets": [], "peaks": [], "chunk_start_sec": chunk_start, "source": found_path}
+
+    ranked = sorted(local_buckets, key=lambda b: b["value"], reverse=True)
+    top_15_cutoff = ranked[min(14, len(ranked) - 1)]["value"]
+    peaks = [
+        b for b in local_buckets
+        if b["value"] >= 0.55 or (b["value"] >= top_15_cutoff and b["value"] >= 0.35)
+    ]
+    peaks.sort(key=lambda b: b["value"], reverse=True)
+    return {
+        "buckets": local_buckets,
+        "peaks": peaks[:15],
+        "chunk_start_sec": chunk_start,
+        "source": found_path,
+    }
+
+
 # ── 3. Multimodal Fusion Engine ─────────────────────────────────────────────
 def run_fusion(
     video_path: str,
@@ -485,6 +574,20 @@ def run_fusion(
                         item["chat_score"] = b_score
                         item["chat_info"] = f"Chat Velocity {b.get('velocity', 0)} msgs/10s (Z={b.get('z_laugh', 0)}σ) | Emotes: {', '.join(emotes[:3])}"
 
+    heatmap_res = load_youtube_heatmap(video_path, duration=duration)
+    has_heatmap = len(heatmap_res.get("peaks", [])) > 0
+    if has_heatmap:
+        for hp in heatmap_res["peaks"]:
+            h_start, h_end = hp["start"], hp["end"]
+            h_val = float(hp.get("value", 0.0))
+            h_score = round(min(100.0, max(50.0, h_val * 100.0)), 1)
+            for item in timeline:
+                if h_start <= item["time"] <= h_end:
+                    if h_score > item["chat_score"]:
+                        item["chat_score"] = h_score
+                        item["chat_info"] = f"[HEATMAP_PEAK] Crowd Replay {round(h_val * 100)}% [CROWD_REPLAY]"
+
+    has_crowd = has_chat or has_heatmap
     has_face = face_res is not None and len(face_res.get("samples", [])) > 0
     if has_face:
         for s in face_res["samples"]:
@@ -502,12 +605,12 @@ def run_fusion(
             if s_start <= item["time"] <= s_end:
                 item["audio_score"] = 100.0
 
-    # Dynamic Weighting
-    if has_chat and has_face:
+    # Dynamic Weighting (YouTube heatmap carries crowd weight equivalent to live_chat)
+    if has_crowd and has_face:
         w_chat, w_face, w_audio = 0.40, 0.35, 0.25
     elif has_face:
         w_chat, w_face, w_audio = 0.0, 0.60, 0.40
-    elif has_chat:
+    elif has_crowd:
         w_chat, w_face, w_audio = 0.65, 0.0, 0.35
     else:
         w_chat, w_face, w_audio = 0.0, 0.0, 1.0
@@ -652,6 +755,15 @@ def run_fusion(
                         os.remove(stale_chat)
                     except Exception:
                         pass
+        if has_heatmap:
+            with open("/files/temp/heatmap_peaks.json", "w", encoding="utf-8") as hf:
+                json.dump({
+                    "stream_file": active_stream_file,
+                    "chunk_start_sec": heatmap_res.get("chunk_start_sec", 0.0),
+                    "source": os.path.basename(heatmap_res.get("source") or ""),
+                    "peaks": heatmap_res.get("peaks", []),
+                    "count": len(heatmap_res.get("peaks", [])),
+                }, hf, indent=2)
         if face_res is not None:
             f_ev = [
                 {

@@ -1018,6 +1018,23 @@ def build_download_commands(meta: dict, start_sec: int, end_sec: int, out_base: 
     ]
 
 
+def _stamp_chunk_bounds_in_info_json(info_path: str, start_sec: float, end_sec: float) -> None:
+    """Record chunk_start_sec / chunk_end_sec inside the chunk's .info.json for local heatmap alignment."""
+    if not info_path or not os.path.isfile(info_path):
+        return
+    try:
+        with open(info_path, "r", encoding="utf-8", errors="ignore") as f:
+            doc = json.load(f)
+        if not isinstance(doc, dict):
+            return
+        doc["chunk_start_sec"] = round(float(start_sec), 2)
+        doc["chunk_end_sec"] = round(float(end_sec), 2)
+        with open(info_path, "w", encoding="utf-8") as f:
+            json.dump(doc, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
 def slice_and_copy_sidecars(
     src_base: str,
     src_mp4: str,
@@ -1056,7 +1073,9 @@ def slice_and_copy_sidecars(
 
     src_info = src_base + ".info.json"
     if os.path.exists(src_info):
-        shutil.copy2(src_info, out_base + ".info.json")
+        dst_info = out_base + ".info.json"
+        shutil.copy2(src_info, dst_info)
+        _stamp_chunk_bounds_in_info_json(dst_info, start_sec, end_sec)
 
     src_chat = find_live_chat_file(src_base)
     if src_chat:
@@ -1346,6 +1365,7 @@ def run_scraper(
             if ok:
                 new_end_sec = min(int(round(vod_dur)), last_end_sec + int(round(dur)))
                 finished_vod = new_end_sec >= vod_dur - 5
+                _stamp_chunk_bounds_in_info_json(out_base + ".info.json", last_end_sec, new_end_sec)
             else:
                 cleanup_partial_files(out_base)
         else:

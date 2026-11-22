@@ -163,10 +163,10 @@ class TestGta6WorkflowStructure(unittest.TestCase):
         self.assertIn("GTA6_PROMPT_ECHO_RE", swt_js)
         self.assertTrue(peak_builder._is_whisper_prompt_hallucination("Grand Theft Auto VI, Vice City, Leonida, Lucia"))
 
-        # Strict webcam gate & staged render wiring
+        # Webcam gate passes false branch to Config (clip_layout_timeline.py handles dynamic cam detection)
         self.assertEqual(self.conns["Parse Cam Config"]["main"][0][0]["node"], "IF: Has Webcam?")
         self.assertEqual(self.conns["IF: Has Webcam?"]["main"][0][0]["node"], "Config")
-        self.assertEqual(self.conns["IF: Has Webcam?"]["main"][1][0]["node"], "Delete Source VOD")
+        self.assertEqual(self.conns["IF: Has Webcam?"]["main"][1][0]["node"], "Config")
         self.assertEqual(self.conns["Fallback Download"]["main"][0][0]["node"], "Wait Before Next Stream")
         self.assertEqual(self.conns["Wait Before Next Stream"]["main"][0][0]["node"], "Find Stream")
         self.assertIn("ABORT_PREGAME_NO_GAMEPLAY", csb_js)
@@ -313,10 +313,10 @@ class TestGta6PeakAndVisionLogic(unittest.TestCase):
     def test_peak_separation_and_speaker_tagging(self):
         # 2400s VOD -> min spacing = 90s; test 120s and 50s gaps + intro & housekeeping guard
         raw_bins = {t: {"db": -30.0, "z_db": 0.0, "spec_boost": 0.0, "audio_score": 0.0} for t in range(2400)}
-        # Intro peak at t=8 should be ignored; real peaks at t=200, t=250 (too close to 200), t=400, t=700
+        # Intro peak at t=8 should be ignored; real peaks at t=200, t=220 (within spacing of 200), t=400, t=700
         raw_bins[8] = {"db": -5.0, "z_db": 6.0, "spec_boost": 0.8, "audio_score": 9.0}
         raw_bins[200] = {"db": -8.0, "z_db": 4.5, "spec_boost": 0.5, "audio_score": 6.75}
-        raw_bins[250] = {"db": -9.0, "z_db": 4.2, "spec_boost": 0.4, "audio_score": 5.88}
+        raw_bins[220] = {"db": -9.0, "z_db": 4.2, "spec_boost": 0.4, "audio_score": 5.88}
         raw_bins[400] = {"db": -10.0, "z_db": 3.8, "spec_boost": 0.4, "audio_score": 5.32}
         raw_bins[700] = {"db": -10.5, "z_db": 3.5, "spec_boost": 0.3, "audio_score": 4.55}
         # Silent streamer mic during NPC dialogue around t=395
@@ -344,11 +344,12 @@ class TestGta6PeakAndVisionLogic(unittest.TestCase):
         peaks = [c["peak_time"] for c in cands]
         self.assertNotIn(8.0, peaks)
         self.assertIn(200.0, peaks)
-        self.assertNotIn(250.0, peaks)  # Within 90s of 200s
+        self.assertNotIn(220.0, peaks)  # Within min spacing of 200s
         self.assertGreater(cands[0]["z_chat_lagged"], 3.0)
-        # Wide 85.0s window: peak at 200 -> w_start = 148.0, covering complete setup + payoff
-        self.assertEqual(cands[0]["window_start"], 148.0)
-        self.assertGreaterEqual(cands[0]["window_duration"], 75.0)
+        # Tight 44.0s window: peak at 200 -> w_start = 170.0 (200 - 30.0), w_end = 214.0 (200 + 14.0)
+        self.assertEqual(cands[0]["window_start"], 170.0)
+        self.assertGreaterEqual(cands[0]["window_duration"], 35.0)
+        self.assertLessEqual(cands[0]["window_duration"], 48.0)
 
     def test_vision_director_normalization_and_bracket_strip(self):
         cands = [{
@@ -768,7 +769,7 @@ class TestGta6PeakAndVisionLogic(unittest.TestCase):
             js_body = sidecar_expr[3:-2].strip()
             sidecar_harness = (
                 "const $ = (name) => ({\n"
-                "  item: { json: name === 'Loop Clips' ? { title: 'Police Chase', hook_caption: 'GTA 6 cops have zero chill', start_time: 10, end_time: 48, segments: [{start:10,end:48}] } : (name === 'Normalize Merge Output' ? { merge_result: { yt_title: 'xQc folded the second GTA 6 cops pulled up', desc_line: 'Bro talked crazy for two seconds and got boxed in.', comment_hook: 'scale of 1-10 how cooked was he here' } } : {}) },\n"
+                "  item: { json: name === 'Loop Clips' ? { title: 'Police Chase', hook_caption: 'GTA 6 cops have zero chill', yt_title: 'xQc folded the second GTA 6 cops pulled up', desc_line: 'Bro talked crazy for two seconds and got boxed in.', comment_hook: 'scale of 1-10 how cooked was he here', start_time: 10, end_time: 48, segments: [{start:10,end:48}] } : (name === 'Normalize Merge Output' ? { merge_result: { yt_title: 'xQc folded the second GTA 6 cops pulled up', desc_line: 'Bro talked crazy for two seconds and got boxed in.', comment_hook: 'scale of 1-10 how cooked was he here' } } : {}) },\n"
                 "  last: () => ({ json: name === '1. Global Summary AI' ? { output: JSON.stringify({ game: 'GTA 6', global_summary: 'LONG_GLOBAL_SUMMARY_SHOULD_NOT_APPEAR' }) } : {} })\n"
                 "});\n"
                 f"const cmd = {js_body};\n"
@@ -873,12 +874,333 @@ class TestGta6PeakAndVisionLogic(unittest.TestCase):
             if os.path.exists(tp):
                 os.remove(tp)
 
-        # 3) Hard virality_score < 6.8 rejection & 42s max duration in 5. Split Clips + gta6_vision_director.py
+        # 3) Hard virality_score < 6.8 rejection & 40s max duration in 5. Split Clips + 6. Extract Viral Segments
         split_code = nodes_map["5. Split Clips"]["parameters"]["jsCode"]
         self.assertIn("virality_score || 0) >= 6.8", split_code)
         ext_code = nodes_map["6. Extract Viral Segments"]["parameters"]["jsCode"]
-        self.assertIn("silTail > 1.5", ext_code)
-        self.assertIn("totalClipDur > 42.0", ext_code)
+        self.assertIn("silTail > 1.2", ext_code)
+        self.assertIn("totalClipDur > 40.0", ext_code)
+
+    def test_no_loop_killing_throws_or_empty_returns_and_skip_gates(self):
+        """Verify 6. Extract Viral Segments & Create Subtitle Binary return _skip_clip instead of throwing/[], and skip gates route cleanly back to Loop Clips."""
+        import subprocess
+        import tempfile
+
+        with open(os.path.join(ROOT, "workflows", "gta6_vision_shorts_workflow.json"), "r", encoding="utf-8") as f:
+            wf = json.load(f)
+        nodes_map = {n["name"]: n for n in wf["nodes"]}
+        conns = wf["connections"]
+
+        # Wiring checks
+        self.assertEqual(conns["6. Extract Viral Segments"]["main"][0][0]["node"], "IF: Clip Valid?")
+        self.assertEqual(conns["IF: Clip Valid?"]["main"][0][0]["node"], "Is Dry Run / Script Sandbox?")
+        self.assertEqual(conns["IF: Clip Valid?"]["main"][1][0]["node"], "Loop Clips")
+        self.assertEqual(conns["Create Subtitle Binary"]["main"][0][0]["node"], "IF: Render Ready?")
+        self.assertEqual(conns["IF: Render Ready?"]["main"][0][0]["node"], "Read/Write Files from Disk")
+        self.assertEqual(conns["IF: Render Ready?"]["main"][1][0]["node"], "Loop Clips")
+        self.assertEqual(nodes_map["Write Sidecar JSON"].get("onError"), "continueRegularOutput")
+        self.assertNotIn("Normalize Merge Output", nodes_map["Write Sidecar JSON"]["parameters"]["command"])
+        self.assertIn("__SKIP_CONCURRENT__", nodes_map["Find Stream"]["parameters"]["command"])
+        self.assertIn("__SKIP_CONCURRENT__", nodes_map["Pick Random Streamer"]["parameters"]["jsCode"])
+
+        # Runtime check: 6. Extract Viral Segments on a too-short 4s clip emits _skip_clip: true (NOT [])
+        ext_js = nodes_map["6. Extract Viral Segments"]["parameters"]["jsCode"]
+        harness_ext = (
+            "const _item = { json: { clip_number: 2, start_time: 10, end_time: 14, segments: [{start: 10, end: 14}], is_story_or_cutscene: false } };\n"
+            "const $input = { item: _item, all: () => [_item] };\n"
+            "const $ = (name) => ({\n"
+            "  first: () => ({ json: name === 'Save Whisper Transcript' ? { words: [{word:'hi',start:10.5,end:10.8}] } : (name === 'Config' ? { duration: 1200, min_clip_dur: 14, max_clip_dur: 40 } : {}) }),\n"
+            "  item: { json: { clip_number: 2 } }\n"
+            "});\n"
+            "const res = (function() {\n" + ext_js + "\n})();\n"
+            "console.log(JSON.stringify(res));\n"
+        )
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as tf:
+            tf.write(harness_ext)
+            tp1 = tf.name
+        try:
+            r1 = subprocess.run(["node", tp1], capture_output=True, text=True, timeout=15)
+            self.assertEqual(r1.returncode, 0, r1.stderr)
+            out1 = json.loads(r1.stdout)
+            self.assertEqual(len(out1), 1)
+            self.assertTrue(out1[0]["json"].get("_skip_clip"))
+        finally:
+            if os.path.exists(tp1):
+                os.remove(tp1)
+
+        # Runtime check: Create Subtitle Binary on a too-short 5s clip emits _skip_clip: true (never throws!)
+        csb_js = nodes_map["Create Subtitle Binary"]["parameters"]["jsCode"]
+        harness_csb = (
+            "const origRequire = require;\n"
+            "require = (mod) => {\n"
+            "  if (mod === 'fs') return { existsSync: () => false, readFileSync: () => '{}' };\n"
+            "  return origRequire(mod);\n"
+            "};\n"
+            "const _item = { json: { text: 'short', words: [{word:'short',start:0.2,end:0.6}] } };\n"
+            "const $input = { item: _item, first: () => _item, all: () => [_item] };\n"
+            "const $ = (name) => ({\n"
+            "  first: () => ({ json: name === 'Config' ? { duration: 1200 } : (name === 'Parse Cam Config' ? { ai_found: false } : {}) }),\n"
+            "  item: { json: { clip_number: 3, total_duration: 5.0, duration: 5.0, segments: [{start: 10, end: 15}], title: 'Short', hook_caption: 'Too short' } },\n"
+            "  all: () => [{ json: { clip_number: 3, total_duration: 5.0, duration: 5.0, segments: [{start: 10, end: 15}], title: 'Short', hook_caption: 'Too short' } }],\n"
+            "  last: () => ({ json: {} })\n"
+            "});\n"
+            "const res = (function() {\n" + csb_js + "\n})();\n"
+            "console.log(JSON.stringify(res));\n"
+        )
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as tf:
+            tf.write(harness_csb)
+            tp2 = tf.name
+        try:
+            r2 = subprocess.run(["node", tp2], capture_output=True, text=True, timeout=15)
+            self.assertEqual(r2.returncode, 0, f"Create Subtitle Binary threw instead of returning _skip_clip: {r2.stderr}")
+            out2 = json.loads(r2.stdout)
+            self.assertEqual(len(out2), 1)
+            self.assertTrue(out2[0]["json"].get("_skip_clip"))
+            self.assertIn("ABORT_CLIP_TOO_SHORT", out2[0]["json"].get("skip_reason", ""))
+        finally:
+            if os.path.exists(tp2):
+                os.remove(tp2)
+
+    def test_heatmap_ingestion_and_chunk_offset_peaks(self):
+        """Verify chunk_start_sec stamping + YouTube heatmap ingestion produces [HEATMAP_PEAK] / [CROWD_REPLAY] candidates."""
+        import tempfile
+        import scripts.live_stream_chunk_scraper as scraper
+        import scripts.multimodal_analyzer as mm_analyzer
+
+        with tempfile.TemporaryDirectory() as td:
+            video_path = os.path.join(td, "mega_chunk2.mp4")
+            info_path = os.path.join(td, "mega_chunk2.info.json")
+            with open(video_path, "wb") as vf:
+                vf.write(b"fake")
+            # VOD heatmap spanning 0..7200s; chunk2 covers 3000..6000s (duration 3000s)
+            # Peak at VOD t=3600s -> chunk-local t=600s!
+            info_payload = {
+                "id": "mega123",
+                "title": "GTA 6 Live Stream",
+                "heatmap": [
+                    {"start_time": 3000.0, "end_time": 3060.0, "value": 0.12},
+                    {"start_time": 3580.0, "end_time": 3620.0, "value": 0.94},
+                    {"start_time": 4200.0, "end_time": 4240.0, "value": 0.78},
+                    {"start_time": 6500.0, "end_time": 6540.0, "value": 0.99},  # Outside this chunk
+                ],
+            }
+            with open(info_path, "w", encoding="utf-8") as f:
+                json.dump(info_payload, f)
+
+            # 1) Stamp chunk bounds using scraper helper
+            scraper._stamp_chunk_bounds_in_info_json(info_path, 3000.0, 6000.0)
+            with open(info_path, "r", encoding="utf-8") as sf:
+                stamped = json.load(sf)
+            self.assertEqual(stamped["chunk_start_sec"], 3000.0)
+            self.assertEqual(stamped["chunk_end_sec"], 6000.0)
+
+            # 2) peak_builder heatmap ingestion offsets by chunk_start_sec=3000 -> local peak at ~600s & ~1220s
+            hm = peak_builder.compute_heatmap_map(video_path, 3000.0, info_path=info_path)
+            self.assertGreaterEqual(hm["peak_count"], 2)
+            self.assertEqual(hm["chunk_start_sec"], 3000.0)
+            self.assertIn(600, hm["scores"])
+            self.assertGreaterEqual(hm["raw_values"][600], 0.90)
+            self.assertFalse(any(t > 3000 for t in hm["scores"]))
+
+            # 3) extract_top_candidates emits [HEATMAP_PEAK] & [CROWD_REPLAY] tags even with empty chat_info
+            raw_bins = {t: {"db": -30.0, "z_db": 0.0, "spec_boost": 0.0, "audio_score": 0.0} for t in range(3000)}
+            raw_bins[600] = {"db": -12.0, "z_db": 3.0, "spec_boost": 0.4, "audio_score": 4.2}
+            audio_info = {"median_db": -28.0, "std_db": 5.0, "raw_bins": raw_bins}
+            chat_info = {"scores": {}, "meta": {}}
+            face_info = {"enabled": False, "med_mouth": 0.0, "scores": {}, "mouth_by_sec": {}}
+            sentences = [
+                {"start": 592.0, "end": 604.0, "text": "No way that helicopter just clipped the bridge!", "word_count": 8, "speaker_tag": "[STREAMER]", "is_viewer_voice": False, "tags": []},
+            ]
+            cands = peak_builder.extract_top_candidates(
+                3000.0, sentences, audio_info, chat_info, face_info, top_k=5, heatmap_info=hm
+            )
+            self.assertTrue(len(cands) >= 1)
+            tags = " ".join(cands[0].get("signal_tags", []))
+            self.assertIn("[HEATMAP_PEAK", tags)
+            self.assertIn("[CROWD_REPLAY]", tags)
+
+            # 4) multimodal_analyzer also parses chunk-offset heatmap peaks
+            mm_hm = mm_analyzer.load_youtube_heatmap(video_path, 3000.0, info_path=info_path)
+            self.assertTrue(len(mm_hm["peaks"]) >= 2)
+            self.assertTrue(any(580.0 <= p["mid"] <= 620.0 for p in mm_hm["peaks"]))
+
+    def test_snappy_18s_to_28s_clips_pass_without_padding(self):
+        """Verify 18s-28s clips survive director normalization, 5. Split Clips, 6. Extract Viral Segments, and Create Subtitle Binary without being padded to >=35s."""
+        import subprocess
+        import tempfile
+
+        with open(os.path.join(ROOT, "workflows", "gta6_vision_shorts_workflow.json"), "r", encoding="utf-8") as f:
+            wf = json.load(f)
+        nodes_map = {n["name"]: n for n in wf["nodes"]}
+
+        # 1) gta6_vision_director.normalize_director_clips keeps a 22s clip at ~22s (no 35s padding)
+        cands = [{
+            "candidate_id": "cand_1",
+            "window_start": 100.0,
+            "window_end": 144.0,
+            "peak_time": 124.0,
+            "raw_text": "Look at that truck flipping over the Vice City pier!",
+            "transcript_lines": ["[01:46.0 | [STREAMER]] Look at that truck flipping over the pier!"],
+            "signal_tags": ["[VOCAL_SPIKE]", "[HEATMAP_PEAK:val=0.88]"],
+            "streamer_silence_ratio": 0.10,
+            "duration_sec": 1200.0,
+        }]
+        words = [{"word": f"w{i}", "start": 106.0 + i * 1.4, "end": 106.5 + i * 1.4} for i in range(16)]
+        raw_out = {
+            "clips": [{
+                "candidate_id": "cand_1",
+                "title": "Vice City Truck Flip",
+                "yt_title": "This GTA 6 truck physics glitch broke the pier",
+                "hook_caption": "GTA 6 truck physics just broke",
+                "desc_line": "One ramp clip sent the whole convoy airborne.",
+                "comment_hook": "did that driver survive that landing",
+                "start_time": 106.0,
+                "end_time": 128.0,
+                "virality_score": 8.4,
+                "narrative_archetype": "OPEN_WORLD_CHAOS_OR_COP_CHASE",
+                "grounding_quote": "truck flipping over the pier",
+                "reason": "Clean physics launch with immediate reaction.",
+            }]
+        }
+        norm_res = vision_director.normalize_director_clips(
+            raw_out, cands, ["vine-boom-sound-effect_KT89XIq.mp3"], words=words, streamer_handle="Tarik"
+        )
+        norm = norm_res["clips"]
+        self.assertEqual(len(norm), 1)
+        dur = norm[0]["end_time"] - norm[0]["start_time"]
+        self.assertGreaterEqual(dur, 14.0)
+        self.assertLessEqual(dur, 28.0, f"22s clip should NOT be padded to 35s+, got {dur}s")
+
+        # 2) 5. Split Clips accepts a 22s clip
+        split_js = nodes_map["5. Split Clips"]["parameters"]["jsCode"]
+        harness_split = (
+            "const $input = { all: () => [{ json: { text: JSON.stringify(" + json.dumps({"clips": norm}) + ") } }] };\n"
+            "const $ = () => ({ first: () => ({ json: { duration: 1200 } }) });\n"
+            "const res = (function() {\n" + split_js + "\n})();\n"
+            "console.log(JSON.stringify(res));\n"
+        )
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as tf:
+            tf.write(harness_split)
+            tp1 = tf.name
+        try:
+            r1 = subprocess.run(["node", tp1], capture_output=True, text=True, timeout=15)
+            self.assertEqual(r1.returncode, 0, r1.stderr)
+            out1 = json.loads(r1.stdout)
+            self.assertEqual(len(out1), 1)
+            self.assertEqual(out1[0]["json"]["yt_title"], norm[0]["yt_title"])
+        finally:
+            if os.path.exists(tp1):
+                os.remove(tp1)
+
+        # 3) 6. Extract Viral Segments keeps 22s clip at ~22s (no greedy <35s expansion!)
+        ext_js = nodes_map["6. Extract Viral Segments"]["parameters"]["jsCode"]
+        harness_ext = (
+            "const _item = { json: " + json.dumps(norm[0]) + " };\n"
+            "const $input = { item: _item, all: () => [_item] };\n"
+            "const $ = (name) => ({\n"
+            "  first: () => ({ json: name === 'Save Whisper Transcript' ? { words: " + json.dumps(words) + " } : (name === 'Config' ? { duration: 1200, min_clip_dur: 14, max_clip_dur: 40 } : {}) }),\n"
+            "  item: { json: " + json.dumps(norm[0]) + " }\n"
+            "});\n"
+            "const res = (function() {\n" + ext_js + "\n})();\n"
+            "console.log(JSON.stringify(res));\n"
+        )
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as tf:
+            tf.write(harness_ext)
+            tp2 = tf.name
+        try:
+            r2 = subprocess.run(["node", tp2], capture_output=True, text=True, timeout=15)
+            self.assertEqual(r2.returncode, 0, r2.stderr)
+            out2 = json.loads(r2.stdout)
+            self.assertEqual(len(out2), 1)
+            self.assertFalse(out2[0]["json"].get("_skip_clip"))
+            tot = sum(float(it["json"].get("end", 0)) - float(it["json"].get("start", 0)) for it in out2)
+            self.assertGreaterEqual(tot, 14.0)
+            self.assertLessEqual(tot, 28.0, f"6. Extract Viral Segments padded 22s clip to {tot}s")
+        finally:
+            if os.path.exists(tp2):
+                os.remove(tp2)
+
+        # 4) Create Subtitle Binary passes a 22s clip without ABORT_CLIP_TOO_SHORT
+        csb_js = nodes_map["Create Subtitle Binary"]["parameters"]["jsCode"]
+        clip_words = [{"word": f"word{i}", "start": 0.4 + i * 1.3, "end": 0.9 + i * 1.3} for i in range(16)]
+        harness_csb = (
+            "const origRequire = require;\n"
+            "require = (mod) => {\n"
+            "  if (mod === 'fs') return { existsSync: () => false, readFileSync: () => '{}' };\n"
+            "  return origRequire(mod);\n"
+            "};\n"
+            "const _item = { json: { text: 'truck flipping over the pier', words: " + json.dumps(clip_words) + " } };\n"
+            "const $input = { item: _item, first: () => _item, all: () => [_item] };\n"
+            "const _clipObj = { json: { clip_number: 1, duration: 22.0, total_duration: 22.0, segments: [{start: 106, end: 128}], title: 'Vice City Truck Flip', hook_caption: 'GTA 6 truck physics just broke', has_webcam: false } };\n"
+            "const $ = (name) => ({\n"
+            "  first: () => ({ json: name === 'Config' ? { duration: 1200 } : (name === 'Parse Cam Config' ? { ai_found: false } : {}) }),\n"
+            "  item: _clipObj,\n"
+            "  all: () => [_clipObj],\n"
+            "  last: () => ({ json: {} })\n"
+            "});\n"
+            "const res = (function() {\n" + csb_js + "\n})();\n"
+            "console.log(JSON.stringify(res));\n"
+        )
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as tf:
+            tf.write(harness_csb)
+            tp3 = tf.name
+        try:
+            r3 = subprocess.run(["node", tp3], capture_output=True, text=True, timeout=15)
+            self.assertEqual(r3.returncode, 0, r3.stderr)
+            out3 = json.loads(r3.stdout)
+            self.assertEqual(len(out3), 1)
+            self.assertFalse(out3[0]["json"].get("_skip_clip"), f"22s clip wrongly skipped: {out3[0]['json'].get('skip_reason')}")
+            self.assertIn("command", out3[0]["json"])
+            self.assertIn("ffmpeg", out3[0]["json"]["command"])
+        finally:
+            if os.path.exists(tp3):
+                os.remove(tp3)
+
+    def test_garbage_title_validator_rejects_raw_transcript_openers(self):
+        """Verify raw-transcript filler titles like 'Whoa Baps Are Pushing In Shit' and 'Huh Yeah I Mean If It Gets' are rejected and replaced cleanly."""
+        self.assertTrue(vision_director.is_garbage_title_or_hook("Whoa Baps Are Pushing In Shit"))
+        self.assertTrue(vision_director.is_garbage_title_or_hook("Huh Yeah I Mean If It Gets"))
+        self.assertTrue(vision_director.is_garbage_title_or_hook("Wait bro did you see that", "Wait bro did you see that thing fly"))
+        self.assertFalse(vision_director.is_garbage_title_or_hook("Tarik gets instantly humbled by GTA 6 cops"))
+        self.assertFalse(vision_director.is_garbage_title_or_hook("GTA 6 physics broke mid chase"))
+
+        cands = [{
+            "candidate_id": "cand_bad",
+            "window_start": 200.0,
+            "window_end": 244.0,
+            "peak_time": 225.0,
+            "raw_text": "Whoa baps are pushing in shit oh my god we are dead",
+            "transcript_lines": ["[03:35.0 | [STREAMER]] Whoa baps are pushing in shit oh my god we are dead"],
+            "signal_tags": ["[VOCAL_SPIKE]"],
+            "streamer_silence_ratio": 0.15,
+            "duration_sec": 1200.0,
+        }]
+        bad_raw = {
+            "clips": [{
+                "candidate_id": "cand_bad",
+                "title": "Whoa Baps Are Pushing In Shit",
+                "yt_title": "Huh Yeah I Mean If It Gets",
+                "hook_caption": "Whoa baps are pushing in shit",
+                "desc_line": "Bro really said \"Whoa baps\" right before everything went sideways.",
+                "comment_hook": "Did you see that coming at \"Whoa baps\"?",
+                "start_time": 208.0,
+                "end_time": 232.0,
+                "virality_score": 8.0,
+                "narrative_archetype": "OPEN_WORLD_CHAOS_OR_COP_CHASE",
+                "grounding_quote": "pushing in shit",
+            }]
+        }
+        norm_res = vision_director.normalize_director_clips(
+            bad_raw, cands, ["vine-boom-sound-effect_KT89XIq.mp3"], streamer_handle="Tarik"
+        )
+        norm = norm_res["clips"]
+        self.assertEqual(len(norm), 1)
+        c = norm[0]
+        self.assertFalse(vision_director.is_garbage_title_or_hook(c["title"], cands[0]["raw_text"]), c["title"])
+        self.assertFalse(vision_director.is_garbage_title_or_hook(c["yt_title"], cands[0]["raw_text"]), c["yt_title"])
+        self.assertFalse(vision_director.is_garbage_title_or_hook(c["hook_caption"], cands[0]["raw_text"]), c["hook_caption"])
+        self.assertNotIn("bro really said", c["desc_line"].lower())
+        self.assertNotIn("did you see that coming", c["comment_hook"].lower())
 
 
 if __name__ == "__main__":

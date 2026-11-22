@@ -282,6 +282,90 @@ def compute_chat_lag_map(chat_doc: dict, max_sec: int) -> dict:
     return {"scores": lag_scores, "meta": lag_meta}
 
 
+def compute_heatmap_map(video_path: str, duration: float, info_path: str = "") -> dict:
+    """Load YouTube 'Most Replayed' heatmap from chunk .info.json, offset by chunk_start_sec, and map spikes to Z-equivalent scores."""
+    cand_paths = []
+    if info_path:
+        cand_paths.append(info_path)
+    if video_path:
+        input_dir = os.path.dirname(video_path) or "/files/inputs"
+        raw_base = os.path.splitext(os.path.basename(video_path))[0]
+        clean_base = raw_base[:-11] if raw_base.endswith(".processing") else raw_base
+        for d in (input_dir, "/files/inputs"):
+            for fn in (
+                f"{clean_base}.processing.info.json",
+                f"{clean_base}.info.json",
+                f"{raw_base}.info.json",
+            ):
+                p = os.path.join(d, fn)
+                if p not in cand_paths:
+                    cand_paths.append(p)
+    found = next((p for p in cand_paths if p and os.path.isfile(p)), "")
+    doc = _load_json(found) if found else None
+    if not isinstance(doc, dict):
+        return {"scores": {}, "raw_values": {}, "peak_count": 0, "chunk_start_sec": 0.0, "source": found}
+    raw_hm = doc.get("heatmap")
+    if not isinstance(raw_hm, list) or not raw_hm:
+        return {"scores": {}, "raw_values": {}, "peak_count": 0, "chunk_start_sec": 0.0, "source": found}
+
+    chunk_start = doc.get("chunk_start_sec")
+    if chunk_start is None:
+        m = re.search(r"_chunk(\d+)", os.path.basename(video_path or found), re.I)
+        chunk_idx = int(m.group(1)) if m else 1
+        chunk_start = float(max(0, chunk_idx - 1) * 3000.0)
+    else:
+        chunk_start = float(chunk_start or 0.0)
+
+    max_sec = max(30, int(math.floor(duration or 3600.0)))
+    local_buckets = []
+    for entry in raw_hm:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            st = float(entry.get("start_time", 0.0)) - chunk_start
+            en = float(entry.get("end_time", st + 1.0)) - chunk_start
+            val = float(entry.get("value", 0.0))
+        except (TypeError, ValueError):
+            continue
+        if en <= 0.0 or st >= max_sec:
+            continue
+        st_c = max(0.0, st)
+        en_c = min(float(max_sec), en)
+        if en_c <= st_c:
+            continue
+        local_buckets.append((st_c, en_c, max(0.0, min(1.0, val))))
+
+    if not local_buckets:
+        return {"scores": {}, "raw_values": {}, "peak_count": 0, "chunk_start_sec": chunk_start, "source": found}
+
+    vals_desc = sorted((b[2] for b in local_buckets), reverse=True)
+    top15_cut = vals_desc[min(14, len(vals_desc) - 1)]
+    scores = {}
+    raw_values = {}
+    peak_count = 0
+    for st_c, en_c, val in local_buckets:
+        is_peak = (val >= 0.55) or (val >= top15_cut and val >= 0.35)
+        if not is_peak:
+            continue
+        peak_count += 1
+        # Map heatmap replay intensity [0.35..1.0] to Z-equivalent [1.8..3.8] (equivalent to [CHAT_BURST])
+        z_eq = round(1.5 + val * 2.3, 3)
+        s0 = max(0, int(math.floor(st_c)))
+        s1 = min(max_sec, int(math.ceil(en_c)))
+        for s in range(s0, s1 + 1):
+            if z_eq > scores.get(s, 0.0):
+                scores[s] = z_eq
+                raw_values[s] = round(val, 4)
+
+    return {
+        "scores": scores,
+        "raw_values": raw_values,
+        "peak_count": peak_count,
+        "chunk_start_sec": round(chunk_start, 2),
+        "source": found,
+    }
+
+
 def compute_face_motion_map(face_doc: dict, cam_cfg: dict) -> dict:
     """Compute per-second face/mouth motion Z_face(t), disabled when no real webcam found."""
     has_cam = bool(cam_cfg and cam_cfg.get("ai_found") and not cam_cfg.get("avatar_row_detected"))
@@ -406,15 +490,18 @@ def extract_top_candidates(
     audio_info: dict,
     chat_info: dict,
     face_info: dict,
-    top_k: int = 8,
+    top_k: int = 12,
     slice_lo: float = None,
     slice_hi: float = None,
+    heatmap_info: dict | None = None,
 ) -> list:
     """Compute 1s V(t), suppress intro/outro/housekeeping, select Top K isolated peaks & snap windows."""
     max_sec = max(30, int(math.floor(duration)))
     raw_bins = audio_info.get("raw_bins") or {}
     chat_scores = chat_info.get("scores") or {}
     chat_meta = chat_info.get("meta") or {}
+    hm_scores = (heatmap_info or {}).get("scores") or {}
+    hm_raw = (heatmap_info or {}).get("raw_values") or {}
     face_scores = face_info.get("scores") or {}
 
     # Precompute housekeeping seconds and shock text seconds from Whisper sentences
@@ -445,37 +532,42 @@ def extract_top_candidates(
             continue
         a_sc = float((raw_bins.get(sec) or {}).get("audio_score", 0.0))
         c_sc = float(chat_scores.get(sec, 0.0))
+        h_sc = float(hm_scores.get(sec, 0.0))
+        crowd_sc = max(c_sc, h_sc)
         f_sc = float(face_scores.get(sec, 0.0))
         txt_sc = float(shock_secs.get(sec, 0.0))
         # Smooth peak energy slightly across +-1s so micro-spikes coalesce naturally
         local_a = max(a_sc, 0.7 * float((raw_bins.get(sec - 1) or {}).get("audio_score", 0.0)), 0.7 * float((raw_bins.get(sec + 1) or {}).get("audio_score", 0.0)))
-        v = 0.42 * local_a + 0.38 * c_sc + 0.20 * f_sc + txt_sc
+        v = 0.42 * local_a + 0.38 * crowd_sc + 0.20 * f_sc + txt_sc
+        # Boost genuine crowd-replayed streamer reactions (heatmap + face/vocal burst) over random explosions
+        if h_sc >= 1.5 and (f_sc >= 0.8 or local_a >= 1.2 or txt_sc > 0.0):
+            v += 0.45
         v_curve[sec] = round(v, 4)
 
     eff_span = max(60.0, hi_bound - lo_bound)
-    min_spacing = 90.0 if eff_span >= 1200.0 else 40.0
+    min_spacing = 45.0 if eff_span >= 1200.0 else 30.0
     ranked_secs = sorted(range(intro_guard, max(intro_guard + 1, outro_guard)), key=lambda t: v_curve[t], reverse=True)
 
     dense_tx = len(sentences) >= 6 and sum(int(s.get("word_count", 0)) for s in sentences) >= 60
 
     # Helper: verify candidate window actually contains substantive speech when sentences exist
-    def _has_window_speech(sec_pt: int, min_wc: int = 25) -> bool:
+    def _has_window_speech(sec_pt: int, min_wc: int = 12) -> bool:
         if not sentences:
             return True
         eff_min = min_wc if dense_tx else 1
-        w0 = max(lo_bound, float(sec_pt) - 52.0)
-        w1 = min(hi_bound, float(sec_pt) + 33.0)
+        w0 = max(lo_bound, float(sec_pt) - 30.0)
+        w1 = min(hi_bound, float(sec_pt) + 14.0)
         wc_w = sum(int(s.get("word_count", 0)) for s in sentences if float(s["end"]) >= w0 and float(s["start"]) <= w1)
         return wc_w >= eff_min
 
     selected_peaks = []
-    for spacing_step in (min_spacing, max(25.0, min_spacing * 0.6)):
+    for spacing_step in (min_spacing, max(25.0, min_spacing * 0.65)):
         for sec in ranked_secs:
             if len(selected_peaks) >= top_k:
                 break
             if v_curve[sec] <= 0.0 and len(selected_peaks) > 0:
                 continue
-            if not _has_window_speech(sec, 25):
+            if not _has_window_speech(sec, 12):
                 continue
             if any(abs(sec - p) < spacing_step for p in selected_peaks):
                 continue
@@ -489,23 +581,23 @@ def extract_top_candidates(
             step_s = max(1, len(sentences) // max(1, top_k))
             for idx_s in range(0, len(sentences), step_s):
                 st_s = int(round(float(sentences[idx_s]["start"])))
-                if intro_guard <= st_s < outro_guard and _has_window_speech(st_s, 15):
+                if intro_guard <= st_s < outro_guard and _has_window_speech(st_s, 10):
                     if all(abs(st_s - p) >= 25.0 for p in selected_peaks):
                         selected_peaks.append(st_s)
                 if len(selected_peaks) >= top_k:
                     break
         if not selected_peaks:
-            step = max(20, int((hi_bound - lo_bound - 25.0) // max(1, top_k)))
+            step = max(20, int((hi_bound - lo_bound - 20.0) // max(1, top_k)))
             selected_peaks = [min(outro_guard, intro_guard + i * step) for i in range(top_k) if intro_guard + i * step < outro_guard]
 
     sent_starts = [s["start"] for s in sentences] if sentences else []
     candidates = []
     for idx, t_peak in enumerate(selected_peaks[:top_k], start=1):
-        # Part 1.1: Wide 85.0s candidate window [peak - 52s, peak + 33s] for complete 34s-55s story arcs
-        w_start = max(lo_bound, float(t_peak) - 52.0)
-        w_end = min(hi_bound, float(t_peak) + 33.0)
+        # Tight 44s candidate window [peak - 30s, peak + 14s] tuned for punchy 15s-34s viral Shorts
+        w_start = max(lo_bound, float(t_peak) - 30.0)
+        w_end = min(hi_bound, float(t_peak) + 14.0)
 
-        # Snap start/end cleanly to complete Whisper sentences (up to +-6.0s guard)
+        # Snap start/end cleanly to complete Whisper sentences (up to +-4.5s guard)
         if sentences:
             pos_l = bisect.bisect_right(sent_starts, w_start) - 1
             if 0 <= pos_l < len(sentences):
@@ -513,33 +605,33 @@ def extract_top_candidates(
                 prev_s = sentences[pos_l - 1] if pos_l > 0 else None
                 prev_ends_term = bool(prev_s and re.search(r"(?<!\.)[.!?][\"'\)]*$", str(prev_s.get("text") or "").strip()))
                 gap_prev = (float(cand_s["start"]) - float(prev_s["end"])) if prev_s else 1.0
-                if cand_s["end"] > w_start and cand_s["start"] >= max(lo_bound, w_start - 6.0) and (prev_ends_term or gap_prev >= 0.35 or pos_l == 0):
+                if cand_s["end"] > w_start and cand_s["start"] >= max(lo_bound, w_start - 4.5) and (prev_ends_term or gap_prev >= 0.35 or pos_l == 0):
                     w_start = max(lo_bound, float(cand_s["start"]))
-                elif pos_l + 1 < len(sentences) and float(sentences[pos_l + 1]["start"]) < float(t_peak) - 16.0:
+                elif pos_l + 1 < len(sentences) and float(sentences[pos_l + 1]["start"]) < float(t_peak) - 10.0:
                     w_start = max(lo_bound, float(sentences[pos_l + 1]["start"]))
             pos_r = bisect.bisect_left(sent_starts, w_end) - 1
             if 0 <= pos_r < len(sentences):
                 cand_e = sentences[pos_r]
-                if cand_e["start"] < w_end < cand_e["end"] and cand_e["end"] <= min(hi_bound, w_end + 6.0):
+                if cand_e["start"] < w_end < cand_e["end"] and cand_e["end"] <= min(hi_bound, w_end + 4.5):
                     w_end = min(hi_bound, float(cand_e["end"]))
-                elif cand_e["start"] > float(t_peak) + 3.0 and cand_e["end"] <= w_end:
+                elif cand_e["start"] > float(t_peak) + 2.0 and cand_e["end"] <= w_end:
                     w_end = min(hi_bound, float(cand_e["end"]))
 
         win_sents = [s for s in sentences if w_start <= (s["start"] + s["end"]) * 0.5 <= w_end]
         if win_sents and dense_tx:
-            # Never carry >3.5s leading/trailing dead air inside dense multi-hour windows
-            first_sp = max(lo_bound, float(win_sents[0]["start"]) - 0.35)
-            last_sp = min(hi_bound, float(win_sents[-1]["end"]) + 0.65)
-            if first_sp - w_start > 3.5:
+            # Never carry >2.5s leading/trailing dead air inside dense windows
+            first_sp = max(lo_bound, float(win_sents[0]["start"]) - 0.30)
+            last_sp = min(hi_bound, float(win_sents[-1]["end"]) + 0.50)
+            if first_sp - w_start > 2.5:
                 w_start = first_sp
-            if w_end - last_sp > 3.5:
+            if w_end - last_sp > 2.5:
                 w_end = last_sp
-        elif w_end - w_start < 40.0 and (hi_bound - lo_bound) >= 45.0:
-            w_start = max(lo_bound, min(w_start, float(w_end) - 48.0))
-            w_end = min(hi_bound, max(w_end, w_start + 55.0))
+        elif w_end - w_start < 20.0 and (hi_bound - lo_bound) >= 24.0:
+            w_start = max(lo_bound, min(w_start, float(w_end) - 24.0))
+            w_end = min(hi_bound, max(w_end, w_start + 30.0))
 
         win_sents = [s for s in sentences if w_start <= (s["start"] + s["end"]) * 0.5 <= w_end]
-        if dense_tx and sum(int(s.get("word_count", 0)) for s in win_sents) < 20:
+        if dense_tx and sum(int(s.get("word_count", 0)) for s in win_sents) < 10:
             continue
         cm = chat_meta.get(t_peak) or {}
         q_cluster = bool(cm.get("question_cluster", False))
@@ -548,25 +640,33 @@ def extract_top_candidates(
         rb = raw_bins.get(t_peak) or {}
         peak_z_db = float(rb.get("z_db", 0.0))
         peak_z_chat = float(chat_scores.get(t_peak, 0.0))
+        peak_z_hm = float(hm_scores.get(t_peak, 0.0))
+        peak_hm_val = float(hm_raw.get(t_peak, 0.0))
+        if peak_z_hm <= 0.0 and hm_scores:
+            # Check +-6s neighborhood around peak for heatmap bucket
+            for hs in range(max(0, int(t_peak) - 6), min(max_sec, int(t_peak) + 6) + 1):
+                if float(hm_scores.get(hs, 0.0)) > peak_z_hm:
+                    peak_z_hm = float(hm_scores.get(hs, 0.0))
+                    peak_hm_val = float(hm_raw.get(hs, 0.0))
         peak_z_face = float(face_scores.get(t_peak, 0.0))
 
-        # Sustained Multi-Beat Arc check: >=2 distinct beats >=6s apart inside a 45s escalation span
+        # Sustained Multi-Beat Arc check: >=2 distinct beats >=5s apart inside escalation span
         beat_secs = []
-        b_lo = max(3, int(t_peak) - 40)
+        b_lo = max(3, int(t_peak) - 28)
         b_hi = min(max_sec, int(t_peak) + 8)
         for bs in range(b_lo, b_hi + 1):
             rb_b = raw_bins.get(bs) or {}
             b_hit = (
                 float(rb_b.get("z_db", 0.0)) >= 1.5
                 or float(chat_scores.get(bs, 0.0)) >= 1.2
+                or float(hm_scores.get(bs, 0.0)) >= 1.5
                 or float(face_scores.get(bs, 0.0)) >= 1.0
                 or float(shock_secs.get(bs, 0.0)) > 0.0
             )
-            if b_hit and (not beat_secs or (bs - beat_secs[-1]) >= 6):
+            if b_hit and (not beat_secs or (bs - beat_secs[-1]) >= 5):
                 beat_secs.append(bs)
-        # Also treat distinct high-WPM sentence transitions (>=15 words/min cluster) as setup beat
-        if len(beat_secs) < 2 and len(win_sents) >= 4:
-            early_sents = [s for s in win_sents if float(s["end"]) < float(t_peak) - 6.0 and int(s.get("word_count", 0)) >= 5]
+        if len(beat_secs) < 2 and len(win_sents) >= 3:
+            early_sents = [s for s in win_sents if float(s["end"]) < float(t_peak) - 4.0 and int(s.get("word_count", 0)) >= 4]
             if early_sents and (beat_secs or any(SHOCK_SPEECH_RE.search(s.get("text", "")) for s in win_sents)):
                 beat_secs.insert(0, int(early_sents[0]["start"]))
 
@@ -576,31 +676,42 @@ def extract_top_candidates(
             win_tags.append(f"[dB_PEAK:Z={peak_z_db:.1f}]")
         if peak_z_chat > 0.0:
             win_tags.append(f"[CHAT_BURST:Z={peak_z_chat:.1f}]")
+        if peak_z_hm > 0.0:
+            win_tags.append(f"[HEATMAP_PEAK:val={peak_hm_val:.2f}]")
+            win_tags.append("[CROWD_REPLAY]")
         if peak_z_face >= 1.2:
             win_tags.append("[FACE:SHOCK_OR_REACTION]")
         word_sum = sum(int(s.get("word_count", 0)) for s in win_sents)
-        wpm_val = word_sum / max(1.0, (w_end - w_start) / 60.0)
+        win_dur_s = max(1.0, w_end - w_start)
+        wpm_val = word_sum / (win_dur_s / 60.0)
         if wpm_val >= 145.0:
             win_tags.append(f"[WPM_SPIKE:{int(round(wpm_val))}wpm]")
         if any(SHOCK_SPEECH_RE.search(str(s.get("text") or "")) for s in win_sents) and not any("dB_PEAK" in t or "SCREAM" in t for t in win_tags):
             win_tags.append("[WPM_SPIKE:SHOCK_EXCLAIM]")
+        streamer_spoken_sec = 0.0
         for si_l, s in enumerate(win_sents):
             m, sec_f = divmod(max(0.0, s["start"]), 60.0)
             q_tag = " [CHAT_QUESTION_CLUSTER]" if (q_cluster and si_l == len(win_sents) // 2) else ""
             lines.append(f"[{int(m):02d}:{sec_f:04.1f} | {s['speaker_tag']}{q_tag}] {s['text']}")
+            if s.get("speaker_tag") == "STREAMER":
+                streamer_spoken_sec += max(0.0, min(w_end, float(s["end"])) - max(w_start, float(s["start"])))
             for tg in (s.get("tags") or []):
                 if tg not in win_tags:
                     win_tags.append(tg)
+        streamer_silence_ratio = round(max(0.0, min(1.0, 1.0 - (streamer_spoken_sec / win_dur_s))), 3)
 
         shock_hits = sum(1 for s in win_sents if SHOCK_SPEECH_RE.search(str(s.get("text") or "")))
+        peak_z_crowd = max(peak_z_chat, peak_z_hm)
         sig_strength = (
             (1.15 if peak_z_db >= 2.8 else (0.85 if peak_z_db >= 2.1 else (0.35 if peak_z_db >= 1.4 else 0.0)))
-            + (0.75 if peak_z_chat >= 2.0 else (0.35 if peak_z_chat >= 1.0 else 0.0))
+            + (0.85 if peak_z_crowd >= 2.0 else (0.45 if peak_z_crowd >= 1.0 else 0.0))
             + (0.65 if peak_z_face >= 1.2 else 0.0)
             + (0.65 if wpm_val >= 145.0 else (0.35 if wpm_val >= 125.0 else 0.0))
             + (0.45 if shock_hits >= 2 else (0.20 if shock_hits >= 1 else 0.0))
         )
-        est_virality = min(9.9, round(6.5 + min(1.8, v_curve[t_peak] * 0.48) + (0.95 if len(beat_secs) >= 2 else 0.0) + min(1.45, sig_strength), 2))
+        # Penalize passive/silent cutscene stretches where streamer is mostly silent
+        silence_penalty = 0.85 if (dense_tx and streamer_silence_ratio > 0.65 and peak_z_db < 2.2 and peak_z_face < 1.2) else 0.0
+        est_virality = max(4.0, min(9.9, round(6.5 + min(1.8, v_curve[t_peak] * 0.48) + (0.85 if len(beat_secs) >= 2 else 0.0) + min(1.55, sig_strength) - silence_penalty, 2)))
         if len(beat_secs) >= 2:
             win_tags.append(f"[MULTI_BEAT:{len(beat_secs)}]")
 
@@ -618,7 +729,10 @@ def extract_top_candidates(
             "z_db": round(peak_z_db, 2),
             "spec_boost": float(rb.get("spec_boost", 0.0)),
             "z_chat_lagged": peak_z_chat,
+            "z_heatmap": round(peak_z_hm, 2),
+            "heatmap_value": round(peak_hm_val, 3),
             "z_face": peak_z_face,
+            "streamer_silence_ratio": streamer_silence_ratio,
             "signal_tags": win_tags,
             "chat_question_cluster": bool(cm.get("question_cluster", False)),
             "chat_samples": cm.get("msgs") or [],
@@ -634,10 +748,10 @@ def extract_top_candidates(
 def get_adaptive_clip_targets(duration_sec: float) -> tuple[int, int, int]:
     """Scale candidate extraction and target clip counts dynamically by chunk duration."""
     if duration_sec < 480.0:
-        return 4, 1, 2
-    if duration_sec <= 1500.0:
         return 6, 2, 3
-    return 8, 4, 5
+    if duration_sec <= 1500.0:
+        return 10, 4, 6
+    return 14, 6, 10
 
 
 def _measure_webcam_activity(video_path: str, w_start: float, w_end: float, cam_box: dict) -> float:
@@ -766,6 +880,7 @@ def main():
     parser.add_argument("--audio-energy", default="/files/temp/audio_energy.json")
     parser.add_argument("--chat", default="")
     parser.add_argument("--face", default="/files/temp/face_emotions.json")
+    parser.add_argument("--info-json", default="", help="Optional yt-dlp .info.json path for YouTube heatmap")
     parser.add_argument("--out", default="/files/temp/gta6_candidates.json")
     parser.add_argument("--grid-dir", default="/files/temp")
     parser.add_argument("--top-k", type=int, default=0, help="Candidate count (0=adaptive by stream duration)")
@@ -903,6 +1018,7 @@ def main():
 
     audio_info = extract_1s_audio_features(audio_path if os.path.exists(audio_path) and aud_dur > 0 else "", audio_energy_doc, duration)
     chat_info = compute_chat_lag_map(chat_doc, int(duration) + 1)
+    heatmap_info = compute_heatmap_map(video_path, duration, info_path=args.info_json)
     face_info = compute_face_motion_map(face_doc, cam_cfg)
     sentences = tag_speaker_roles(build_sentences_from_whisper(transcript_doc, index_doc), audio_info, face_info)
 
@@ -923,11 +1039,16 @@ def main():
         top_k=eff_top_k + 4,
         slice_lo=s_lo if (slice_lo is not None or slice_hi is not None) else None,
         slice_hi=s_hi if (slice_lo is not None or slice_hi is not None) else None,
+        heatmap_info=heatmap_info,
     )
     if slice_lo is not None or slice_hi is not None:
         raw_candidates = [c for c in raw_candidates if c["window_start"] >= max(0.0, s_lo - 5.0) and c["window_end"] <= s_hi + 5.0]
     if args.min_virality > 0.0:
-        raw_candidates = [c for c in raw_candidates if float(c.get("est_virality_10", 0.0)) >= args.min_virality and int(c.get("multi_beat_count", 0)) >= 2]
+        raw_candidates = [
+            c for c in raw_candidates
+            if float(c.get("est_virality_10", 0.0)) >= args.min_virality
+            and (int(c.get("multi_beat_count", 0)) >= 2 or float(c.get("heatmap_value", 0.0)) >= 0.55 or float(c.get("est_virality_10", 0.0)) >= args.min_virality + 0.5)
+        ]
 
     os.makedirs(args.grid_dir, exist_ok=True)
     font_path = _pick_font()
@@ -980,7 +1101,9 @@ def main():
         "effective_duration": round(slice_span, 2),
         "recommended_min_clips": rec_min_clips,
         "recommended_max_clips": rec_max_clips,
-        "peak_spacing_sec": 90.0 if slice_span >= 1200.0 else 40.0,
+        "peak_spacing_sec": 45.0 if slice_span >= 1200.0 else 30.0,
+        "heatmap_peaks_detected": int(heatmap_info.get("peak_count", 0)),
+        "chunk_start_sec": float(heatmap_info.get("chunk_start_sec", 0.0)),
         "candidate_count": len(candidates),
         "candidates": candidates,
     }
@@ -991,6 +1114,7 @@ def main():
         "status": "ok",
         "video_path": video_path,
         "effective_duration": payload["effective_duration"],
+        "heatmap_peaks_detected": payload["heatmap_peaks_detected"],
         "candidate_count": len(candidates),
         "grids_rendered": sum(1 for c in candidates if c.get("grid_path")),
         "out": args.out,
