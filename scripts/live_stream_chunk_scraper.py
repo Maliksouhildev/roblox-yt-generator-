@@ -378,6 +378,9 @@ def is_eligible_candidate(meta: dict, now_epoch: float) -> bool:
     live_status = str(meta.get("live_status") or "").lower()
     if live_status == "is_upcoming":
         return False
+    title_str = str(meta.get("title") or "")
+    if re.search(r"\bno\s+commentary\b", title_str, re.I):
+        return False
     is_live = bool(meta.get("is_live", False))
     dur = float(meta.get("duration") or 0.0)
     if not is_live and dur > 0.0:
@@ -512,7 +515,8 @@ def discover_and_probe_candidates(
                 except Exception:
                     pass
         now_ep = time.time()
-        if any(is_eligible_candidate(m, now_ep) for m in by_id.values()):
+        live_eval = evaluate_candidates(list(by_id.values()), state, now_ep)
+        if any(c.get("ready") for c in live_eval):
             return list(by_id.values())
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -627,8 +631,7 @@ def evaluate_candidates(probed_streams: list[dict], state: dict, now_epoch: floa
     evaluated.sort(
         key=lambda c: (
             1 if c["ready"] else 0,
-            1 if c.get("is_live") else 0,
-            c["score"],
+            c["score"] + (15.0 if c.get("is_live") else 0.0),
             1 if c.get("is_vip") else 0,
             c["viewers"],
         ),
@@ -1363,9 +1366,21 @@ def run_scraper(
 def _count_fresh_input_chunks() -> int:
     if not os.path.isdir(INPUTS_DIR):
         return 0
+    exhausted: set[str] = set()
+    ex_path = os.path.join(TEMP_DIR, "exhausted_vods.txt")
+    if os.path.isfile(ex_path):
+        try:
+            with open(ex_path, "r", encoding="utf-8", errors="ignore") as f:
+                exhausted = {ln.strip() for ln in f if ln.strip()}
+        except Exception:
+            exhausted = set()
     return sum(
         1 for f in os.listdir(INPUTS_DIR)
-        if f.endswith(".mp4") and not f.endswith(".processing.mp4") and os.path.getsize(os.path.join(INPUTS_DIR, f)) > MIN_VALID_BYTES
+        if f.endswith(".mp4")
+        and not f.endswith(".processing.mp4")
+        and f[:-4] not in exhausted
+        and f not in exhausted
+        and os.path.getsize(os.path.join(INPUTS_DIR, f)) > MIN_VALID_BYTES
     )
 
 

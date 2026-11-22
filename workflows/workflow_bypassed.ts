@@ -4174,7 +4174,8 @@ SIDECAR_EOF\`;
         position: [-96360, 26480],
     })
     PickRandomStreamer = {
-        jsCode: `const streamers = [
+        jsCode: `try { if (String($('Find Stream').last().json.stdout || '').trim() === '__SKIP_CONCURRENT__') return []; } catch (e) {}
+const streamers = [
   'https://www.youtube.com/@KreekCraft/streams',
   'https://www.youtube.com/@LankyBox/streams',
   'https://www.youtube.com/@RussoPlays/streams',

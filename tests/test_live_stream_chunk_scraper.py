@@ -619,6 +619,77 @@ class TestLiveChatSlicingAndChunkLifecycle(unittest.TestCase):
                 self.assertTrue(os.path.exists(os.path.join(inputs_dir, "TypicalGamer_live1_chunk1.mp4")))
                 self.assertTrue(os.path.exists(os.path.join(inputs_dir, "TypicalGamer_live1_chunk1.info.json")))
 
+    def test_no_commentary_and_cooldown_fast_live_first_fallback(self):
+        now = 1_795_000_000.0
+        # 1) [No Commentary] streams must be filtered out; VIP high-score VOD beats low-viewer non-VIP live
+        silent_live = {
+            "id": "silent1",
+            "title": "GTA 6 - 100% Walkthrough Part 5 [No Commentary]",
+            "uploader_id": "@GTASeriesVideos",
+            "is_live": True,
+            "release_timestamp": now - 4000,
+            "concurrent_view_count": 5000,
+        }
+        small_live = {
+            "id": "small1",
+            "title": "GTA 6 Live",
+            "uploader_id": "@SmallStreamer",
+            "is_live": True,
+            "release_timestamp": now - 4000,
+            "concurrent_view_count": 1200,
+        }
+        vip_vod = {
+            "id": "vip_vod1",
+            "title": "BEATING GTA 6 FINAL MISSION",
+            "uploader_id": "@IShowSpeed",
+            "is_live": False,
+            "view_count": 10_000_000,
+            "duration": 7200,
+        }
+        self.assertFalse(scraper.is_eligible_candidate(silent_live, now))
+        sel, wait_s = scraper.select_best_candidate([silent_live, small_live, vip_vod], {}, now, allow_wait=True)
+        self.assertEqual(sel["id"], "vip_vod1")
+        self.assertEqual(wait_s, 0)
+
+        # 2) fast_live_first must NOT early-return when the only live candidate is in failed_until cooldown
+        cooldown_live = {
+            "id": "cd_live",
+            "title": "GTA 6 Live",
+            "uploader_id": "@IShowSpeed",
+            "is_live": True,
+            "release_timestamp": now - 4000,
+            "concurrent_view_count": 50000,
+        }
+        state = {"cd_live": {"failed_until": now + 1800}}
+        with mock.patch.object(scraper, "probe_stream", side_effect=lambda u, *a: cooldown_live if "IShowSpeed" in u else None), \
+             mock.patch.object(scraper, "discover_flat_playlist", return_value=[]):
+            cands = scraper.discover_and_probe_candidates(
+                state=state,
+                yt_live_urls=["https://www.youtube.com/@IShowSpeed/live"],
+                yt_vod_urls=[],
+                twitch_urls=[],
+                search_query=None,
+                fast_live_first=True,
+            )
+            # Only cd_live came back from live pass, and VOD fallback ran cleanly (not skipped blindly)
+            self.assertEqual(len(cands), 1)
+            self.assertIsNone(scraper.select_best_candidate(cands, state, now, allow_wait=False)[0])
+
+        # 3) _count_fresh_input_chunks excludes stems listed in exhausted_vods.txt
+        with tempfile.TemporaryDirectory() as tmp:
+            inputs_dir = os.path.join(tmp, "inputs")
+            temp_dir = os.path.join(tmp, "temp")
+            os.makedirs(inputs_dir)
+            os.makedirs(temp_dir)
+            with open(os.path.join(inputs_dir, "Exhausted_abc_chunk1.mp4"), "wb") as f:
+                f.write(b"x" * 100)
+            with open(os.path.join(inputs_dir, "Fresh_def_chunk1.mp4"), "wb") as f:
+                f.write(b"x" * 100)
+            with open(os.path.join(temp_dir, "exhausted_vods.txt"), "w", encoding="utf-8") as f:
+                f.write("Exhausted_abc_chunk1\n")
+            with mock.patch.multiple(scraper, INPUTS_DIR=inputs_dir, TEMP_DIR=temp_dir, MIN_VALID_BYTES=10):
+                self.assertEqual(scraper._count_fresh_input_chunks(), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
