@@ -958,7 +958,6 @@ def build_vod_download_command(
             "--no-playlist",
             "--download-sections", f"*{int(start_sec)}-{int(end_sec)}",
             "--write-info-json",
-            "--write-subs", "--sub-langs", "live_chat",
             "-f", fmt,
             "--merge-output-format", "mp4",
             "-o", vod_base + ".%(ext)s",

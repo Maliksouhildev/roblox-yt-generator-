@@ -721,9 +721,6 @@ class TestLiveChatSlicingAndChunkLifecycle(unittest.TestCase):
                     f.write(b"SECTION_MP4" * 20)
                 with open(base + ".info.json", "w", encoding="utf-8") as f:
                     json.dump({"id": "mega22061", "uploader_id": "@IShowSpeed"}, f)
-                with open(base + ".live_chat.json", "w", encoding="utf-8") as f:
-                    f.write(json.dumps({"replayChatItemAction": {"videoOffsetTimeMsec": "150000", "actions": []}}) + "\n")
-                    f.write(json.dumps({"replayChatItemAction": {"videoOffsetTimeMsec": "4500000", "actions": []}}) + "\n")
                 return mock.Mock(returncode=0, stdout="", stderr="")
 
             with mock.patch.multiple(
@@ -745,11 +742,9 @@ class TestLiveChatSlicingAndChunkLifecycle(unittest.TestCase):
                 self.assertEqual(res1["end_offset"], 3000)
                 self.assertIn("--download-sections", seen_cmds[0])
                 self.assertIn("*0-3000", seen_cmds[0])
+                self.assertNotIn("--write-subs", seen_cmds[0])
                 fmt = seen_cmds[0][seen_cmds[0].index("-f") + 1]
                 self.assertIn("protocol*=m3u8", fmt)
-                chat1 = [json.loads(x) for x in open(os.path.join(inputs_dir, "IShowSpeed_mega22061_chunk1.live_chat.json"), encoding="utf-8") if x.strip()]
-                self.assertEqual(len(chat1), 1)
-                self.assertEqual(chat1[0]["replayChatItemAction"]["videoOffsetTimeMsec"], "150000")
 
                 res2 = scraper.run_scraper(dry_run=False, no_wait=True)
                 self.assertEqual(res2["chunk_idx"], 2)
