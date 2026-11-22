@@ -692,6 +692,71 @@ class TestLiveChatSlicingAndChunkLifecycle(unittest.TestCase):
             with mock.patch.multiple(scraper, INPUTS_DIR=inputs_dir, TEMP_DIR=temp_dir, MIN_VALID_BYTES=10):
                 self.assertEqual(scraper._count_fresh_input_chunks(), 1)
 
+    def test_mega_vod_section_download_uses_m3u8_slices(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            inputs_dir = os.path.join(tmp, "inputs")
+            temp_dir = os.path.join(tmp, "temp")
+            state_path = os.path.join(temp_dir, "live_chunks_state.json")
+            os.makedirs(inputs_dir, exist_ok=True)
+            os.makedirs(temp_dir, exist_ok=True)
+
+            mega_meta = {
+                "id": "mega22061",
+                "url": "https://www.youtube.com/watch?v=mega22061",
+                "title": "GTA 6 FINAL MISSION 6H VOD",
+                "uploader_id": "@IShowSpeed",
+                "extractor": "youtube",
+                "is_live": False,
+                "view_count": 5_000_000,
+                "duration": 22061.0,
+            }
+            seen_cmds = []
+
+            def fake_subproc(cmd, *args, **kwargs):
+                seen_cmds.append(cmd)
+                # Write directly to -o base (.mp4)
+                out_tpl = cmd[cmd.index("-o") + 1]
+                base = out_tpl[:-len(".%(ext)s")]
+                with open(base + ".mp4", "wb") as f:
+                    f.write(b"SECTION_MP4" * 20)
+                with open(base + ".info.json", "w", encoding="utf-8") as f:
+                    json.dump({"id": "mega22061", "uploader_id": "@IShowSpeed"}, f)
+                with open(base + ".live_chat.json", "w", encoding="utf-8") as f:
+                    f.write(json.dumps({"replayChatItemAction": {"videoOffsetTimeMsec": "150000", "actions": []}}) + "\n")
+                    f.write(json.dumps({"replayChatItemAction": {"videoOffsetTimeMsec": "4500000", "actions": []}}) + "\n")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+
+            with mock.patch.multiple(
+                scraper,
+                INPUTS_DIR=inputs_dir,
+                TEMP_DIR=temp_dir,
+                STATE_PATH=state_path,
+                CHUNK_SEC=3000,
+                MIN_VALID_BYTES=10,
+                MIN_VALID_DUR_SEC=600.0,
+            ), \
+                 mock.patch.object(scraper, "discover_and_probe_candidates", return_value=[mega_meta]), \
+                 mock.patch.object(scraper, "probe_duration", return_value=3000.0), \
+                 mock.patch("subprocess.run", side_effect=fake_subproc):
+
+                res1 = scraper.run_scraper(dry_run=False, no_wait=True)
+                self.assertEqual(res1["status"], "downloaded")
+                self.assertEqual(res1["start_offset"], 0)
+                self.assertEqual(res1["end_offset"], 3000)
+                self.assertIn("--download-sections", seen_cmds[0])
+                self.assertIn("*0-3000", seen_cmds[0])
+                fmt = seen_cmds[0][seen_cmds[0].index("-f") + 1]
+                self.assertIn("protocol*=m3u8", fmt)
+                chat1 = [json.loads(x) for x in open(os.path.join(inputs_dir, "IShowSpeed_mega22061_chunk1.live_chat.json"), encoding="utf-8") if x.strip()]
+                self.assertEqual(len(chat1), 1)
+                self.assertEqual(chat1[0]["replayChatItemAction"]["videoOffsetTimeMsec"], "150000")
+
+                res2 = scraper.run_scraper(dry_run=False, no_wait=True)
+                self.assertEqual(res2["chunk_idx"], 2)
+                self.assertEqual(res2["start_offset"], 3000)
+                self.assertEqual(res2["end_offset"], 6000)
+                self.assertIn("*3000-6000", seen_cmds[1])
+
 
 if __name__ == "__main__":
     unittest.main()

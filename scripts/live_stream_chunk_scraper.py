@@ -933,8 +933,38 @@ def build_twitch_live_command(meta: dict, out_base: str) -> list[str]:
     ]
 
 
-def build_vod_download_command(meta: dict, vod_base: str) -> list[str]:
+def build_vod_download_command(
+    meta: dict,
+    vod_base: str,
+    start_sec: int | None = None,
+    end_sec: int | None = None,
+) -> list[str]:
     yt_cmd = yt_dlp_cmd_prefix()
+    if start_sec is not None and end_sec is not None and end_sec > start_sec:
+        # Prefer HLS (m3u8) with --download-sections + -N 8 so 3-10h VODs fetch only the requested slice at ~35x speed
+        fmt = (
+            "bestvideo[height<=720][ext=mp4][protocol*=m3u8]+bestaudio[protocol*=m3u8]/"
+            "bestvideo[height<=720][protocol*=m3u8]+bestaudio[protocol*=m3u8]/"
+            "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/"
+            "bestvideo[height<=720]+bestaudio/best[height<=720]/best"
+        )
+        timeout_s = max(DVR_FETCH_TIMEOUT_SEC, 270)
+        return [
+            "timeout", "-s", "INT", "-k", "30", str(timeout_s),
+            *yt_cmd,
+            "--js-runtimes", "node",
+            "-N", "8",
+            "--socket-timeout", "20",
+            "--no-playlist",
+            "--download-sections", f"*{int(start_sec)}-{int(end_sec)}",
+            "--write-info-json",
+            "--write-subs", "--sub-langs", "live_chat",
+            "-f", fmt,
+            "--merge-output-format", "mp4",
+            "-o", vod_base + ".%(ext)s",
+            meta["url"],
+        ]
+
     return [
         "timeout", "-s", "INT", "-k", "30", str(DVR_FETCH_TIMEOUT_SEC),
         *yt_cmd,
@@ -1271,6 +1301,7 @@ def run_scraper(
             cleanup_partial_files(out_base)
 
     else:
+        meta_vod_dur = float(selected.get("duration") or st.get("source_duration_sec") or 0.0)
         vod_base = os.path.join(TEMP_DIR, f"vod_{vid}")
         vod_mp4 = vod_base + ".mp4"
         reusable = (
@@ -1278,18 +1309,10 @@ def run_scraper(
             and os.path.getsize(vod_mp4) > MIN_VALID_BYTES
             and probe_duration(vod_mp4) >= MIN_SLICE_DUR_SEC
         )
-        if not reusable:
-            _remove_prefix_files(vod_base)
-            vod_cmd = build_vod_download_command(selected, vod_base)
-            try:
-                subprocess.run(vod_cmd, timeout=DVR_FETCH_TIMEOUT_SEC + 45)
-            except Exception as ex:
-                print(f"[LiveScraper] VOD download notice: {ex}", file=sys.stderr)
-            normalize_chat_sidecar(vod_base)
-
-        if os.path.exists(vod_mp4):
-            vod_dur = probe_duration(vod_mp4)
-            if vod_dur > 0 and (last_end_sec >= vod_dur - 5 or (vod_dur - last_end_sec) < MIN_SLICE_DUR_SEC):
+        # Mega-VODs (> 2.5h, where full file is 4-11 GiB) slice only the requested window directly via --download-sections + m3u8
+        if not reusable and meta_vod_dur > 9000.0:
+            vod_dur = meta_vod_dur
+            if last_end_sec >= vod_dur - 5 or (vod_dur - last_end_sec) < MIN_SLICE_DUR_SEC:
                 state[vid] = {
                     **st,
                     "completed": True,
@@ -1297,30 +1320,79 @@ def run_scraper(
                     "last_scraped_epoch": time.time(),
                 }
                 save_json(STATE_PATH, state)
-                _remove_prefix_files(vod_base)
                 return {"status": "vod_already_completed", "downloaded": False, "video_id": vid}
 
-            sliced_ok, vod_dur, end_sec, slice_dur = slice_and_copy_sidecars(
-                vod_base,
-                vod_mp4,
-                out_base,
-                last_end_sec,
-                chunk_sec=CHUNK_SEC,
-                min_slice_sec=MIN_SLICE_DUR_SEC,
-                stream_start_epoch=rel_ts,
-            )
-            if sliced_ok:
-                is_final_tail = (end_sec >= vod_dur - 5) and last_end_sec > 0
-                min_bytes = min(1024 * 1024, MIN_VALID_BYTES) if is_final_tail else MIN_VALID_BYTES
-                min_dur = min(MIN_VALID_DUR_SEC, max(MIN_SLICE_DUR_SEC, slice_dur * 0.7)) if is_final_tail else MIN_VALID_DUR_SEC
-                ok, dur, size = validate_chunk_file(out_mp4, min_bytes=min_bytes, min_dur=min_dur)
-                if ok:
-                    new_end_sec = int(end_sec)
-                    finished_vod = new_end_sec >= vod_dur - 5
-                    if finished_vod:
-                        _remove_prefix_files(vod_base)
-                else:
-                    cleanup_partial_files(out_base)
+            sec_end = min(int(round(vod_dur)), int(end_offset))
+            slice_dur_target = max(1.0, float(sec_end - last_end_sec))
+            cleanup_partial_files(out_base)
+            sec_cmd = build_vod_download_command(selected, out_base, start_sec=last_end_sec, end_sec=sec_end)
+            try:
+                subprocess.run(sec_cmd, timeout=315)
+            except Exception as ex:
+                print(f"[LiveScraper] VOD section download notice: {ex}", file=sys.stderr)
+            normalize_chat_sidecar(out_base)
+            chat_path = find_live_chat_file(out_base)
+            if chat_path:
+                slice_live_chat_json(
+                    chat_path,
+                    chat_path,
+                    last_end_sec,
+                    sec_end,
+                    stream_start_epoch=rel_ts,
+                )
+            is_final_tail = (sec_end >= vod_dur - 5) and last_end_sec > 0
+            min_bytes = min(1024 * 1024, MIN_VALID_BYTES) if is_final_tail else MIN_VALID_BYTES
+            min_dur = min(MIN_VALID_DUR_SEC, max(MIN_SLICE_DUR_SEC, slice_dur_target * 0.7)) if is_final_tail else MIN_VALID_DUR_SEC
+            ok, dur, size = validate_chunk_file(out_mp4, min_bytes=min_bytes, min_dur=min_dur)
+            if ok:
+                new_end_sec = min(int(round(vod_dur)), last_end_sec + int(round(dur)))
+                finished_vod = new_end_sec >= vod_dur - 5
+            else:
+                cleanup_partial_files(out_base)
+        else:
+            if not reusable:
+                _remove_prefix_files(vod_base)
+                vod_cmd = build_vod_download_command(selected, vod_base)
+                try:
+                    subprocess.run(vod_cmd, timeout=DVR_FETCH_TIMEOUT_SEC + 45)
+                except Exception as ex:
+                    print(f"[LiveScraper] VOD download notice: {ex}", file=sys.stderr)
+                normalize_chat_sidecar(vod_base)
+
+            if os.path.exists(vod_mp4):
+                vod_dur = probe_duration(vod_mp4)
+                if vod_dur > 0 and (last_end_sec >= vod_dur - 5 or (vod_dur - last_end_sec) < MIN_SLICE_DUR_SEC):
+                    state[vid] = {
+                        **st,
+                        "completed": True,
+                        "source_duration_sec": round(vod_dur, 2),
+                        "last_scraped_epoch": time.time(),
+                    }
+                    save_json(STATE_PATH, state)
+                    _remove_prefix_files(vod_base)
+                    return {"status": "vod_already_completed", "downloaded": False, "video_id": vid}
+
+                sliced_ok, vod_dur, end_sec, slice_dur = slice_and_copy_sidecars(
+                    vod_base,
+                    vod_mp4,
+                    out_base,
+                    last_end_sec,
+                    chunk_sec=CHUNK_SEC,
+                    min_slice_sec=MIN_SLICE_DUR_SEC,
+                    stream_start_epoch=rel_ts,
+                )
+                if sliced_ok:
+                    is_final_tail = (end_sec >= vod_dur - 5) and last_end_sec > 0
+                    min_bytes = min(1024 * 1024, MIN_VALID_BYTES) if is_final_tail else MIN_VALID_BYTES
+                    min_dur = min(MIN_VALID_DUR_SEC, max(MIN_SLICE_DUR_SEC, slice_dur * 0.7)) if is_final_tail else MIN_VALID_DUR_SEC
+                    ok, dur, size = validate_chunk_file(out_mp4, min_bytes=min_bytes, min_dur=min_dur)
+                    if ok:
+                        new_end_sec = int(end_sec)
+                        finished_vod = new_end_sec >= vod_dur - 5
+                        if finished_vod:
+                            _remove_prefix_files(vod_base)
+                    else:
+                        cleanup_partial_files(out_base)
 
     if ok:
         entry_state = {
