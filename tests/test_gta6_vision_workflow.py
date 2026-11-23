@@ -1293,6 +1293,112 @@ class TestGta6PeakAndVisionLogic(unittest.TestCase):
             if os.path.exists(tp):
                 os.remove(tp)
 
+    def test_dynamic_jumpcut_engine_and_bandpass_subtitle_sync(self):
+        """Verify dynamic_jumpcut_engine protects crashes/face reactions, trims calm pauses >=14.1s, 7b uses 300-3400Hz bandpass + jumpcuts, and ViralSubs strips emoji tofu."""
+        import subprocess
+        import tempfile
+        import scripts.dynamic_jumpcut_engine as dje
+
+        # 1) Unit test plan_jumpcuts: cut calm dead air (>1.05s) + dead intro (>0.35s) + dead outro (>0.90s), while PROTECTING high-motion crash & webcam laugh
+        dur = 26.0
+        n_frames = int(dur / 0.02)
+        rms_db = [-20.0] * n_frames  # default active speech
+        # Dead intro: 0.0 .. 0.70s
+        for f in range(0, 35):
+            rms_db[f] = -52.0
+        # High-motion crash silence: 5.0 .. 7.5s -> MUST BE PROTECTED (game=48.0)
+        for f in range(250, 375):
+            rms_db[f] = -52.0
+        # Brief comedic beat: 10.0 .. 10.75s (0.75s <= 0.85s) -> MUST BE PROTECTED
+        for f in range(500, 537):
+            rms_db[f] = -52.0
+        # Active cam laugh silence: 13.0 .. 15.0s -> MUST BE PROTECTED (cam=8.5)
+        for f in range(650, 750):
+            rms_db[f] = -52.0
+        # Dead calm pause: 18.0 .. 21.0s (3.0s) -> MUST BE CUT!
+        for f in range(900, 1050):
+            rms_db[f] = -52.0
+        # Dead outro: 24.5 .. 26.0s (1.5s > 0.90s) -> MUST BE TRIMMED!
+        for f in range(1225, n_frames):
+            rms_db[f] = -52.0
+
+        rms_info = {"frame_ms": 20, "threshold_db": -34.0, "rms_db": rms_db}
+        game_vals = {b: 12.0 for b in range(1, 55)}
+        cam_vals = {b: 1.5 for b in range(1, 55)}
+        for b in range(10, 16):  # crash @ 5..7.5s
+            game_vals[b] = 48.0
+        for b in range(26, 31):  # face laugh @ 13..15s
+            cam_vals[b] = 8.5
+        motion_info = {
+            "game_vals": game_vals, "cam_vals": cam_vals,
+            "game_med": 12.0, "game_p75": 15.0,
+            "cam_med": 1.5, "cam_p75": 2.0,
+        }
+        plan = dje.plan_jumpcuts(dur, rms_info, motion_info)
+        reasons = [c["reason"] for c in plan["cut_regions"]]
+        self.assertIn("dead_intro", reasons)
+        self.assertIn("dead_pause", reasons)
+        self.assertIn("dead_outro", reasons)
+        # Crash (5..7.5), comedic beat (10..10.75), and laugh (13..15) MUST NOT be cut!
+        for cr in plan["cut_regions"]:
+            self.assertFalse(cr["start"] < 7.5 and cr["end"] > 5.0, f"Cut high-motion crash: {cr}")
+            self.assertFalse(cr["start"] < 10.75 and cr["end"] > 10.0, f"Cut brief beat: {cr}")
+            self.assertFalse(cr["start"] < 15.0 and cr["end"] > 13.0, f"Cut active face reaction: {cr}")
+        self.assertTrue(all((s["end"] - s["start"]) >= 1.20 for s in plan["kept_segments"]))
+
+        # 2) Workflow node wiring: 7b runs dynamic_jumpcut_engine BEFORE ffmpeg & uses 300-3400Hz bandpass + p25+6.5
+        with open(os.path.join(ROOT, "workflows", "gta6_vision_shorts_workflow.json"), "r", encoding="utf-8") as f:
+            wf = json.load(f)
+        nodes_map = {n["name"]: n for n in wf["nodes"]}
+        cmd_7b = nodes_map["7b. Extract Clip Audio"]["parameters"]["command"]
+        self.assertIn("dynamic_jumpcut_engine.py", cmd_7b)
+        self.assertLess(cmd_7b.index("dynamic_jumpcut_engine.py"), cmd_7b.index("temp_audio.wav"))
+        self.assertIn("highpass=f=300,lowpass=f=3400", cmd_7b)
+        self.assertIn("p25+6.5", cmd_7b)
+
+        # 3) Create Subtitle Binary strips emoji tofu & snaps post-clamp phrase opener within 40ms of RMS onset
+        csb_js = nodes_map["Create Subtitle Binary"]["parameters"]["jsCode"]
+        self.assertIn("groupEmoji = \"\"", csb_js)
+        rms_curve = [-50.0] * 100  # 2.0s @ 20ms; speech starts at 1.20s (frame 60)
+        for f in range(60, 95):
+            rms_curve[f] = -20.0
+        with tempfile.TemporaryDirectory() as td:
+            rms_p = os.path.join(td, "speech_rms.json")
+            with open(rms_p, "w", encoding="utf-8") as rf:
+                json.dump({"frame_ms": 20, "threshold_db": -32.0, "rms_db": rms_curve}, rf)
+            w_doc = {"words": [
+                {"word": "There", "start": 0.10, "end": 0.40},
+                # Stretched word whose true vocal onset is at 1.20s (only 0.40s after post-clamp)
+                {"word": "BRO!", "start": 0.40, "end": 1.35},
+            ] + [{"word": f"word{k}", "start": 1.40 + k * 1.1, "end": 1.90 + k * 1.1} for k in range(14)]}
+            js_sub = (
+                "const origReq = require;\n"
+                "const fsR = origReq('fs');\n"
+                "require = (m) => m === 'fs' ? { existsSync: () => true, readFileSync: (p, e) => p === '/files/temp/speech_rms.json' ? fsR.readFileSync(" + json.dumps(rms_p) + ", e) : '[]', readdirSync: () => [], writeFileSync: () => {}, mkdirSync: () => {}, unlinkSync: () => {} } : (m === 'child_process' ? { execSync: () => '18.0' } : origReq(m));\n"
+                "const _it = { json: " + json.dumps(w_doc) + " };\n"
+                "const _clip = { json: { clip_number: 1, duration: 18.0, total_duration: 18.0, segments: [{start: 0, end: 18}], title: 'Police Chase', hook_caption: 'GTA 6 cops have zero chill' } };\n"
+                "const $input = { item: _it, first: () => _it, all: () => [_it] };\n"
+                "const $ = (n) => ({ first: () => n === '7d. Get Subtitles (SRT)' ? _it : { json: {} }, item: n === '7d. Get Subtitles (SRT)' ? _it : _clip, all: () => [n === '7d. Get Subtitles (SRT)' ? _it : _clip], last: () => n === '7d. Get Subtitles (SRT)' ? _it : { json: {} } });\n"
+                "console.log(JSON.stringify((function(){\n" + csb_js + "\n})()));\n"
+            )
+            hp = os.path.join(td, "sub_probe.js")
+            with open(hp, "w", encoding="utf-8") as hf:
+                hf.write(js_sub)
+            r = subprocess.run(["node", hp], capture_output=True, text=True, timeout=15)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            out = json.loads(r.stdout)
+            import base64
+            ass = base64.b64decode(out[0]["binary"]["data"]["data"]).decode("utf-8")
+            sub_lines = [ln for ln in ass.splitlines() if ln.startswith("Dialogue: 1,")]
+            # Second progressive line reveals BRO! -> must NOT start before ~1.18s (vocal onset 1.20s) and zero emojis
+            bro_line = next(ln for ln in sub_lines if "BRO!" in ln)
+            st_str = bro_line.split(",")[1]
+            h, m, s = st_str.split(":")
+            st_sec = int(h) * 3600 + int(m) * 60 + float(s)
+            self.assertGreaterEqual(st_sec, 1.15)
+            self.assertNotIn("💀", bro_line)
+            self.assertNotIn("😱", bro_line)
+
 
 if __name__ == "__main__":
     unittest.main()
